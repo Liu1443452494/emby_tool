@@ -1,0 +1,243 @@
+# backend/models.py (完整代码)
+
+from pydantic import BaseModel, Field
+from typing import Literal, List, Optional, Dict, Any
+
+# --- 基础配置模型 ---
+
+class ProxyConfig(BaseModel):
+    """HTTP 代理配置"""
+    enabled: bool = Field(default=False, description="是否启用代理")
+    url: str = Field(default="", description="代理服务器URL")
+    
+    mode: Literal['whitelist', 'blacklist'] = Field(default='blacklist', description="代理模式：whitelist-仅代理勾选的, blacklist-代理所有但排除勾选的")
+    
+    target_tmdb: bool = Field(default=False, description="目标：TMDB。在黑名单模式下，勾选代表不走代理。在白名单模式下，勾选代表走代理。")
+    target_douban: bool = Field(default=True, description="目标：豆瓣。在黑名单模式下，勾选代表不走代理。在白名单模式下，勾选代表走代理。")
+    target_emby: bool = Field(default=True, description="目标：Emby。在黑名单模式下，勾选代表不走代理。在白名单模式下，勾选代表走代理。")
+    
+    exclude: str = Field(default="", description="代理排除列表，逗号分隔 (高级)")
+
+DownloadBehavior = Literal["skip", "overwrite"]
+
+class ServerConfig(BaseModel):
+    """Emby 服务器连接配置"""
+    server: str = ""
+    api_key: str = ""
+    user_id: str = ""
+
+class DownloadConfig(BaseModel):
+    """文件下载相关配置"""
+    download_directory: str = ""
+    download_behavior: DownloadBehavior = "skip"
+    directory_naming_rule: Literal["tmdb_id", "media_path"] = Field(
+        default="tmdb_id", 
+        description="下载目录命名规则"
+    )
+
+class TmdbConfig(BaseModel):
+    """TMDB API 配置"""
+    api_key: str = ""
+    custom_api_domain_enabled: bool = Field(default=False, description="是否启用自定义API域名")
+    custom_api_domain: str = Field(default="https://api.themoviedb.org", description="自定义TMDB API域名")
+
+class DoubanConfig(BaseModel):
+    """豆瓣数据源配置"""
+    directory: str = ""
+    refresh_cron: str = ""
+    extra_fields: List[str] = Field(default_factory=list)
+
+class DoubanCacheStatus(BaseModel):
+    """豆瓣缓存状态信息，用于前端展示"""
+    exists: bool
+    item_count: int
+    last_modified: Optional[str] = None
+    is_scanning: bool
+
+class TencentApiConfig(BaseModel):
+    """腾讯云翻译 API 配置"""
+    secret_id: str = ""
+    secret_key: str = ""
+    region: str = "ap-guangzhou"
+
+class SiliconflowApiConfig(BaseModel):
+    """SiliconFlow 大模型 API 配置"""
+    api_key: str = ""
+    model_name: str = "Qwen/Qwen2-7B-Instruct"
+    model_remarks: Dict[str, str] = Field(default_factory=dict)
+
+class ActorLocalizerConfig(BaseModel):
+    """演员中文化功能的完整配置"""
+    replace_english_role: bool = False
+    translation_enabled: bool = False
+    translation_mode: Literal["translators", "tencent", "siliconflow"] = "translators"
+    translator_engine: str = "baidu"
+    api_cooldown_enabled: bool = True
+    api_cooldown_time: float = 0.2
+    person_limit: int = 15
+    tencent_config: TencentApiConfig = Field(default_factory=TencentApiConfig)
+    siliconflow_config: SiliconflowApiConfig = Field(default_factory=SiliconflowApiConfig)
+    apply_cron: str = Field(default="", description="定时自动应用CRON表达式")
+
+class DoubanFixerConfig(BaseModel):
+    """豆瓣ID修复器配置"""
+    cookie: str = Field(default="", description="豆瓣用户Cookie")
+    api_cooldown: float = Field(default=2.0, description="API请求冷却时间（秒）")
+    scan_cron: str = Field(default="", description="定时扫描CRON表达式")
+
+# --- 全局应用配置模型 ---
+
+class AppConfig(BaseModel):
+    """应用的主配置模型，聚合所有子配置"""
+    server_config: ServerConfig = Field(default_factory=ServerConfig)
+    download_config: DownloadConfig = Field(default_factory=DownloadConfig)
+    tmdb_config: TmdbConfig = Field(default_factory=TmdbConfig)
+    proxy_config: ProxyConfig = Field(default_factory=ProxyConfig)
+    genre_mapping: Dict[str, str] = Field(default_factory=dict)
+    douban_config: DoubanConfig = Field(default_factory=DoubanConfig)
+    douban_cache_status: Optional[DoubanCacheStatus] = None
+    actor_localizer_config: ActorLocalizerConfig = Field(default_factory=ActorLocalizerConfig)
+    douban_fixer_config: DoubanFixerConfig = Field(default_factory=DoubanFixerConfig)
+
+# --- 其他模型 ---
+
+class TargetScope(BaseModel):
+    scope: Literal["media_type", "library", "all_libraries", "search"]
+    media_type: Optional[Literal["Movie", "Series"]] = None
+    library_ids: Optional[List[str]] = None
+    library_blacklist: Optional[str] = None
+    item_ids: Optional[List[str]] = None
+
+class ActorLocalizerPreviewRequest(BaseModel):
+    target: TargetScope
+    config: ActorLocalizerConfig
+
+class ActorLocalizerApplyRequest(BaseModel):
+    items: List[Dict]
+
+class MediaSearchQuery(BaseModel):
+    query: str
+
+class DownloadRequest(BaseModel):
+    item_id: str
+    content_types: List[str]
+
+class BatchDownloadRequest(BaseModel):
+    mode: Literal["byType", "byLibrary", "all"]
+    content_types: List[str]
+    media_type: Optional[Literal["Movie", "Series"]] = None
+    library_ids: Optional[List[str]] = None
+    blacklist: Optional[str] = None
+
+# --- 演员画廊功能相关模型 ---
+class ActorGalleryMatchRequest(BaseModel):
+    item_id: str
+    item_name: str
+    person_name: str
+class ActorGalleryUploadRequest(BaseModel):
+    person_id: str
+    image_url: str
+    new_name: Optional[str] = None
+    source: Optional[Literal['douban', 'tmdb']] = 'tmdb'
+    # --- 核心修改：重新添加此字段，用于在上传时触发ID更新 ---
+    tmdb_person_id: Optional[int] = None
+
+class PosterUploadRequest(BaseModel):
+    item_id: str
+    image_url: str
+    source: Optional[Literal['douban', 'tmdb']] = 'tmdb'
+
+class TmdbImageRequest(BaseModel):
+    item_id: str
+    image_type: Literal['poster', 'backdrop', 'logo']
+class TmdbConfirmRequest(BaseModel):
+    item_id: str
+    tmdb_id: int
+    image_type: Literal['poster', 'backdrop', 'logo']
+class TmdbCandidate(BaseModel):
+    id: int
+    title: str
+    release_date: Optional[str] = None
+    poster_path: Optional[str] = None
+    overview: Optional[str] = None
+class TmdbImage(BaseModel):
+    file_path: str
+    vote_average: float
+    iso_639_1: Optional[str] = None
+class TmdbImageResponse(BaseModel):
+    status: Literal['success', 'single_candidate_confirm', 'manual_selection', 'not_found', 'error']
+    images: Optional[List[TmdbImage]] = None
+    candidates: Optional[List[TmdbCandidate]] = None
+    message: Optional[str] = None
+class ActorTmdbImageFlowRequest(BaseModel):
+    emby_person_id: str
+    emby_person_name: str
+    emby_media_item_id: str
+    force_context_list: bool = False
+    force_manual_search: bool = False
+    confirmed_tmdb_person_id: Optional[int] = None
+class TmdbPersonCandidate(BaseModel):
+    id: int
+    name: str
+    profile_path: Optional[str] = None
+    known_for_department: Optional[str] = None
+    known_for_titles: List[str] = Field(default_factory=list)
+class SingleActorConfirmContext(BaseModel):
+    media: Dict[str, Any]
+    person: Dict[str, Any]
+class ActorTmdbImageFlowResponse(BaseModel):
+    status: Literal['success', 'single_actor_confirm', 'context_manual_selection', 'manual_actor_selection', 'not_found', 'error']
+    images: Optional[List[TmdbImage]] = None
+    candidates: Optional[List[TmdbPersonCandidate]] = None
+    context: Optional[SingleActorConfirmContext] = None
+    message: Optional[str] = None
+
+class UpdateDoubanIdRequest(BaseModel):
+    douban_id: str
+
+class CombinedImage(BaseModel):
+    file_path: str
+    source: Literal['douban', 'tmdb']
+    vote_average: Optional[float] = 0.0
+    iso_639_1: Optional[str] = None
+
+class CombinedImageResponse(BaseModel):
+    success: bool
+    images: List[CombinedImage] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class CombinedAvatarRequest(BaseModel):
+    emby_person_id: str
+    emby_person_name: str
+    emby_media_item_id: str
+    confirmed_tmdb_person_id: Optional[int] = None
+    confirmed_douban_actor: Optional[Dict[str, Any]] = None
+    
+    # --- 核心修改：新增字段，用于传递已确认的豆瓣图片 ---
+    confirmed_douban_images: List[Dict[str, Any]] = Field(default_factory=list)
+
+    skip_douban: bool = Field(default=False, description="是否跳过豆瓣源的匹配")
+    skip_tmdb: bool = Field(default=False, description="是否跳过TMDB源的匹配")
+    force_tmdb_context_list: bool = Field(default=False, description="是否强制TMDB返回上下文列表")
+    force_tmdb_global_search: bool = Field(default=False, description="是否强制TMDB进行全局搜索")
+
+class CombinedActorImage(BaseModel):
+    file_path: str
+    source: Literal['douban', 'tmdb']
+    vote_average: Optional[float] = 0.0
+    iso_639_1: Optional[str] = None
+    actor_name: Optional[str] = None
+
+class CombinedAvatarResponse(BaseModel):
+    status: Literal[
+        'success',
+        'douban_manual_selection',
+        'tmdb_single_actor_confirm',
+        'tmdb_context_manual_selection',
+        'tmdb_manual_actor_selection',
+        'all_failed'
+    ]
+    images: List[CombinedActorImage] = Field(default_factory=list)
+    intervention_details: Optional[Any] = None
+    warnings: List[str] = Field(default_factory=list)

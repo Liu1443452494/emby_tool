@@ -1,0 +1,37 @@
+# 把名字改得更贴切
+name: Release Backend Image on Tag
+
+on:
+  push:
+    # 不再监听 main 分支的 push
+    # branches: [ "main" ]
+    # 而是监听所有以 'v' 开头的标签，比如 v2.1, v2.1.1
+    tags:
+      - 'v*'
+
+jobs:
+  release-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 关键修改：从 Git 标签中提取版本号
+      - name: Extract version from tag
+        id: get_version
+        # 这行命令会去掉标签前面的 'v'，比如从 'v2.1' 得到 '2.1'
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          push: true
+          # 关键修改：使用提取出的版本号作为镜像标签
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/emby-toolkit-backend:${{ steps.get_version.outputs.VERSION }}

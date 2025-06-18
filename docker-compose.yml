@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: liuzj0827/emby-toolkit-backend:2.2
+    container_name: emby_toolkit_backend
+    restart: unless-stopped
+    network_mode: "host"
+    volumes:
+      - ./data:/app/data
+      # - /path/to/your/downloads:/downloads
+      # - /path/to/your/douban_data:/douban_data
+    environment:
+      - TZ=Asia/Shanghai
+    # --- 核心修改：移除 command 中的注释行 ---
+    command: sh -c "uvicorn main:app --host 0.0.0.0 --port 8271 --reload --proxy-headers --forwarded-allow-ips='*'"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: liuzj0827/emby-toolkit-frontend:2.2
+    container_name: emby_toolkit_frontend
+    restart: unless-stopped
+    network_mode: "host"
+    volumes:
+      - ./data/nginx_cache:/var/cache/nginx
+    environment:
+      - TZ=Asia/Shanghai
+
+volumes:
+  data:
