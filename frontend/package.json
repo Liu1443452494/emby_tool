@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@vueuse/core": "^10.9.0",
+    "cronstrue": "^2.61.0",
     "element-plus": "^2.7.2",
     "lodash": "^4.17.21",
     "pinia": "^2.1.7",

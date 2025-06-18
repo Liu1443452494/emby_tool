@@ -9,6 +9,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import json
 import time
+
+from media_selector import MediaSelector
+from models import ScheduledTasksConfig
+from douban_poster_updater_logic import DoubanPosterUpdaterLogic
+from models import DoubanPosterUpdaterConfig
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -69,8 +74,57 @@ def trigger_actor_localizer_apply():
     logic = ActorLocalizerLogic(config)
     task_manager.register_task(logic.apply_actor_changes_directly_task, "演员中文化-定时自动应用", config.actor_localizer_config)
 
+def trigger_scheduled_task(task_id: str):
+    """由 APScheduler 调度的通用任务触发器"""
+    logging.info(f"【调度任务】开始执行定时任务: {task_id}")
+    
+    config = app_config.load_app_config()
+    
+    # 1. 获取通用目标范围
+    scope = config.scheduled_tasks_config.target_scope
+    selector = MediaSelector(config)
+    item_ids = selector.get_item_ids(scope)
+
+    if not item_ids:
+        logging.info(f"【调度任务-{task_id}】未根据范围找到任何媒体项，任务结束。")
+        return
+
+    # 2. 根据 task_id 执行不同逻辑
+    if task_id == "actor_localizer":
+        logic = ActorLocalizerLogic(config)
+        task_name = f"定时任务-演员中文化({scope.mode})"
+        task_manager.register_task(
+            logic.run_localization_for_items, 
+            task_name, 
+            item_ids, 
+            config.actor_localizer_config
+        )
+    elif task_id == "douban_fixer":
+        logic = DoubanFixerLogic(config)
+        task_name = f"定时任务-豆瓣ID修复({scope.mode})"
+        task_manager.register_task(
+            logic.run_fixer_for_items,
+            task_name,
+            item_ids
+        )
+
+    elif task_id == "douban_poster_updater":
+        logic = DoubanPosterUpdaterLogic(config)
+        task_name = f"定时任务-豆瓣海报更新({scope.mode})"
+        task_manager.register_task(
+            logic.run_poster_update_for_items,
+            task_name,
+            item_ids,
+            config.douban_poster_updater_config
+        )
+    else:
+        logging.warning(f"【调度任务】未知的任务ID: {task_id}")
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # --- 启动部分 (保持不变) ---
     logging.info("应用启动，开始任务广播消费者...")
     consumer_task = asyncio.create_task(task_manager.broadcast_consumer())
     config = app_config.load_app_config()
@@ -108,19 +162,43 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logging.error(f"【调度任务】设置演员中文化自动应用任务失败，CRON表达式可能无效: {e}")
     
+    logging.info("【调度任务】开始设置通用定时任务...")
+    scheduled_conf = config.scheduled_tasks_config
+    for task in scheduled_conf.tasks:
+        if task.enabled and task.cron:
+            try:
+                scheduler.add_job(
+                    trigger_scheduled_task, 
+                    CronTrigger.from_crontab(task.cron), 
+                    id=f"scheduled_{task.id}", 
+                    replace_existing=True,
+                    args=[task.id]
+                )
+                logging.info(f"  - 已成功设置定时任务 '{task.name}'，CRON表达式: '{task.cron}'")
+            except Exception as e:
+                logging.error(f"  - 设置定时任务 '{task.name}' 失败，CRON表达式可能无效: {e}")
+
     if not scheduler.running:
         scheduler.start()
 
     yield
     
-    logging.info("应用关闭，正在停止任务广播消费者和调度器...")
+    # --- 修改：调整关闭逻辑 ---
+    logging.info("应用关闭，正在停止后台服务...")
+    
+    # 1. 先关闭调度器，且不等待作业完成
     if scheduler.running:
-        scheduler.shutdown()
-    consumer_task.cancel()
-    try:
-        await consumer_task
-    except asyncio.CancelledError:
-        logging.info("任务广播消费者已成功取消。")
+        scheduler.shutdown(wait=False)
+        logging.info("APScheduler 已被指令关闭。")
+
+    # 2. 再取消其他常驻的异步任务
+    if not consumer_task.done():
+        consumer_task.cancel()
+        try:
+            await consumer_task
+        except asyncio.CancelledError:
+            logging.info("任务广播消费者已成功取消。")
+    # --- 结束修改 ---
 
 app = FastAPI(lifespan=lifespan)
 origins = ["*"]
@@ -689,3 +767,88 @@ def test_translation_api(req: TestTranslationRequest):
     except Exception as e:
         logging.error(f"翻译API测试失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/api/config/scheduled-tasks")
+def save_scheduled_tasks_config_api(config: ScheduledTasksConfig):
+    try:
+        logging.info("正在保存通用定时任务设置...")
+        current_app_config = app_config.load_app_config()
+        current_app_config.scheduled_tasks_config = config
+        app_config.save_app_config(current_app_config)
+
+        # 动态更新 APScheduler 中的任务
+        if scheduler.running:
+            logging.info("【调度任务】检测到配置变更，正在更新调度器...")
+            for task in config.tasks:
+                job_id = f"scheduled_{task.id}"
+                existing_job = scheduler.get_job(job_id)
+                if task.enabled and task.cron:
+                    # 添加或更新任务
+                    try:
+                        scheduler.add_job(
+                            trigger_scheduled_task,
+                            CronTrigger.from_crontab(task.cron),
+                            id=job_id,
+                            replace_existing=True,
+                            args=[task.id]
+                        )
+                        logging.info(f"  - 已更新/添加任务 '{task.name}' (CRON: {task.cron})")
+                    except Exception as e:
+                        logging.error(f"  - 更新任务 '{task.name}' 失败: {e}")
+                elif existing_job:
+                    # 移除禁用的任务
+                    scheduler.remove_job(job_id)
+                    logging.info(f"  - 已移除禁用的任务 '{task.name}'")
+
+        logging.info("通用定时任务设置保存成功！")
+        return {"success": True, "message": "定时任务设置已保存！"}
+    except Exception as e:
+        logging.error(f"保存通用定时任务设置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+    
+@app.post("/api/scheduled-tasks/{task_id}/trigger")
+def trigger_scheduled_task_once_api(task_id: str):
+    """
+    立即触发一次指定的定时任务，使用当前保存的通用目标范围配置。
+    """
+
+    logging.info(f"【API接口】收到立即执行任务的请求: {task_id}")
+    # 检查任务是否在已定义的任务列表中
+    config = app_config.load_app_config()
+    defined_tasks = {task.id for task in config.scheduled_tasks_config.tasks}
+    if task_id not in defined_tasks:
+        raise HTTPException(status_code=404, detail=f"未找到ID为 '{task_id}' 的定时任务定义。")
+
+    # 检查是否已有同类任务在运行
+    # 我们通过任务名称来判断，例如 "定时任务-演员中文化"
+    task_name_map = {
+        "actor_localizer": "演员中文化",
+        "douban_fixer": "豆瓣ID修复器"
+    }
+    task_display_name = task_name_map.get(task_id)
+    if task_display_name:
+        for task in task_manager.get_all_tasks():
+            if task['name'].startswith(f"定时任务-{task_display_name}"):
+                 raise HTTPException(status_code=409, detail=f"已有同类定时任务(ID: {task['id']})正在运行，请勿重复启动。")
+
+    try:
+        # 直接调用我们为 APScheduler 准备的函数
+        trigger_scheduled_task(task_id)
+        return {"status": "success", "message": f"任务 '{task_id}' 已成功触发，请在“运行任务”页面查看进度。"}
+    except Exception as e:
+        logging.error(f"手动触发定时任务 '{task_id}' 时失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"触发任务时发生内部错误: {e}")
+# --- 结束新增 ---
+
+@app.post("/api/config/douban-poster-updater")
+def save_douban_poster_updater_config_api(config: DoubanPosterUpdaterConfig):
+    try:
+        logging.info("正在保存豆瓣海报更新器设置...")
+        current_app_config = app_config.load_app_config()
+        current_app_config.douban_poster_updater_config = config
+        app_config.save_app_config(current_app_config)
+        logging.info("豆瓣海报更新器设置保存成功！")
+        return {"success": True, "message": "设置已保存！"}
+    except Exception as e:
+        logging.error(f"保存豆瓣海报更新器设置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")

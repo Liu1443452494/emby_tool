@@ -46,13 +46,19 @@
 
           <el-menu-item index="/actor-gallery">
             <el-icon><Avatar /></el-icon>
-            <template #title>演员画廊</template>
+            <template #title>媒体画廊</template>
           </el-menu-item>
 
           <!-- --- 新增菜单项 --- -->
           <el-menu-item index="/douban-fixer">
             <el-icon><MagicStick /></el-icon>
             <template #title>豆瓣ID修复器</template>
+          </el-menu-item>
+          <!-- --- 结束新增 --- -->
+
+          <el-menu-item index="/scheduled-tasks">
+            <el-icon><Clock /></el-icon>
+            <template #title>定时任务</template>
           </el-menu-item>
           <!-- --- 结束新增 --- -->
 
@@ -93,7 +99,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { ElConfigProvider, ElIcon } from 'element-plus'
 // --- 新增图标 ---
-import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick } from '@element-plus/icons-vue'
+import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock } from '@element-plus/icons-vue'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { useStorage } from '@vueuse/core'
 import { useConfigStore } from '@/stores/config'

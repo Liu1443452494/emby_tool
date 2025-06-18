@@ -1,4 +1,4 @@
-# backend/models.py (完整代码)
+# backend/models.py (再次确认的完整正确版)
 
 from pydantic import BaseModel, Field
 from typing import Literal, List, Optional, Dict, Any
@@ -85,7 +85,36 @@ class DoubanFixerConfig(BaseModel):
     api_cooldown: float = Field(default=2.0, description="API请求冷却时间（秒）")
     scan_cron: str = Field(default="", description="定时扫描CRON表达式")
 
-# --- 全局应用配置模型 ---
+class DoubanPosterUpdaterConfig(BaseModel):
+    """豆瓣海报更新器功能的配置"""
+    update_interval: float = Field(default=1.0, description="处理每个媒体的间隔时间（秒）")
+    overwrite_existing: bool = Field(default=False, description="是否覆盖已有海报")
+
+class ScheduledTaskItem(BaseModel):
+    """单个定时任务的配置"""
+    id: str
+    name: str
+    enabled: bool = False
+    cron: str = ""
+
+class ScheduledTasksTargetScope(BaseModel):
+    """定时任务通用的目标范围配置"""
+    mode: Literal['latest', 'all', 'by_type', 'by_library'] = 'latest'
+    days: int = 7
+    limit: int = 100
+    media_type: Optional[Literal["Movie", "Series"]] = "Movie"
+    library_ids: List[str] = Field(default_factory=list)
+    library_blacklist: str = ""
+
+class ScheduledTasksConfig(BaseModel):
+    """定时任务总配置"""
+    target_scope: ScheduledTasksTargetScope = Field(default_factory=ScheduledTasksTargetScope)
+    # --- 核心修改：确保这里包含所有三个任务 ---
+    tasks: List[ScheduledTaskItem] = Field(default_factory=lambda: [
+        ScheduledTaskItem(id="actor_localizer", name="演员中文化"),
+        ScheduledTaskItem(id="douban_fixer", name="豆瓣ID修复器"),
+        ScheduledTaskItem(id="douban_poster_updater", name="豆瓣海报更新")
+    ])
 
 class AppConfig(BaseModel):
     """应用的主配置模型，聚合所有子配置"""
@@ -98,9 +127,10 @@ class AppConfig(BaseModel):
     douban_cache_status: Optional[DoubanCacheStatus] = None
     actor_localizer_config: ActorLocalizerConfig = Field(default_factory=ActorLocalizerConfig)
     douban_fixer_config: DoubanFixerConfig = Field(default_factory=DoubanFixerConfig)
+    scheduled_tasks_config: ScheduledTasksConfig = Field(default_factory=ScheduledTasksConfig)
+    douban_poster_updater_config: DoubanPosterUpdaterConfig = Field(default_factory=DoubanPosterUpdaterConfig)
 
-# --- 其他模型 ---
-
+# --- (其他模型保持不变) ---
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]
     media_type: Optional[Literal["Movie", "Series"]] = None
@@ -129,7 +159,6 @@ class BatchDownloadRequest(BaseModel):
     library_ids: Optional[List[str]] = None
     blacklist: Optional[str] = None
 
-# --- 演员画廊功能相关模型 ---
 class ActorGalleryMatchRequest(BaseModel):
     item_id: str
     item_name: str
@@ -139,7 +168,6 @@ class ActorGalleryUploadRequest(BaseModel):
     image_url: str
     new_name: Optional[str] = None
     source: Optional[Literal['douban', 'tmdb']] = 'tmdb'
-    # --- 核心修改：重新添加此字段，用于在上传时触发ID更新 ---
     tmdb_person_id: Optional[int] = None
 
 class PosterUploadRequest(BaseModel):
@@ -214,7 +242,6 @@ class CombinedAvatarRequest(BaseModel):
     confirmed_tmdb_person_id: Optional[int] = None
     confirmed_douban_actor: Optional[Dict[str, Any]] = None
     
-    # --- 核心修改：新增字段，用于传递已确认的豆瓣图片 ---
     confirmed_douban_images: List[Dict[str, Any]] = Field(default_factory=list)
 
     skip_douban: bool = Field(default=False, description="是否跳过豆瓣源的匹配")

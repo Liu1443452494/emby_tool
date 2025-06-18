@@ -10,7 +10,7 @@ import copy
 import os
 import hmac
 import hashlib
-from typing import List, Dict, Any, Generator, Optional
+from typing import List, Dict, Any, Generator, Optional, Iterable
 
 try:
     import translators as ts
@@ -158,6 +158,112 @@ class ActorLocalizerLogic:
         except Exception as e:
             logging.error(f"【翻译】翻译 '{text}' 时出错: {e}")
             return text
+        
+
+    def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig) -> bool:
+        """处理单个媒体项的中文化逻辑，返回是否有更新。"""
+        details = self._get_item_details(item_id)
+        if not details: return False
+        
+        item_name = details.get('Name', '未知名称')
+        logging.info(f"  -> 正在处理: [{item_name}] (ID: {item_id})")
+
+        provider_ids = details.get('ProviderIds', {})
+        douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
+        
+        if not douban_id:
+            logging.debug(f"     -- 跳过，无豆瓣ID。")
+            return False
+        
+        people = details.get('People', [])
+        if not any(not self._contains_chinese(p.get('Role', '')) for p in people):
+            logging.debug(f"     -- 跳过，角色名均已包含中文。")
+            return False
+
+        douban_item = self.douban_map.get(douban_id)
+        if not douban_item:
+            logging.warning(f"     -- 跳过，本地无豆瓣ID {douban_id} 的数据。")
+            return False
+
+        emby_actors_to_match = {p['Name']: p.get('Role', '') for p in people[:config.person_limit] if p.get('Type') == 'Actor' and not self._contains_chinese(p.get('Role', ''))}
+        douban_standard_roles = {actor.get('name'): self._clean_douban_character(actor.get('character', '')) for actor in douban_item.get('actors', []) if self._clean_douban_character(actor.get('character', '')) and self._contains_chinese(self._clean_douban_character(actor.get('character', '')))}
+
+        new_people_list = copy.deepcopy(people)
+        has_changes = False
+
+        for emby_actor_name, original_role in emby_actors_to_match.items():
+            new_role = None
+            source = None
+            if emby_actor_name in douban_standard_roles:
+                new_role = douban_standard_roles[emby_actor_name]
+                source = "豆瓣"
+            elif config.translation_enabled:
+                if config.api_cooldown_enabled and config.api_cooldown_time > 0: time.sleep(config.api_cooldown_time)
+                translated_role = self._translate_text(original_role, config, context_title=item_name)
+                if translated_role and translated_role != original_role:
+                    new_role = translated_role
+                    source = "翻译"
+            elif config.replace_english_role and self._is_pure_english(original_role):
+                new_role = "演员"
+                source = "替换"
+            
+            if new_role:
+                has_changes = True
+                for person in new_people_list:
+                    if person.get('Name') == emby_actor_name:
+                        person['Role'] = new_role
+                        logging.info(f"     -- 更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自{source})")
+                        break
+        
+        if has_changes:
+            full_item_json = self._get_item_details(item_id, full_json=True)
+            if full_item_json:
+                full_item_json['People'] = new_people_list
+                if self._update_item_on_server(item_id, full_item_json):
+                    logging.info(f"     -- 成功应用更新到 Emby。")
+                    return True
+            logging.error(f"     -- 应用更新到 Emby 失败。")
+        
+        return False
+
+    def run_localization_for_items(self, item_ids: Iterable[str], config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        """为指定的媒体ID列表执行演员中文化"""
+        if not self.douban_map:
+            logging.error("【演员中文化-任务】本地豆瓣数据库为空，任务中止。")
+            return
+
+        item_ids_list = list(item_ids)
+        total_items = len(item_ids_list)
+        logging.info(f"【演员中文化-任务】启动，共需处理 {total_items} 个媒体项。")
+        task_manager.update_task_progress(task_id, 0, total_items)
+
+        if total_items == 0:
+            logging.info("【演员中文化-任务】没有需要处理的媒体项，任务结束。")
+            return
+
+        updated_count = 0
+        for index, item_id in enumerate(item_ids_list):
+            if cancellation_event.is_set():
+                logging.warning("【演员中文化-任务】任务被用户取消。")
+                break
+            
+            task_manager.update_task_progress(task_id, index + 1, total_items)
+            
+            if self._process_single_item_for_localization(item_id, config):
+                updated_count += 1
+        
+        logging.info(f"【演员中文化-任务】执行完毕，共更新了 {updated_count} 个项目的演员角色。")
+        return {"updated_count": updated_count}
+
+    def apply_actor_changes_directly_task(self, config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        """(旧的全库扫描任务)"""
+        logging.info("【演员中文化-全库扫描】启动...")
+        target = TargetScope(scope="all_libraries")
+        item_ids_to_process = self._get_item_ids_for_scanning(target, cancellation_event)
+        
+        if cancellation_event.is_set(): return
+
+        self.run_localization_for_items(item_ids_to_process, config, cancellation_event, task_id, task_manager)
 
     @staticmethod
     def translate_with_tencent_api(text: str, config: TencentApiConfig) -> str:

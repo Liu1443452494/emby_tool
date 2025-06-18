@@ -41,6 +41,12 @@ const router = createRouter({
       component: () => import('../views/DoubanFixerView.vue')
     },
     // --- 结束新增 ---
+
+    {
+      path: '/scheduled-tasks',
+      name: 'scheduled-tasks',
+      component: () => import('../views/ScheduledTasksView.vue')
+    },
     {
       path: '/tasks',
       name: 'tasks',
