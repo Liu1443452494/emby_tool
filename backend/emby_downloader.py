@@ -130,7 +130,12 @@ class EmbyDownloader:
 
         else: # 默认为 tmdb_id
             logging.info(f"[{item_name}] 使用 'tmdb_id' 规则创建目录。")
-            tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
+            
+            # --- 核心修改 ---
+            provider_ids = details.get("ProviderIds", {})
+            tmdb_id = next((v for k, v in provider_ids.items() if k.lower() == 'tmdb'), None)
+            # --- 结束修改 ---
+
             if not tmdb_id:
                 raise ValueError(f"项目 '{item_name}' (ID: {item_id}) 缺少 TMDB ID，无法创建目录。")
             save_dir = os.path.join(self.download_config.download_directory, tmdb_id)

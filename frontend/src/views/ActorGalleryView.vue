@@ -75,11 +75,11 @@
                   title="修改豆瓣ID"
                   :width="250"
                   trigger="click"
-                  @before-enter="() => newDoubanId = scope.row.ProviderIds.Douban || ''"
+                  @before-enter="() => newDoubanId = getDoubanId(scope.row) || ''"
                 >
                   <template #reference>
                     <el-button text type="primary" class="douban-id-btn custom-link-color">
-                      {{ scope.row.ProviderIds.Douban || 'N/A' }}
+                      {{ getDoubanId(scope.row) || 'N/A' }}
                     </el-button>
                   </template>
                   <div class="douban-id-editor">
@@ -433,6 +433,13 @@ const filteredMediaItems = computed(() => {
 });
 
 const tableData = computed(() => isGlobalSearchActive.value ? galleryStore.globalSearchResults : filteredMediaItems.value);
+
+const getDoubanId = (row) => {
+  if (!row.ProviderIds) return null;
+  // 查找所有键，不区分大小写
+  const doubanKey = Object.keys(row.ProviderIds).find(key => key.toLowerCase() === 'douban');
+  return doubanKey ? row.ProviderIds[doubanKey] : null;
+};
 
 const processMediaItem = (item) => {
   if (!item) return null;

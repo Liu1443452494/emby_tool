@@ -112,16 +112,18 @@
                 {{ scope.row.Genres.join(', ') }}
               </template>
             </el-table-column>
+            <!-- 修改开始 -->
             <el-table-column label="豆瓣ID" width="120">
                 <template #default="scope">
-                    {{ scope.row.ProviderIds.Douban || '-' }}
+                    {{ getProviderId(scope.row, 'douban') || '-' }}
                 </template>
             </el-table-column>
             <el-table-column label="TMDB ID" width="120">
                 <template #default="scope">
-                    {{ scope.row.ProviderIds.Tmdb || '-' }}
+                    {{ getProviderId(scope.row, 'tmdb') || '-' }}
                 </template>
             </el-table-column>
+            <!-- 修改结束 -->
             <el-table-column label="操作" width="120" fixed="right">
               <template #default="scope">
                 <el-button
@@ -200,6 +202,13 @@ const handleStopBatchDownload = async () => {
     await taskStore.cancelTask(mediaStore.activeBatchTaskId);
     // 移除此处的 clearActiveBatchTask，交由 task.js 统一处理
   }
+};
+
+const getProviderId = (row, providerName) => {
+  if (!row.ProviderIds) return null;
+  const lowerProviderName = providerName.toLowerCase();
+  const providerKey = Object.keys(row.ProviderIds).find(key => key.toLowerCase() === lowerProviderName);
+  return providerKey ? row.ProviderIds[providerKey] : null;
 };
 
 watch(() => taskStore.tasks, () => {

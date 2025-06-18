@@ -189,7 +189,12 @@ class TmdbLogic:
         if not item_details:
             item_details = self._get_emby_item_details(item_id)
         
-        if provider_tmdb_id := item_details.get("ProviderIds", {}).get("Tmdb"):
+        # --- 核心修改 ---
+        provider_ids = item_details.get("ProviderIds", {})
+        provider_tmdb_id = next((v for k, v in provider_ids.items() if k.lower() == 'tmdb'), None)
+        # --- 结束修改 ---
+
+        if provider_tmdb_id:
             return int(provider_tmdb_id), None
         return None, self._smart_match(item_details)
 

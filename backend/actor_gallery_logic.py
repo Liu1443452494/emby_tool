@@ -253,7 +253,12 @@ class ActorGalleryLogic:
         proxies = self._get_proxies_for_target(item_details_url)
         item_resp = self.session.get(item_details_url, params=item_details_params, timeout=15, proxies=proxies)
         item_resp.raise_for_status()
-        douban_id = item_resp.json().get("ProviderIds", {}).get("Douban")
+        
+        # --- 核心修改 ---
+        provider_ids = item_resp.json().get("ProviderIds", {})
+        douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
+        # --- 结束修改 ---
+
         if not douban_id: raise ValueError("当前媒体项没有关联豆瓣ID")
         douban_media_item = self.douban_map.get(douban_id)
         if not douban_media_item: raise ValueError(f"在本地豆瓣数据中未找到ID为 {douban_id} 的媒体项")

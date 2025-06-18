@@ -284,7 +284,11 @@ class ActorLocalizerLogic:
             item_name = details.get('Name', '未知名称')
             logging.info(f"【演员中文化】进度 {index + 1}/{total_items}: 正在处理 [{item_name}]")
 
-            douban_id = details.get('ProviderIds', {}).get('Douban')
+            # --- 核心修改 ---
+            provider_ids = details.get('ProviderIds', {})
+            douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
+            # --- 结束修改 ---
+
             if not douban_id:
                 logging.debug(f"【演员中文化】跳过 [{item_name}]：缺少豆瓣ID。")
                 continue
@@ -424,7 +428,11 @@ class ActorLocalizerLogic:
             item_name = details.get('Name', '未知名称')
             logging.debug(f"【演员中文化-自动任务】进度 {index + 1}/{total_items}: 正在处理 [{item_name}]")
 
-            douban_id = details.get('ProviderIds', {}).get('Douban')
+            # --- 核心修改 ---
+            provider_ids = details.get('ProviderIds', {})
+            douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
+            # --- 结束修改 ---
+            
             if not douban_id: continue
             
             people = details.get('People', [])
