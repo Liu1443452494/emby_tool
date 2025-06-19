@@ -149,6 +149,14 @@
             </div>
           </div>
         </el-form-item>
+        <el-form-item label="NFO演员数量">
+          <div>
+            <el-input-number v-model="localDownloadConfig.nfo_actor_limit" :min="0" :max="200" />
+            <div class="form-item-description">
+              写入 NFO 文件中的最大演员数量。设为 0 则不写入任何演员信息。
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item class="form-button-container">
           <el-button type="success" native-type="submit" :loading="isDownloadLoading">
             保存下载设置
@@ -345,7 +353,7 @@ const proxyFormRef = ref(null)
 const doubanFixerFormRef = ref(null)
 
 const localServerConfig = ref({ server: '', api_key: '', user_id: '' })
-const localDownloadConfig = ref({ download_directory: '', download_behavior: 'skip', directory_naming_rule: 'tmdb_id' })
+const localDownloadConfig = ref({ download_directory: '', download_behavior: 'skip', directory_naming_rule: 'tmdb_id' , nfo_actor_limit: 20 })
 const localDoubanConfig = ref({ directory: '', refresh_cron: '', extra_fields: [] })
 const localTmdbConfig = ref({ api_key: '', custom_api_domain_enabled: false, custom_api_domain: '' })
 const localProxyConfig = ref({ 

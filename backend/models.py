@@ -34,6 +34,7 @@ class DownloadConfig(BaseModel):
         default="tmdb_id", 
         description="下载目录命名规则"
     )
+    nfo_actor_limit: int = Field(default=20, description="写入NFO文件中的最大演员数量")
 
 class TmdbConfig(BaseModel):
     """TMDB API 配置"""

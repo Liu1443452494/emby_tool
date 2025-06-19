@@ -7,7 +7,7 @@ export const useConfigStore = defineStore('config', () => {
   const isLoaded = ref(false)
   const appConfig = ref({
     server_config: { server: '', api_key: '', user_id: '' },
-    download_config: { download_directory: '', download_behavior: 'skip', directory_naming_rule: 'tmdb_id' },
+    download_config: { download_directory: '', download_behavior: 'skip', directory_naming_rule: 'tmdb_id' , nfo_actor_limit: 20},
     tmdb_config: { api_key: '', custom_api_domain_enabled: false, custom_api_domain: '' },
     proxy_config: { enabled: false, url: '', exclude: '' },
     douban_config: { directory: '', refresh_cron: '', extra_fields: [] },
@@ -60,6 +60,9 @@ export const useConfigStore = defineStore('config', () => {
         }
         if (!fullConfig.download_config) {
           fullConfig.download_config = { download_directory: '', download_behavior: 'skip', directory_naming_rule: 'tmdb_id' };
+        }
+        if (typeof fullConfig.download_config.nfo_actor_limit === 'undefined') {
+          fullConfig.download_config.nfo_actor_limit = 20;
         }
         if (!fullConfig.douban_fixer_config) {
           fullConfig.douban_fixer_config = { cookie: '', api_cooldown: 2.0, scan_cron: '' };
