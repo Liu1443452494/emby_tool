@@ -12,7 +12,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 import re
 
-from models import AppConfig
+from models import AppConfig, ScheduledTasksTargetScope
 from task_manager import TaskManager
 
 DOUBAN_FIXER_CACHE_FILE = os.path.join('/app/data', 'douban_fix_cache.json')
@@ -73,7 +73,6 @@ class DoubanFixerLogic:
             logging.error(f"【豆瓣修复器】更新 Emby 媒体 (ID: {item_id}) 的豆瓣ID时失败: {e}")
             return False
 
-    # --- 关键修改：使用正则表达式提取 window.__DATA__ ---
     def _search_douban(self, title: str) -> Optional[List[Dict]]:
         try:
             time.sleep(self.fixer_config.api_cooldown)
@@ -82,7 +81,6 @@ class DoubanFixerLogic:
             response = self.session.get(search_url, timeout=20)
             response.raise_for_status()
 
-            # 使用正则表达式查找 window.__DATA__ = 后面的 JSON 对象
             match = re.search(r'window\.__DATA__ = (\{.*\});', response.text)
             if not match:
                 logging.warning(f"【豆瓣修复器】搜索 '{title}' 成功，但未在页面中找到 window.__DATA__ 数据块。")
@@ -93,7 +91,6 @@ class DoubanFixerLogic:
             
             results = []
             for item in items:
-                # 从 title 字段中提取纯标题和年份
                 full_title = item.get('title', '')
                 year_match = re.search(r'\((\d{4})\)$', full_title.strip())
                 year = int(year_match.group(1)) if year_match else None
@@ -172,113 +169,6 @@ class DoubanFixerLogic:
             self._save_cache(cache)
             logging.info(f"【豆瓣修复器】媒体项 {item_id} 已从失败缓存中移除。")
 
-    # backend/douban_fixer_logic.py (部分修改)
-
-    def scan_and_match_task(self, scan_scope: str, media_type: Optional[str], library_ids: Optional[List[str]], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-        logging.info(f"【豆瓣修复器】开始执行扫描与匹配任务，范围: {scan_scope}...")
-        
-        # --- 最终修复：在任务开始时，清空上一次的失败缓存 ---
-        logging.info("【豆瓣修复器】正在清空旧的失败缓存...")
-        self._save_cache({})
-        
-        all_items = []
-        task_manager.update_task_progress(task_id, 0, -1)
-        
-        item_types_to_scan = "Movie,Series"
-        if scan_scope == "media_type" and media_type:
-            item_types_to_scan = media_type
-        
-        parent_ids_to_scan = []
-        if scan_scope == "library" and library_ids:
-            parent_ids_to_scan.extend(library_ids)
-        elif scan_scope in ["all", "media_type"]:
-            views_url = f"{self.base_url}/Users/{self.user_id}/Views"
-            try:
-                views_resp = self.session.get(views_url, params=self.params, timeout=15)
-                views_resp.raise_for_status()
-                views = views_resp.json().get("Items", [])
-                parent_ids_to_scan.extend([v['Id'] for v in views if v.get("CollectionType") in ["movies", "tvshows"]])
-            except requests.RequestException as e:
-                logging.error(f"【豆瓣修复器】获取媒体库列表失败: {e}")
-                return
-
-        for p_id in parent_ids_to_scan:
-            if cancellation_event.is_set(): return
-            
-            url = f"{self.base_url}/Items"
-            params = {**self.params, "Recursive": "true", "IncludeItemTypes": item_types_to_scan, "Fields": "Id,ProviderIds,Name,ProductionYear,Type", "ParentId": p_id}
-            start_index = 0
-            while True:
-                if cancellation_event.is_set(): return
-                params["StartIndex"] = start_index
-                try:
-                    response = self.session.get(url, params=params, timeout=60)
-                    response.raise_for_status()
-                    page_items = response.json().get("Items", [])
-                    if not page_items: break
-                    all_items.extend(page_items)
-                    start_index += len(page_items)
-                    task_manager.update_task_progress(task_id, len(all_items), -1)
-                except requests.RequestException as e:
-                    logging.error(f"【豆瓣修复器】获取媒体列表时出错: {e}")
-                    break
-        
-        total_items = len(all_items)
-        logging.info(f"【豆瓣修复器】共找到 {total_items} 个媒体项，开始筛选和处理。")
-        
-        def has_douban_id(item):
-            provider_ids = item.get("ProviderIds", {})
-            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
-            return 'douban' in provider_ids_lower
-
-        potentially_missing_id_items = [item for item in all_items if not has_douban_id(item)]
-        logging.info(f"【豆瓣修复器】粗筛后，有 {len(potentially_missing_id_items)} 个项目可能缺少豆瓣ID，开始精确检查...")
-
-        items_to_process = []
-        for item_stub in potentially_missing_id_items:
-            if cancellation_event.is_set(): break
-            
-            item_details = self._get_emby_item_details(item_stub['Id'])
-            
-            if item_details and not has_douban_id(item_details):
-                items_to_process.append(item_details)
-        
-        total_to_process = len(items_to_process)
-        logging.info(f"【豆瓣修复器】精筛后，最终确认有 {total_to_process} 个项目需要处理。")
-
-        if total_to_process > 0:
-            logging.info("--- 需要处理的项目列表 开始 ---")
-            for item in items_to_process:
-                logging.info(f"  - ID: {item.get('Id')}, 名称: {item.get('Name')}, 年份: {item.get('ProductionYear')}")
-            logging.info("--- 需要处理的项目列表 结束 ---")
-        
-        task_manager.update_task_progress(task_id, 0, total_to_process)
-
-        for i, item_details in enumerate(items_to_process):
-            if cancellation_event.is_set():
-                logging.warning("【豆瓣修复器】任务被用户取消。")
-                break
-            
-            task_manager.update_task_progress(task_id, i + 1, total_to_process)
-            
-            item_id = item_details['Id']
-
-            search_results = self._search_douban(item_details.get("Name", ""))
-            if search_results is None:
-                self.add_to_cache(item_details)
-                continue
-
-            matched_douban_id = self._find_match_in_results(item_details, search_results)
-            if matched_douban_id:
-                if self._update_emby_item_douban_id(item_id, matched_douban_id):
-                    self.remove_from_cache(item_id)
-            else:
-                self.add_to_cache(item_details)
-
-        logging.info("【豆瓣修复器】扫描与匹配任务执行完毕。")
-
-
-
     def _process_single_item_for_fixing(self, item_id: str) -> bool:
         """处理单个媒体项的ID修复逻辑，返回是否成功修复。"""
         item_details = self._get_emby_item_details(item_id)
@@ -344,16 +234,19 @@ class DoubanFixerLogic:
         return {"fixed_count": fixed_count}
 
     def scan_and_match_task(self, scan_scope: str, media_type: Optional[str], library_ids: Optional[List[str]], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-        """(旧的全库扫描任务)"""
+        """(旧的全库扫描任务，现在作为包装器)"""
         logging.info(f"【豆瓣修复器-全库扫描】开始执行，范围: {scan_scope}...")
         
-        # 使用 MediaSelector 获取 item_ids
         from media_selector import MediaSelector
+        
+        # --- 核心修复：确保 library_ids 是列表而不是 None ---
         scope_config = ScheduledTasksTargetScope(
             mode='all' if scan_scope == 'all' else ('by_type' if scan_scope == 'media_type' else 'by_library'),
             media_type=media_type,
-            library_ids=library_ids
+            library_ids=library_ids or []  # 如果 library_ids 是 None，则使用空列表
         )
+        # --- 结束修复 ---
+
         selector = MediaSelector(self.app_config)
         item_ids_to_process = selector.get_item_ids(scope_config)
 
