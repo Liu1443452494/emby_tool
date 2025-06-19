@@ -1,4 +1,4 @@
-// frontend/src/views/MediaDownloadView.vue (修改后)
+// frontend/src/views/MediaDownloadView.vue (修正后)
 <template>
   <div class="media-download-page">
     <div class="media-download-layout">
@@ -48,13 +48,21 @@
                 placeholder="输入要排除的媒体库名称，用英文逗号(,)隔开"
               />
             </div>
+            
+            <p class="form-item-description" style="margin-top: 10px;">批量下载的内容类型:</p>
+            <el-checkbox-group v-model="downloadContentTypes" class="content-checkbox-group">
+              <el-checkbox value="poster">海报</el-checkbox>
+              <el-checkbox value="logo">Logo</el-checkbox>
+              <el-checkbox value="backdrop">背景图</el-checkbox>
+              <el-checkbox value="nfo">NFO</el-checkbox>
+            </el-checkbox-group>
 
             <el-button 
               v-if="!mediaStore.activeBatchTaskId"
               type="primary" 
               @click="handleBatchDownload" 
               :loading="mediaStore.isLoading" 
-              style="width: 100%;"
+              style="width: 100%; margin-top: 15px;"
             >
               开始批量下载
             </el-button>
@@ -62,7 +70,7 @@
               v-else
               type="danger" 
               @click="handleStopBatchDownload" 
-              style="width: 100%;"
+              style="width: 100%; margin-top: 15px;"
             >
               停止批量下载
             </el-button>
@@ -70,18 +78,35 @@
           </el-form>
         </div>
 
+        <!-- --- 功能区 (重构版) --- -->
         <div class="divider"></div>
 
         <div class="control-section">
-          <h3>通用下载内容</h3>
-          <p class="form-item-description">以下设置对“单项下载”和“批量下载”均有效。目录命名规则请在“Emby配置-下载设置”中修改。</p>
-          <el-checkbox-group v-model="downloadContentTypes" class="content-checkbox-group">
-            <el-checkbox value="poster">海报</el-checkbox>
-            <el-checkbox value="logo">Logo</el-checkbox>
-            <el-checkbox value="backdrop">背景图</el-checkbox>
-            <el-checkbox value="nfo">NFO</el-checkbox>
-          </el-checkbox-group>
+          <h3>从本地文件夹提取</h3>
+          <p class="form-item-description">将指定文件夹内的媒体信息文件按原目录结构复制到全局下载目录。此功能独立于上方的下载设置。</p>
+          <el-form @submit.prevent="handleLocalExtract" class="control-form">
+            <el-input v-model="localSourcePath" placeholder="输入源文件夹的绝对路径..." clearable class="glow-input" />
+            
+            <p class="form-item-description" style="margin-top: 10px;">选择要提取的文件类型:</p>
+            <div class="extract-options">
+              <el-checkbox-group v-model="extractExtensions" class="content-checkbox-group">
+                <el-checkbox value=".nfo">所有 .nfo 文件</el-checkbox>
+                <el-checkbox value=".strm">所有 .strm 文件</el-checkbox>
+              </el-checkbox-group>
+              <el-checkbox-group v-model="extractFilenames" class="content-checkbox-group">
+                <el-checkbox value="poster">poster.jpg/png</el-checkbox>
+                <el-checkbox value="fanart">fanart.jpg/png</el-checkbox>
+                <el-checkbox value="logo">logo.png</el-checkbox>
+              </el-checkbox-group>
+            </div>
+
+            <el-button type="primary" native-type="submit" :loading="mediaStore.isLoading" style="width: 100%; margin-top: 15px;">
+              开始提取
+            </el-button>
+          </el-form>
         </div>
+        <!-- --- 结束功能区 --- -->
+
       </div>
 
       <!-- 右侧结果展示区 -->
@@ -112,7 +137,6 @@
                 {{ scope.row.Genres.join(', ') }}
               </template>
             </el-table-column>
-            <!-- 修改开始 -->
             <el-table-column label="豆瓣ID" width="120">
                 <template #default="scope">
                     {{ getProviderId(scope.row, 'douban') || '-' }}
@@ -123,7 +147,6 @@
                     {{ getProviderId(scope.row, 'tmdb') || '-' }}
                 </template>
             </el-table-column>
-            <!-- 修改结束 -->
             <el-table-column label="操作" width="120" fixed="right">
               <template #default="scope">
                 <el-button
@@ -158,6 +181,10 @@ const batchMediaType = useStorage('download-batchMediaType', 'Movie');
 const selectedLibraryIds = useStorage('download-selectedLibraryIds', []);
 const libraryBlacklist = useStorage('download-libraryBlacklist', '');
 const downloadContentTypes = useStorage('download-contentTypes', ['poster', 'nfo']);
+
+const localSourcePath = useStorage('extract-localSourcePath', '');
+const extractExtensions = useStorage('extract-extensions', ['.nfo']);
+const extractFilenames = useStorage('extract-filenames', ['poster', 'fanart']);
 
 const syncTaskState = () => {
   if (mediaStore.activeBatchTaskId) {
@@ -194,15 +221,25 @@ const handleBatchDownload = () => {
 };
 
 const handleSingleDownload = (row) => {
-  mediaStore.downloadSingleItem(row.Id, downloadContentTypes.value);
+  const singleDownloadTypes = ['poster', 'logo', 'backdrop', 'nfo'];
+  mediaStore.downloadSingleItem(row.Id, singleDownloadTypes);
 };
 
 const handleStopBatchDownload = async () => {
   if (mediaStore.activeBatchTaskId) {
     await taskStore.cancelTask(mediaStore.activeBatchTaskId);
-    // 移除此处的 clearActiveBatchTask，交由 task.js 统一处理
   }
 };
+
+// --- 核心修复 ---
+const handleLocalExtract = () => {
+  mediaStore.startLocalExtraction(
+    localSourcePath.value, 
+    extractExtensions.value, // 传递 .value
+    extractFilenames.value   // 传递 .value
+  );
+};
+// --- 结束修复 ---
 
 const getProviderId = (row, providerName) => {
   if (!row.ProviderIds) return null;
@@ -243,6 +280,15 @@ watch(() => taskStore.tasks, () => {
 .sub-options { padding: 10px 0; }
 
 .content-checkbox-group { display: flex; flex-wrap: wrap; gap: 15px; }
+.extract-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 5px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+}
+
 .results-panel { flex-grow: 1; padding: 20px; overflow: hidden; }
 .box-card { height: 100%; border: none; background-color: transparent; display: flex; flex-direction: column; }
 .box-card :deep(.el-card__header) { border-bottom: none; padding: 0 0 15px 0; }

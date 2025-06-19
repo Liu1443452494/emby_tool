@@ -2,10 +2,11 @@ version: '3.8'
 
 services:
   backend:
+    #改用github打包了，compose拉取镜像将下列三行代码 取消掉
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: liuzj0827/emby-toolkit-backend:2.2
+    image: liuzj0827/emby-toolkit-backend:2.0
     container_name: emby_toolkit_backend
     restart: unless-stopped
     network_mode: "host"
@@ -19,10 +20,11 @@ services:
     command: sh -c "uvicorn main:app --host 0.0.0.0 --port 8271 --reload --proxy-headers --forwarded-allow-ips='*'"
 
   frontend:
+    #改用github打包了，compose拉取镜像将下列三行代码 取消掉
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: liuzj0827/emby-toolkit-frontend:2.2
+    image: liuzj0827/emby-toolkit-frontend:2.0
     container_name: emby_toolkit_frontend
     restart: unless-stopped
     network_mode: "host"

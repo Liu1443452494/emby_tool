@@ -18,7 +18,8 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocke
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Literal
-
+from local_extractor import extract_local_media_task
+from models import LocalExtractRequest
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -634,6 +635,30 @@ class GenrePreviewRequest(BaseModel):
     blacklist: Optional[str] = None
 class GenreApplyRequest(BaseModel):
     items_to_apply: List[Dict]
+
+
+# backend/main.py (修改 /api/media/extract-local 路由)
+
+@app.post("/api/media/extract-local")
+async def extract_local_media_api(req: LocalExtractRequest):
+    """
+    从本地文件夹提取媒体信息文件。(新版逻辑)
+    """
+    config = app_config.load_app_config()
+    if not config.download_config.download_directory:
+        raise HTTPException(status_code=400, detail="全局下载目录未配置，请先在“Emby配置”页面设置。")
+    if not os.path.isdir(req.source_path):
+        raise HTTPException(status_code=400, detail=f"指定的源目录 '{req.source_path}' 无效或不存在。")
+    
+    task_name = f"本地提取 ({os.path.basename(req.source_path)})"
+    task_id = task_manager.register_task(
+        extract_local_media_task,
+        task_name,
+        config,
+        req  # 直接将整个请求对象传递给任务
+    )
+    return {"status": "success", "message": "本地提取任务已启动", "task_id": task_id}
+
 @app.get("/api/genres")
 def get_all_genres():
     config = app_config.load_app_config()

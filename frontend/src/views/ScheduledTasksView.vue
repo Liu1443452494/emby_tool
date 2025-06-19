@@ -126,6 +126,10 @@
             <el-switch v-model="localPosterConfig.overwrite_existing" active-text="强制覆盖所有海报" inactive-text="智能判断，不覆盖已是豆瓣海报的媒体" />
             <div class="form-item-description">关闭时，工具会记录已更新的海报，避免重复工作。开启后，将无差别覆盖范围内的所有媒体项海报。</div>
           </el-form-item>
+          <el-form-item label="地区过滤">
+            <el-switch v-model="localPosterConfig.skip_mainland_china" active-text="跳过中国大陆影视" />
+            <div class="form-item-description">开启后，若媒体的制片国家/地区包含“中国”，则任务会自动跳过该媒体项。此功能依赖于Emby中正确的“制片国家/地区”信息。</div>
+          </el-form-item>
         </el-form>
       </div>
       <template #footer>

@@ -1,8 +1,8 @@
 // frontend/src/stores/media.js (修改后)
+
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { ElMessage } from 'element-plus'
-// --- 核心修改 1: 导入 API 配置 ---
 import { API_BASE_URL } from '@/config/apiConfig';
 
 export const useMediaStore = defineStore('media', () => {
@@ -22,7 +22,6 @@ export const useMediaStore = defineStore('media', () => {
   async function fetchLibraries() {
     isLoading.value = true
     try {
-      // --- 核心修改 2: 使用导入的常量 ---
       const response = await fetch(`${API_BASE_URL}/api/media/libraries`)
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || '获取媒体库失败')
@@ -43,7 +42,6 @@ export const useMediaStore = defineStore('media', () => {
     isLoading.value = true
     searchResults.value = []
     try {
-      // --- 核心修改 3: 使用导入的常量 ---
       const response = await fetch(`${API_BASE_URL}/api/media/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -69,7 +67,6 @@ export const useMediaStore = defineStore('media', () => {
     }
     isLoading.value = true
     try {
-      // --- 核心修改 4: 使用导入的常量 ---
       const response = await fetch(`${API_BASE_URL}/api/media/download-item`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -101,7 +98,6 @@ export const useMediaStore = defineStore('media', () => {
 
     isLoading.value = true
     try {
-      // --- 核心修改 5: 使用导入的常量 ---
       const response = await fetch(`${API_BASE_URL}/api/media/batch-download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -120,6 +116,39 @@ export const useMediaStore = defineStore('media', () => {
     }
   }
   
+  // --- 修改 Action ---
+  async function startLocalExtraction(sourcePath, extensions, filenames) {
+    if (!sourcePath) {
+      showMessage('warning', '请输入要提取的源文件夹路径！');
+      return;
+    }
+    if (extensions.length === 0 && filenames.length === 0) {
+      showMessage('warning', '请至少选择一种要提取的文件类型！');
+      return;
+    }
+    isLoading.value = true;
+    try {
+      const payload = {
+        source_path: sourcePath,
+        extensions: extensions,
+        filenames: filenames,
+      };
+      const response = await fetch(`${API_BASE_URL}/api/media/extract-local`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '启动提取任务失败');
+      showMessage('success', data.message);
+    } catch (error) {
+      showMessage('error', `启动提取任务失败: ${error.message}`);
+    } finally {
+      isLoading.value = false;
+    }
+  }
+  // --- 结束修改 ---
+
   function clearActiveBatchTask() {
     activeBatchTaskId.value = null
   }
@@ -134,6 +163,7 @@ export const useMediaStore = defineStore('media', () => {
     searchMedia, 
     downloadSingleItem, 
     startBatchDownload,
+    startLocalExtraction,
     clearActiveBatchTask
   }
 })

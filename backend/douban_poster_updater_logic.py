@@ -38,7 +38,7 @@ class DoubanPosterUpdaterLogic:
             logging.error(f"【豆瓣海报更新】加载豆瓣缓存文件失败: {e}")
             return {}
 
-    def _get_item_details(self, item_id: str, fields: str = "ProviderIds,ImageTags") -> Optional[Dict]:
+    def _get_item_details(self, item_id: str, fields: str = "ProviderIds,ImageTags,ProductionLocations") -> Optional[Dict]:
         """获取媒体项的详细信息"""
         try:
             url = f"{self.base_url}/Users/{self.user_id}/Items/{item_id}"
@@ -106,6 +106,7 @@ class DoubanPosterUpdaterLogic:
             logging.error(f"     -- 写入海报标记失败: {e}")
             return False
 
+    # --- 修改此方法 ---
     def run_poster_update_for_items(self, item_ids: Iterable[str], config: DoubanPosterUpdaterConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """为指定的媒体ID列表执行豆瓣海报更新"""
         if not self.douban_map:
@@ -114,7 +115,7 @@ class DoubanPosterUpdaterLogic:
         item_ids_list = list(item_ids)
         total_items = len(item_ids_list)
         logging.info(f"【豆瓣海报更新-任务】启动，共需处理 {total_items} 个媒体项。")
-        logging.info(f"  - 任务配置：覆盖模式={'开启' if config.overwrite_existing else '关闭'}, 更新间隔={config.update_interval}秒")
+        logging.info(f"  - 任务配置：覆盖模式={'开启' if config.overwrite_existing else '关闭'}, 更新间隔={config.update_interval}秒, 跳过大陆={'开启' if config.skip_mainland_china else '关闭'}")
         task_manager.update_task_progress(task_id, 0, total_items)
 
         if total_items == 0:
@@ -135,6 +136,19 @@ class DoubanPosterUpdaterLogic:
 
             item_name = item_details.get("Name", f"Item {item_id}")
             logging.info(f"  -> 正在处理: [{item_name}] (ID: {item_id})")
+
+            # --- 新增逻辑：判断是否跳过中国大陆影视 ---
+            if config.skip_mainland_china:
+                locations = item_details.get("ProductionLocations", [])
+                # 只有当 ProductionLocations 存在且明确包含中国相关标识时才跳过
+                if locations:
+                    is_mainland_china = any(
+                        loc.lower() in ["china", "cn", "中国", "中国大陆"] for loc in locations
+                    )
+                    if is_mainland_china:
+                        logging.info(f"     -- 跳过，检测到制片地区为中国大陆: {locations}")
+                        continue
+            # --- 新增逻辑结束 ---
 
             provider_ids = item_details.get('ProviderIds', {})
             douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)

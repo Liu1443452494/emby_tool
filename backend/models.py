@@ -90,6 +90,7 @@ class DoubanPosterUpdaterConfig(BaseModel):
     """豆瓣海报更新器功能的配置"""
     update_interval: float = Field(default=1.0, description="处理每个媒体的间隔时间（秒）")
     overwrite_existing: bool = Field(default=False, description="是否覆盖已有海报")
+    skip_mainland_china: bool = Field(default=False, description="是否跳过中国大陆地区的影视")
 
 class ScheduledTaskItem(BaseModel):
     """单个定时任务的配置"""
@@ -269,3 +270,13 @@ class CombinedAvatarResponse(BaseModel):
     images: List[CombinedActorImage] = Field(default_factory=list)
     intervention_details: Optional[Any] = None
     warnings: List[str] = Field(default_factory=list)
+
+    # backend/models.py (在文件末尾追加)
+
+class LocalExtractRequest(BaseModel):
+    """本地提取请求模型 (新版)"""
+    source_path: str
+    # 要匹配的文件后缀名列表，例如 [".nfo", ".strm"]
+    extensions: List[str] = Field(default_factory=list)
+    # 要匹配的特定文件名（不含后缀），例如 ["poster", "fanart", "logo"]
+    filenames: List[str] = Field(default_factory=list)

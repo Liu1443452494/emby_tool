@@ -37,7 +37,8 @@ export const useConfigStore = defineStore('config', () => {
     // --- 新增：为 appConfig 添加新任务的默认结构 ---
     douban_poster_updater_config: {
       update_interval: 1.0,
-      overwrite_existing: false
+      overwrite_existing: false,
+      skip_mainland_china: false
     }
     // --- 结束新增 ---
   })
@@ -75,9 +76,11 @@ export const useConfigStore = defineStore('config', () => {
         } else if (!fullConfig.scheduled_tasks_config.target_scope) {
            fullConfig.scheduled_tasks_config.target_scope = { mode: 'latest', days: 7, limit: 100, media_type: 'Movie', library_ids: [], library_blacklist: '' };
         }
-        // --- 新增：为旧配置提供新任务的兼容性 ---
+        
         if (!fullConfig.douban_poster_updater_config) {
-          fullConfig.douban_poster_updater_config = { update_interval: 1.0, overwrite_existing: false };
+          fullConfig.douban_poster_updater_config = { update_interval: 1.0, overwrite_existing: false, skip_mainland_china: false };
+        } else if (typeof fullConfig.douban_poster_updater_config.skip_mainland_china === 'undefined') {
+          fullConfig.douban_poster_updater_config.skip_mainland_china = false;
         }
         // --- 结束新增 ---
         appConfig.value = fullConfig
