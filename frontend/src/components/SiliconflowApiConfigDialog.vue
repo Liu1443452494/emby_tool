@@ -12,7 +12,6 @@
         <el-input v-model="localConfig.api_key" placeholder="请输入 SiliconFlow API Key" show-password />
       </el-form-item>
       <el-form-item label="使用的模型">
-        <!-- 核心修改 1: 监听 @change 事件 -->
         <el-select 
           v-model="localConfig.model_name" 
           placeholder="请选择或输入模型名称" 
@@ -21,7 +20,21 @@
           allow-create
           @change="handleModelChange"
         >
-          <el-option v-for="(remark, name) in localConfig.model_remarks" :key="name" :label="`${name} ${remark}`" :value="name" />
+          <!-- 核心修改 1: 在 el-option 内部添加删除按钮 -->
+          <el-option v-for="(remark, name) in localConfig.model_remarks" :key="name" :label="`${name} ${remark}`" :value="name">
+            <div class="option-with-delete">
+              <span>{{ name }} <span class="option-remark">{{ remark }}</span></span>
+              <!-- 阻止事件冒泡，防止点击删除时触发 el-option 的选中事件 -->
+              <el-button 
+                type="danger" 
+                :icon="Delete" 
+                circle 
+                text 
+                class="delete-button"
+                @click.stop="handleDeleteModel(name)"
+              />
+            </div>
+          </el-option>
         </el-select>
       </el-form-item>
     </el-form>
@@ -41,8 +54,9 @@
 <script setup>
 import { ref, watch, defineProps, defineEmits } from 'vue';
 import { useActorLocalizerStore } from '@/stores/actorLocalizer';
-// 核心修改 2: 导入 ElMessageBox
-import { ElMessageBox } from 'element-plus';
+import { ElMessageBox, ElMessage } from 'element-plus';
+// 核心修改 2: 导入 Delete 图标
+import { Delete } from '@element-plus/icons-vue';
 
 const props = defineProps({
   visible: Boolean,
@@ -66,10 +80,8 @@ watch(() => props.visible, (newVal) => {
   }
 });
 
-// 核心修改 3: 新增 handleModelChange 方法
 const handleModelChange = async (newModelName) => {
   if (newModelName && !localConfig.value.model_remarks.hasOwnProperty(newModelName)) {
-    // 这是一个新创建的模型
     try {
       const { value } = await ElMessageBox.prompt(
         `您创建了一个新的模型 "${newModelName}"，请输入该模型的备注信息（例如：免费、推荐、收费等），留空则无备注。`,
@@ -78,17 +90,41 @@ const handleModelChange = async (newModelName) => {
           confirmButtonText: '确认',
           cancelButtonText: '取消',
           inputPlaceholder: '请输入备注',
-          // 允许输入为空
           inputValidator: (val) => { return true; },
         }
       );
-      // 用户点击了确认，将新模型和备注添加到 model_remarks
-      localConfig.value.model_remarks[newModelName] = value || ''; // 如果用户没输入，则备注为空字符串
+      localConfig.value.model_remarks[newModelName] = value || '';
     } catch (action) {
-      // 用户点击了取消或关闭对话框
-      // 将 model_name 重置为之前的值，防止新创建的未确认项被选中
       localConfig.value.model_name = props.config.model_name || '';
     }
+  }
+};
+
+// 核心修改 3: 新增 handleDeleteModel 方法
+const handleDeleteModel = async (modelNameToDelete) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定要从配置中永久删除模型 “${modelNameToDelete}” 吗？此操作不可恢复。`,
+      '警告',
+      {
+        confirmButtonText: '确定删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    );
+    
+    // 从 model_remarks 中删除
+    delete localConfig.value.model_remarks[modelNameToDelete];
+
+    // 如果删除的是当前选中的模型，则清空选择
+    if (localConfig.value.model_name === modelNameToDelete) {
+      localConfig.value.model_name = '';
+    }
+
+    ElMessage.success(`模型 “${modelNameToDelete}” 已删除。`);
+
+  } catch (error) {
+    // 用户点击了取消，不执行任何操作
   }
 };
 
@@ -104,14 +140,36 @@ const handleTest = async () => {
 };
 
 const handleSave = () => {
-  // 核心修改 4: 保存逻辑简化，因为添加新模型的逻辑已经移到 handleModelChange 中
-  // 不再需要在这里检查和添加模型
   emit('save', localConfig.value);
   emit('update:visible', false);
 };
 </script>
 
+<!-- 核心修改 4: 添加新的样式 -->
 <style scoped>
+.option-with-delete {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.option-remark {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.delete-button {
+  visibility: hidden; /* 默认隐藏 */
+  margin-left: 10px;
+}
+
+/* 当鼠标悬浮在整个选项上时，显示删除按钮 */
+.el-select-dropdown__item:hover .delete-button {
+  visibility: visible;
+}
+
 .test-result {
   margin-top: 15px;
   padding: 8px 12px;
