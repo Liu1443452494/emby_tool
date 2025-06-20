@@ -79,6 +79,12 @@ class SiliconflowApiConfig(BaseModel):
         ge=0.0,
         le=1.0
     )
+    timeout: int = Field(
+        default=20,
+        description="API 请求超时时间（秒）。",
+        ge=5,  # 最小5秒
+        le=120 # 最大120秒
+    )
 
 class ActorLocalizerConfig(BaseModel):
     """演员中文化功能的完整配置"""

@@ -1,3 +1,4 @@
+// frontend/src/components/SiliconflowApiConfigDialog.vue (修改后)
 <template>
   <el-dialog
     :model-value="visible"
@@ -63,6 +64,20 @@
         </div>
       </el-form-item>
 
+      <!-- --- 新增超时时间配置 --- -->
+      <el-form-item>
+         <template #label>
+          <span>
+            API 超时时间 (秒)
+            <el-tooltip effect="dark" content="等待 API 响应的最长时间。如果您的网络状况不佳或使用大型模型，可以适当增加此值。" placement="top">
+              <el-icon><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+        </template>
+        <el-input-number v-model="localConfig.timeout" :min="5" :max="120" />
+      </el-form-item>
+      <!-- --- 结束新增 --- -->
+
     </el-form>
     <div v-if="testResult" :class="['test-result', testResult.success ? 'success' : 'error']">
       {{ testResult.message }}
@@ -107,6 +122,11 @@ watch(() => props.visible, (newVal) => {
     if (typeof localConfig.value.top_p === 'undefined') {
       localConfig.value.top_p = 1.0;
     }
+    // --- 新增：为 timeout 设置默认值，以兼容旧的配置文件 ---
+    if (typeof localConfig.value.timeout === 'undefined') {
+      localConfig.value.timeout = 20;
+    }
+    // --- 结束新增 ---
     testResult.value = null;
   }
 });
@@ -223,10 +243,7 @@ const handleSave = () => {
   width: 100%;
 }
 
-/* --- 核心修改：调整 el-slider 附带的 input-number 宽度 --- */
 .slider-wrapper :deep(.el-slider__input) {
-  /* 将宽度从 100px 增加到 130px 或 140px，根据需要调整 */
-  width: 140px; 
+  width: 140px;
 }
-/* --- 结束修改 --- */
 </style>

@@ -62,7 +62,7 @@ class ActorLocalizerLogic:
             params = {"api_key": self.api_key}
             if not full_json:
                 params["Fields"] = "People,ProviderIds,Name"
-            resp = requests.get(url, params=params, timeout=25)
+            resp = requests.get(url, params=params, timeout=15)
             resp.raise_for_status()
             return resp.json()
         except requests.RequestException as e:
@@ -351,7 +351,7 @@ class ActorLocalizerLogic:
         }
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
         
-        response = requests.post(url, json=payload, headers=headers, timeout=25)
+        response = requests.post(url, json=payload, headers=headers, timeout=config.timeout)
         response.raise_for_status()
         result = response.json()
         if result.get("choices") and len(result["choices"]) > 0:
