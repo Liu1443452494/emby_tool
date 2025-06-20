@@ -62,7 +62,7 @@ class ActorLocalizerLogic:
             params = {"api_key": self.api_key}
             if not full_json:
                 params["Fields"] = "People,ProviderIds,Name"
-            resp = requests.get(url, params=params, timeout=15)
+            resp = requests.get(url, params=params, timeout=25)
             resp.raise_for_status()
             return resp.json()
         except requests.RequestException as e:
