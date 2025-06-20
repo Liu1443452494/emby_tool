@@ -1,4 +1,3 @@
-// frontend/src/components/SiliconflowApiConfigDialog.vue (修改后)
 <template>
   <el-dialog
     :model-value="visible"
@@ -20,11 +19,9 @@
           allow-create
           @change="handleModelChange"
         >
-          <!-- 核心修改 1: 在 el-option 内部添加删除按钮 -->
           <el-option v-for="(remark, name) in localConfig.model_remarks" :key="name" :label="`${name} ${remark}`" :value="name">
             <div class="option-with-delete">
               <span>{{ name }} <span class="option-remark">{{ remark }}</span></span>
-              <!-- 阻止事件冒泡，防止点击删除时触发 el-option 的选中事件 -->
               <el-button 
                 type="danger" 
                 :icon="Delete" 
@@ -37,6 +34,35 @@
           </el-option>
         </el-select>
       </el-form-item>
+
+      <el-form-item>
+        <template #label>
+          <span>
+            温度 (Temperature)
+            <el-tooltip effect="dark" content="控制输出的随机性。值越低，输出越确定和重复；值越高，输出越随机和有创意。对于翻译任务，建议使用较低的值。" placement="top">
+              <el-icon><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+        </template>
+        <div class="slider-wrapper">
+          <el-slider v-model="localConfig.temperature" :min="0.0" :max="2.0" :step="0.01" show-input />
+        </div>
+      </el-form-item>
+
+      <el-form-item>
+         <template #label>
+          <span>
+            核心采样 (Top P)
+            <el-tooltip effect="dark" content="控制生成文本的多样性。它会从概率最高的词中进行采样，直到累积概率达到 Top P 的值。1.0 表示不进行筛选。通常建议只修改温度或核心采样中的一个。" placement="top">
+              <el-icon><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+        </template>
+        <div class="slider-wrapper">
+          <el-slider v-model="localConfig.top_p" :min="0.0" :max="1.0" :step="0.01" show-input />
+        </div>
+      </el-form-item>
+
     </el-form>
     <div v-if="testResult" :class="['test-result', testResult.success ? 'success' : 'error']">
       {{ testResult.message }}
@@ -55,8 +81,7 @@
 import { ref, watch, defineProps, defineEmits } from 'vue';
 import { useActorLocalizerStore } from '@/stores/actorLocalizer';
 import { ElMessageBox, ElMessage } from 'element-plus';
-// 核心修改 2: 导入 Delete 图标
-import { Delete } from '@element-plus/icons-vue';
+import { Delete, QuestionFilled } from '@element-plus/icons-vue';
 
 const props = defineProps({
   visible: Boolean,
@@ -75,6 +100,12 @@ watch(() => props.visible, (newVal) => {
     localConfig.value = JSON.parse(JSON.stringify(props.config));
     if (!localConfig.value.model_remarks) {
       localConfig.value.model_remarks = {};
+    }
+    if (typeof localConfig.value.temperature === 'undefined') {
+      localConfig.value.temperature = 0.0;
+    }
+    if (typeof localConfig.value.top_p === 'undefined') {
+      localConfig.value.top_p = 1.0;
     }
     testResult.value = null;
   }
@@ -100,7 +131,6 @@ const handleModelChange = async (newModelName) => {
   }
 };
 
-// 核心修改 3: 新增 handleDeleteModel 方法
 const handleDeleteModel = async (modelNameToDelete) => {
   try {
     await ElMessageBox.confirm(
@@ -113,10 +143,8 @@ const handleDeleteModel = async (modelNameToDelete) => {
       }
     );
     
-    // 从 model_remarks 中删除
     delete localConfig.value.model_remarks[modelNameToDelete];
 
-    // 如果删除的是当前选中的模型，则清空选择
     if (localConfig.value.model_name === modelNameToDelete) {
       localConfig.value.model_name = '';
     }
@@ -124,7 +152,7 @@ const handleDeleteModel = async (modelNameToDelete) => {
     ElMessage.success(`模型 “${modelNameToDelete}” 已删除。`);
 
   } catch (error) {
-    // 用户点击了取消，不执行任何操作
+    // 用户点击了取消
   }
 };
 
@@ -145,7 +173,6 @@ const handleSave = () => {
 };
 </script>
 
-<!-- 核心修改 4: 添加新的样式 -->
 <style scoped>
 .option-with-delete {
   display: flex;
@@ -161,11 +188,10 @@ const handleSave = () => {
 }
 
 .delete-button {
-  visibility: hidden; /* 默认隐藏 */
+  visibility: hidden;
   margin-left: 10px;
 }
 
-/* 当鼠标悬浮在整个选项上时，显示删除按钮 */
 .el-select-dropdown__item:hover .delete-button {
   visibility: visible;
 }
@@ -186,4 +212,21 @@ const handleSave = () => {
   color: #f56c6c;
   border: 1px solid #fde2e2;
 }
+
+.el-form-item :deep(.el-form-item__label) {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.slider-wrapper {
+  width: 100%;
+}
+
+/* --- 核心修改：调整 el-slider 附带的 input-number 宽度 --- */
+.slider-wrapper :deep(.el-slider__input) {
+  /* 将宽度从 100px 增加到 130px 或 140px，根据需要调整 */
+  width: 140px; 
+}
+/* --- 结束修改 --- */
 </style>

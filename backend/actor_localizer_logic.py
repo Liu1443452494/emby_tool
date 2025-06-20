@@ -1,4 +1,4 @@
-# backend/actor_localizer_logic.py (完整代码)
+# backend/actor_localizer_logic.py (完整修改版)
 
 import logging
 import threading
@@ -140,28 +140,44 @@ class ActorLocalizerLogic:
 
     def _translate_text(self, text: str, config: ActorLocalizerConfig, context_title: Optional[str] = None) -> str:
         if not text: return ""
-        try:
-            if config.translation_mode == 'translators':
-                if ts is None: raise ImportError("translators 库未安装")
-                logging.info(f"【翻译】[translators:{config.translator_engine}] 正在翻译: '{text}'")
-                return ts.translate_text(text, translator=config.translator_engine, to_language='zh')
-            
-            elif config.translation_mode == 'tencent':
-                logging.info(f"【翻译】[腾讯云API] 正在翻译: '{text}'")
-                return self.translate_with_tencent_api(text, config.tencent_config)
-
-            elif config.translation_mode == 'siliconflow':
-                logging.info(f"【翻译】[SiliconFlow:{config.siliconflow_config.model_name}] 正在翻译: '{text}' (上下文: {context_title or '无'})")
-                return self.translate_with_siliconflow_api(text, config.siliconflow_config, context_title)
-            
-            return text
-        except Exception as e:
-            logging.error(f"【翻译】翻译 '{text}' 时出错: {e}")
-            return text
         
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # 只有在重试时（attempt > 0）才会 sleep
+                if attempt > 0:
+                    logging.warning(f"【翻译】第 {attempt + 1}/{max_retries} 次重试翻译: '{text}'")
+                    # 注意：这里的冷却只针对重试，主冷却逻辑已移出
+                    if config.api_cooldown_enabled and config.api_cooldown_time > 0:
+                        time.sleep(config.api_cooldown_time)
+
+                if config.translation_mode == 'translators':
+                    if ts is None: raise ImportError("translators 库未安装")
+                    logging.info(f"【翻译】[translators:{config.translator_engine}] 正在翻译: '{text}'")
+                    return ts.translate_text(text, translator=config.translator_engine, to_language='zh')
+                
+                elif config.translation_mode == 'tencent':
+                    logging.info(f"【翻译】[腾讯云API] 正在翻译: '{text}'")
+                    return self.translate_with_tencent_api(text, config.tencent_config)
+
+                elif config.translation_mode == 'siliconflow':
+                    logging.info(f"【翻译】[SiliconFlow:{config.siliconflow_config.model_name}] 正在翻译: '{text}' (上下文: {context_title or '无'})")
+                    return self.translate_with_siliconflow_api(text, config.siliconflow_config, context_title)
+                
+                return text
+
+            except requests.exceptions.RequestException as e:
+                logging.error(f"【翻译】翻译 '{text}' 时发生网络错误 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt + 1 >= max_retries:
+                    logging.error(f"【翻译】已达到最大重试次数，放弃翻译 '{text}'。")
+                    return text
+            except Exception as e:
+                logging.error(f"【翻译】翻译 '{text}' 时发生不可重试的错误: {e}")
+                return text
+
+        return text
 
     def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig) -> bool:
-        """处理单个媒体项的中文化逻辑，返回是否有更新。"""
         details = self._get_item_details(item_id)
         if not details: return False
         
@@ -198,7 +214,9 @@ class ActorLocalizerLogic:
                 new_role = douban_standard_roles[emby_actor_name]
                 source = "豆瓣"
             elif config.translation_enabled:
-                if config.api_cooldown_enabled and config.api_cooldown_time > 0: time.sleep(config.api_cooldown_time)
+                # --- 核心修改：将冷却逻辑放在这里 ---
+                if config.api_cooldown_enabled and config.api_cooldown_time > 0:
+                    time.sleep(config.api_cooldown_time)
                 translated_role = self._translate_text(original_role, config, context_title=item_name)
                 if translated_role and translated_role != original_role:
                     new_role = translated_role
@@ -227,7 +245,6 @@ class ActorLocalizerLogic:
         return False
 
     def run_localization_for_items(self, item_ids: Iterable[str], config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-        """为指定的媒体ID列表执行演员中文化"""
         if not self.douban_map:
             logging.error("【演员中文化-任务】本地豆瓣数据库为空，任务中止。")
             return
@@ -254,16 +271,6 @@ class ActorLocalizerLogic:
         
         logging.info(f"【演员中文化-任务】执行完毕，共更新了 {updated_count} 个项目的演员角色。")
         return {"updated_count": updated_count}
-
-    def apply_actor_changes_directly_task(self, config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-        """(旧的全库扫描任务)"""
-        logging.info("【演员中文化-全库扫描】启动...")
-        target = TargetScope(scope="all_libraries")
-        item_ids_to_process = self._get_item_ids_for_scanning(target, cancellation_event)
-        
-        if cancellation_event.is_set(): return
-
-        self.run_localization_for_items(item_ids_to_process, config, cancellation_event, task_id, task_manager)
 
     @staticmethod
     def translate_with_tencent_api(text: str, config: TencentApiConfig) -> str:
@@ -339,19 +346,18 @@ class ActorLocalizerLogic:
             ],
             "stream": False,
             "max_tokens": 100,
-            "temperature": 0.0,
-            "top_p": 1.0
+            "temperature": config.temperature,
+            "top_p": config.top_p
         }
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
         
-        response = requests.post(url, json=payload, headers=headers, timeout=20)
+        response = requests.post(url, json=payload, headers=headers, timeout=25)
         response.raise_for_status()
         result = response.json()
         if result.get("choices") and len(result["choices"]) > 0:
             content = result["choices"][0].get("message", {}).get("content", "")
             return content.strip().strip('"\'')
         raise Exception(f"SiliconFlow API 响应格式不正确: {result}")
-
 
     def preview_actor_changes_task(self, target: TargetScope, config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         logging.info("【演员中文化】预览任务启动...")
@@ -424,9 +430,7 @@ class ActorLocalizerLogic:
                             person['Role'] = new_role
                             break
                     item_changes_log[emby_actor_name] = {'old': original_role, 'new': new_role, 'source': 'douban'}
-                    # --- 新增日志 ---
-                    logging.info(f"     -- [预览更新]: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自豆瓣)")
-                    # --- 结束新增 ---
+                    logging.info(f"     -- 预览更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自豆瓣)")
                 else:
                     unmatched_actors.append({'name': emby_actor_name, 'role': original_role})
             
@@ -435,6 +439,8 @@ class ActorLocalizerLogic:
             if config.translation_enabled:
                 for actor_info in actors_to_process_further:
                     if cancellation_event.is_set(): break
+                    
+                    # --- 核心修改：将冷却逻辑放在这里 ---
                     if config.api_cooldown_enabled and config.api_cooldown_time > 0:
                         time.sleep(config.api_cooldown_time)
                     
@@ -445,9 +451,7 @@ class ActorLocalizerLogic:
                                 person['Role'] = translated_role
                                 break
                         item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': translated_role, 'source': 'translation'}
-                        # --- 新增日志 ---
                         logging.info(f"     -- 预览更新: {actor_info['name']}: '{actor_info['role']}' -> '{translated_role}' (来自翻译)")
-                        # --- 结束新增 ---
             
             elif config.replace_english_role:
                 for actor_info in actors_to_process_further:
@@ -458,15 +462,11 @@ class ActorLocalizerLogic:
                                 person['Role'] = new_role
                                 break
                         item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': new_role, 'source': 'replace'}
-                        # --- 新增日志 ---
                         logging.info(f"     -- 预览更新: {actor_info['name']}: '{actor_info['role']}' -> '{new_role}' (来自替换)")
-                        # --- 结束新增 ---
 
             if item_changes_log:
                 change_detail = {'id': details['Id'], 'name': item_name, 'changes': item_changes_log, 'new_people': new_people_list}
                 items_to_update.append(change_detail)
-                # 这条总览日志可以保留，也可以注释掉，看你喜欢哪种风格
-                # logging.info(f"  - 预览发现变更: [{item_name}] -> {len(item_changes_log)} 个演员角色可更新。")
                 task_manager.update_task_result(task_id, items_to_update)
 
         if cancellation_event.is_set():
@@ -475,7 +475,6 @@ class ActorLocalizerLogic:
             logging.info(f"【演员中文化】预览扫描完成，共处理 {total_items} 个项目，发现 {len(items_to_update)} 个可修改项。")
         
         return items_to_update
-
 
     def apply_actor_changes_task(self, items: List[Dict], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         total_items = len(items)
@@ -544,10 +543,8 @@ class ActorLocalizerLogic:
             item_name = details.get('Name', '未知名称')
             logging.debug(f"【演员中文化-自动任务】进度 {index + 1}/{total_items}: 正在处理 [{item_name}]")
 
-            # --- 核心修改 ---
             provider_ids = details.get('ProviderIds', {})
             douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
-            # --- 结束修改 ---
             
             if not douban_id: continue
             
@@ -570,7 +567,9 @@ class ActorLocalizerLogic:
                     new_role = douban_standard_roles[emby_actor_name]
                     source = "豆瓣"
                 elif config.translation_enabled:
-                    if config.api_cooldown_enabled and config.api_cooldown_time > 0: time.sleep(config.api_cooldown_time)
+                    # --- 核心修改：将冷却逻辑放在这里 ---
+                    if config.api_cooldown_enabled and config.api_cooldown_time > 0:
+                        time.sleep(config.api_cooldown_time)
                     translated_role = self._translate_text(original_role, config, context_title=item_name)
                     if translated_role and translated_role != original_role:
                         new_role = translated_role

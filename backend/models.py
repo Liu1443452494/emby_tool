@@ -67,6 +67,19 @@ class SiliconflowApiConfig(BaseModel):
     model_name: str = "Qwen/Qwen2-7B-Instruct"
     model_remarks: Dict[str, str] = Field(default_factory=dict)
 
+    temperature: float = Field(
+        default=0.0, 
+        description="温度，控制生成文本的随机性。0.0 表示最确定性的输出。",
+        ge=0.0, # 大于等于 0
+        le=2.0  # 小于等于 2
+    )
+    top_p: float = Field(
+        default=1.0,
+        description="核心采样，控制生成文本的多样性。1.0 表示不进行核心采样。",
+        ge=0.0,
+        le=1.0
+    )
+
 class ActorLocalizerConfig(BaseModel):
     """演员中文化功能的完整配置"""
     replace_english_role: bool = False
