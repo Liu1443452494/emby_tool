@@ -352,6 +352,7 @@ class ActorLocalizerLogic:
             return content.strip().strip('"\'')
         raise Exception(f"SiliconFlow API 响应格式不正确: {result}")
 
+
     def preview_actor_changes_task(self, target: TargetScope, config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         logging.info("【演员中文化】预览任务启动...")
         if not self.douban_map:
@@ -390,10 +391,8 @@ class ActorLocalizerLogic:
             item_name = details.get('Name', '未知名称')
             logging.info(f"【演员中文化】进度 {index + 1}/{total_items}: 正在处理 [{item_name}]")
 
-            # --- 核心修改 ---
             provider_ids = details.get('ProviderIds', {})
             douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
-            # --- 结束修改 ---
 
             if not douban_id:
                 logging.debug(f"【演员中文化】跳过 [{item_name}]：缺少豆瓣ID。")
@@ -425,6 +424,9 @@ class ActorLocalizerLogic:
                             person['Role'] = new_role
                             break
                     item_changes_log[emby_actor_name] = {'old': original_role, 'new': new_role, 'source': 'douban'}
+                    # --- 新增日志 ---
+                    logging.info(f"     -- [预览更新]: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自豆瓣)")
+                    # --- 结束新增 ---
                 else:
                     unmatched_actors.append({'name': emby_actor_name, 'role': original_role})
             
@@ -443,6 +445,9 @@ class ActorLocalizerLogic:
                                 person['Role'] = translated_role
                                 break
                         item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': translated_role, 'source': 'translation'}
+                        # --- 新增日志 ---
+                        logging.info(f"     -- 预览更新: {actor_info['name']}: '{actor_info['role']}' -> '{translated_role}' (来自翻译)")
+                        # --- 结束新增 ---
             
             elif config.replace_english_role:
                 for actor_info in actors_to_process_further:
@@ -453,11 +458,15 @@ class ActorLocalizerLogic:
                                 person['Role'] = new_role
                                 break
                         item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': new_role, 'source': 'replace'}
+                        # --- 新增日志 ---
+                        logging.info(f"     -- 预览更新: {actor_info['name']}: '{actor_info['role']}' -> '{new_role}' (来自替换)")
+                        # --- 结束新增 ---
 
             if item_changes_log:
                 change_detail = {'id': details['Id'], 'name': item_name, 'changes': item_changes_log, 'new_people': new_people_list}
                 items_to_update.append(change_detail)
-                logging.info(f"  - 预览发现变更: [{item_name}] -> {len(item_changes_log)} 个演员角色可更新。")
+                # 这条总览日志可以保留，也可以注释掉，看你喜欢哪种风格
+                # logging.info(f"  - 预览发现变更: [{item_name}] -> {len(item_changes_log)} 个演员角色可更新。")
                 task_manager.update_task_result(task_id, items_to_update)
 
         if cancellation_event.is_set():
@@ -466,6 +475,7 @@ class ActorLocalizerLogic:
             logging.info(f"【演员中文化】预览扫描完成，共处理 {total_items} 个项目，发现 {len(items_to_update)} 个可修改项。")
         
         return items_to_update
+
 
     def apply_actor_changes_task(self, items: List[Dict], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         total_items = len(items)
