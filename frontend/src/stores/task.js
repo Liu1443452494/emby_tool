@@ -75,16 +75,44 @@ export const useTaskStore = defineStore('task', () => {
           const actorStore = useActorLocalizerStore();
           const isPreview = finishedTask.name.includes('预览');
           
-          if (finishedTask.status === 'completed') {
-            showMessage('success', isPreview ? '演员中文化预览完成！' : '演员中文化应用成功！');
-          } else if (finishedTask.status === 'failed') {
-            showMessage('error', isPreview ? '演员中文化预览失败' : '演员中文化应用失败');
-          } else { // cancelled
-            showMessage('warning', isPreview ? '演员中文化预览已取消' : '演员中文化应用已取消');
+          if (isPreview) {
+            // --- BUG 修复：在这里处理最终结果，避免竞态条件 ---
+            if (finishedTask.status === 'completed' && finishedTask.result) {
+                actorStore.previewResults = finishedTask.result;
+                // 同时更新最终的控制台日志
+                const logLines = (finishedTask.result || []).map(item => {
+                    const changes = Object.entries(item.changes).map(([name, ch]) => {
+                        let sourceText = '';
+                        if (ch.source === 'replace') sourceText = ' (来自暴力替换)';
+                        else if (ch.source === 'translation') sourceText = ' (来自翻译引擎)';
+                        else if (ch.source === 'douban') sourceText = ' (来自豆瓣)';
+                        return `  - ${name}: "${ch.old}" -> "${ch.new}"${sourceText}`;
+                    }).join('\n');
+                    return `[${item.name}]\n${changes}`;
+                });
+                actorStore.consoleOutput = `扫描完成！共发现 ${logLines.length} 个可修改项。\n\n` + logLines.join('\n\n');
+            }
+            // --- 修复结束 ---
+
+            if (finishedTask.status === 'completed') {
+              showMessage('success', '演员中文化预览完成！');
+            } else if (finishedTask.status === 'failed') {
+              showMessage('error', '演员中文化预览失败');
+            } else { // cancelled
+              showMessage('warning', '演员中文化预览已取消');
+            }
+            
+            actorStore.clearActivePreviewTask();
+          } else { // 应用任务
+             if (finishedTask.status === 'completed') {
+                showMessage('success', '演员中文化应用成功！');
+             } else if (finishedTask.status === 'failed') {
+                showMessage('error', '演员中文化应用失败');
+             } else { // cancelled
+                showMessage('warning', '演员中文化应用已取消');
+             }
+             actorStore.clearActiveApplyTask();
           }
-          
-          if (isPreview) actorStore.clearActivePreviewTask();
-          else actorStore.clearActiveApplyTask();
           actorStore.isLoading = false;
         }
 
