@@ -319,3 +319,6 @@ class EmbyWebhookPayload(BaseModel):
     Event: str # "item.add"
     User: Dict[str, Any]
     Item: Optional[EmbyWebhookItem] = None
+
+    class Config:
+        extra = 'ignore'
