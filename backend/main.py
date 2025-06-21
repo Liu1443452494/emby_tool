@@ -24,8 +24,7 @@ from models import LocalExtractRequest
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-
-
+from task_manager import TaskManager, task_manager
 from models import (
     ServerConfig, DownloadConfig, AppConfig, MediaSearchQuery, 
     DownloadRequest, BatchDownloadRequest, DoubanConfig, DoubanCacheStatus,
