@@ -80,11 +80,11 @@ async def webhook_worker():
                 webhook_processing_set.remove(item_id)
             webhook_queue.task_done()
 
-# --- 核心修改 1: 在这里将 task_id 和 task_manager 传递下去 ---
 def _webhook_task_runner(item_id: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
     current_config = app_config.load_app_config()
     logic = WebhookLogic(current_config)
-    logic.process_new_media_task(item_id, cancellation_event, task_id, task_manager)
+    # 只传递需要的参数
+    logic.process_new_media_task(item_id, cancellation_event)
 
 
 def trigger_douban_refresh():
