@@ -10,8 +10,10 @@ import re
 import base64
 from typing import List, Dict, Any, Optional, Iterable
 
+# --- 核心修改：修正导入来源 ---
 from models import AppConfig, DoubanPosterUpdaterConfig
 from task_manager import TaskManager
+# --- 结束修改 ---
 from douban_manager import DOUBAN_CACHE_FILE
 
 class DoubanPosterUpdaterLogic:
@@ -102,7 +104,7 @@ class DoubanPosterUpdaterLogic:
             logging.error(f"     -- 写入海报标记失败: {e}")
             return False
 
-    def run_poster_update_for_items(self, item_ids: Iterable[str], config: DoubanPosterUpdaterConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def run_poster_update_for_items(self, item_ids: Iterable[str], config: DoubanPosterUpdaterConfig, cancellation_event: threading.Event, task_id: Optional[str] = None, task_manager: Optional[TaskManager] = None):
         """为指定的媒体ID列表执行豆瓣海报更新"""
         if not self.douban_map:
             return
@@ -111,7 +113,9 @@ class DoubanPosterUpdaterLogic:
         total_items = len(item_ids_list)
         logging.info(f"【豆瓣海报更新-任务】启动，共需处理 {total_items} 个媒体项。")
         logging.info(f"  - 任务配置：覆盖模式={'开启' if config.overwrite_existing else '关闭'}, 更新间隔={config.update_interval}秒, 跳过大陆={'开启' if config.skip_mainland_china else '关闭'}")
-        task_manager.update_task_progress(task_id, 0, total_items)
+        
+        if task_manager and task_id:
+            task_manager.update_task_progress(task_id, 0, total_items)
 
         if total_items == 0:
             logging.info("【豆瓣海报更新-任务】没有需要处理的媒体项，任务结束。")
@@ -123,9 +127,9 @@ class DoubanPosterUpdaterLogic:
                 logging.warning("【豆瓣海报更新-任务】任务被用户取消。")
                 break
             
-            task_manager.update_task_progress(task_id, index + 1, total_items)
+            if task_manager and task_id:
+                task_manager.update_task_progress(task_id, index + 1, total_items)
             
-            # 仅获取ID和名称用于日志
             item_summary = self._get_item_details(item_id, fields="ProviderIds,Name")
             if not item_summary:
                 continue
@@ -145,13 +149,11 @@ class DoubanPosterUpdaterLogic:
                 logging.warning(f"     -- 跳过，本地豆瓣缓存中未找到ID为 {douban_id} 的数据。")
                 continue
 
-            # --- 核心修改 3: 基于豆瓣数据判断地区 ---
             if config.skip_mainland_china:
                 countries = douban_entry.get("countries", [])
                 if any(loc in ["中国大陆", "中国"] for loc in countries):
                     logging.info(f"     -- 跳过，根据豆瓣数据检测到制片地区为中国大陆: {countries}")
                     continue
-            # --- 结束修改 ---
 
             poster_url = douban_entry.get('pic', {}).get('large')
             if not poster_url:
