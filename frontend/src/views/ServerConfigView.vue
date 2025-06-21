@@ -1,4 +1,4 @@
-// frontend/src/views/ServerConfigView.vue (完整代码)
+// frontend/src/views/ServerConfigView.vue (修改后)
 <template>
   <div class="config-page">
     <template v-if="configStore.isLoaded">
@@ -61,8 +61,6 @@
             :disabled="!localProxyConfig.enabled"
           />
         </el-form-item>
-
-        <!-- 新增：代理模式选择 -->
         <el-form-item label="代理模式">
           <el-radio-group v-model="localProxyConfig.mode" :disabled="!localProxyConfig.enabled">
             <el-radio value="blacklist">黑名单模式 (推荐)</el-radio>
@@ -73,7 +71,6 @@
             <b>白名单模式：</b>默认所有外部请求都不走代理，需勾选下方目标<b>走</b>代理。
           </div>
         </el-form-item>
-
         <el-form-item label="代理目标">
           <div class="proxy-scope-group">
             <el-checkbox v-model="localProxyConfig.target_tmdb" :disabled="!localProxyConfig.enabled">TMDB</el-checkbox>
@@ -84,7 +81,6 @@
             {{ proxyTargetDescription }}
           </div>
         </el-form-item>
-
         <el-form-item label="高级: 排除列表">
           <el-input 
             v-model="localProxyConfig.exclude" 
@@ -98,7 +94,6 @@
             作为补充手段，指定哪些域名不走代理，多个地址用英文逗号(,)隔开。此功能依赖于后端环境支持。
           </div>
         </el-form-item>
-
         <el-form-item class="form-button-container multi-button">
           <el-button @click="handleTestProxy" :loading="isProxyTesting" :disabled="!localProxyConfig.enabled">
             测试代理
@@ -240,16 +235,16 @@
         </el-form-item>
         
         <el-form-item label="额外保存字段">
+          <!-- --- 核心修改 4: 移除“国家/地区”的复选框 --- -->
           <el-checkbox-group v-model="localDoubanConfig.extra_fields" class="extra-fields-group">
             <el-checkbox value="rating">评分</el-checkbox>
             <el-checkbox value="pubdate">上映日期</el-checkbox>
             <el-checkbox value="card_subtitle">卡片副标题</el-checkbox>
             <el-checkbox value="languages">语言</el-checkbox>
-            <el-checkbox value="countries">国家/地区</el-checkbox>
             <el-checkbox value="durations">片长(仅电影)</el-checkbox>
           </el-checkbox-group>
           <div class="form-item-description">
-            选择要在本地缓存中额外保存的字段，可以减少文件大小。
+            选择要在本地缓存中额外保存的字段，可以减少文件大小。“国家/地区”字段为功能必需，将默认保存。
           </div>
         </el-form-item>
 
@@ -311,7 +306,6 @@
 
     </template>
 
-    <!-- 骨架屏 -->
     <template v-else>
       <div class="page-header">
         <el-skeleton :rows="1" animated />
@@ -333,6 +327,7 @@
 </template>
 
 <script setup>
+// <script> 部分无需修改，保持原样即可
 import { ref, onMounted, watch, computed, reactive } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useDoubanStore } from '@/stores/douban'
@@ -642,6 +637,7 @@ const handleForceRefresh = async () => {
 </script>
 
 <style>
+/* 样式部分无需修改，保持原样即可 */
 .el-message-container {
   z-index: 9999 !important;
 }

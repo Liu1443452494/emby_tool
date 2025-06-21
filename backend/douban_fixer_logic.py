@@ -1,4 +1,4 @@
-# backend/douban_fixer_logic.py (最终修正版)
+# backend/douban_fixer_logic.py (修改后)
 
 import logging
 import threading
@@ -54,8 +54,9 @@ class DoubanFixerLogic:
                 item_details["ProviderIds"] = {}
             
             original_id = item_details["ProviderIds"].get("Douban")
+            item_name = item_details.get('Name', '未知媒体')
             if original_id == douban_id:
-                logging.info(f"【豆瓣修复器】媒体 '{item_details['Name']}' 的豆瓣ID已是 {douban_id}，无需更新。")
+                logging.info(f"【豆瓣修复器】媒体【{item_name}】的豆瓣ID已是 {douban_id}，无需更新。")
                 return True
 
             item_details["ProviderIds"]["Douban"] = douban_id
@@ -65,7 +66,7 @@ class DoubanFixerLogic:
             response = self.session.post(update_url, params=self.params, json=item_details, headers=headers, timeout=20)
             response.raise_for_status()
             
-            log_msg = f"旧媒体: {item_details['Name']} ({item_details.get('ProductionYear', 'N/A')}) ---> 新媒体: 豆瓣ID {douban_id}"
+            log_msg = f"旧媒体: 【{item_name}】({item_details.get('ProductionYear', 'N/A')}) ---> 新媒体: 豆瓣ID {douban_id}"
             logging.info(f"【豆瓣修复器-更新成功】{log_msg}")
             
             return True
@@ -83,7 +84,7 @@ class DoubanFixerLogic:
 
             match = re.search(r'window\.__DATA__ = (\{.*\});', response.text)
             if not match:
-                logging.warning(f"【豆瓣修复器】搜索 '{title}' 成功，但未在页面中找到 window.__DATA__ 数据块。")
+                logging.warning(f"【豆瓣修复器】搜索【{title}】成功，但未在页面中找到 window.__DATA__ 数据块。")
                 return []
 
             data = json.loads(match.group(1))
@@ -104,11 +105,11 @@ class DoubanFixerLogic:
                     "poster": item.get('cover_url', '')
                 })
             
-            logging.info(f"【豆瓣修复器】通过解析JSON数据成功为 '{title}' 找到 {len(results)} 个结果。")
+            logging.info(f"【豆瓣修复器】通过解析JSON数据成功为【{title}】找到 {len(results)} 个结果。")
             return results
             
         except requests.RequestException as e:
-            logging.error(f"【豆瓣修复器】搜索豆瓣 '{title}' 失败: {e}")
+            logging.error(f"【豆瓣修复器】搜索豆瓣【{title}】失败: {e}")
             return None
         except Exception as e:
             logging.error(f"【豆瓣修复器】解析豆瓣搜索页面或JSON数据失败: {e}", exc_info=True)
@@ -127,7 +128,7 @@ class DoubanFixerLogic:
             douban_id = result.get("id")
 
             if douban_title.startswith(emby_title) and douban_year and abs(douban_year - emby_year) <= 1:
-                logging.info(f"【豆瓣修复器】为 '{emby_item.get('Name')}' 找到匹配: '{result.get('title')}' ({douban_year}) -> ID: {douban_id}")
+                logging.info(f"【豆瓣修复器】为【{emby_item.get('Name')}】找到匹配: 【{result.get('title')}】({douban_year}) -> ID: {douban_id}")
                 return douban_id
         
         return None
@@ -151,16 +152,17 @@ class DoubanFixerLogic:
     def add_to_cache(self, item_details: Dict):
         cache = self._load_cache()
         item_id = str(item_details['Id'])
+        item_name = item_details.get("Name", "未知媒体")
         if item_id not in cache:
             cache[item_id] = {
                 "Id": item_id,
-                "Name": item_details.get("Name"),
+                "Name": item_name,
                 "ProductionYear": item_details.get("ProductionYear"),
                 "Type": item_details.get("Type"),
                 "AddedTime": datetime.now().isoformat()
             }
             self._save_cache(cache)
-            logging.warning(f"【豆瓣修复器】媒体 '{item_details.get('Name')}' 匹配失败，已添加到缓存。")
+            logging.warning(f"【豆瓣修复器】媒体【{item_name}】匹配失败，已添加到缓存。")
 
     def remove_from_cache(self, item_id: str):
         cache = self._load_cache()
@@ -177,7 +179,7 @@ class DoubanFixerLogic:
             return False
         
         item_name = item_details.get("Name", "未知名称")
-        logging.info(f"  -> 正在处理: [{item_name}] (ID: {item_id})")
+        logging.info(f"  -> 正在处理【{item_name}】(ID: {item_id})")
 
         provider_ids = item_details.get("ProviderIds", {})
         provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
@@ -239,13 +241,11 @@ class DoubanFixerLogic:
         
         from media_selector import MediaSelector
         
-        # --- 核心修复：确保 library_ids 是列表而不是 None ---
         scope_config = ScheduledTasksTargetScope(
             mode='all' if scan_scope == 'all' else ('by_type' if scan_scope == 'media_type' else 'by_library'),
             media_type=media_type,
-            library_ids=library_ids or []  # 如果 library_ids 是 None，则使用空列表
+            library_ids=library_ids or []
         )
-        # --- 结束修复 ---
 
         selector = MediaSelector(self.app_config)
         item_ids_to_process = selector.get_item_ids(scope_config)

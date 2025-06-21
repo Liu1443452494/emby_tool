@@ -10,7 +10,6 @@ from task_manager import TaskManager
 import config as app_config
 from models import DoubanCacheStatus
 
-# --- 核心修改：将缓存文件路径指向容器内的 /app/data 目录 ---
 DOUBAN_CACHE_FILE = os.path.join('/app/data', 'douban_data.json')
 
 def _parse_folder_name(folder_name):
@@ -62,20 +61,20 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
         folder_name = os.path.basename(folder_path)
         media_type = folder_info['type']
         
-        logging.info(f"【豆瓣扫描】进度 {i+1}/{total_folders}: 正在处理 [{folder_name}]")
+        logging.info(f"【豆瓣扫描】进度 {i+1}/{total_folders}: 正在处理【{folder_name}】")
         task_manager.update_task_progress(task_id, i + 1, total_folders)
 
         json_filename = 'all.json' if media_type == 'Movie' else 'series.json'
         json_path = os.path.join(folder_path, json_filename)
 
         if not os.path.isfile(json_path):
-            logging.warning(f"【豆瓣扫描】警告：在目录 {folder_path} 中未找到元数据文件 {json_filename}，已跳过。")
+            logging.warning(f"【豆瓣扫描】警告：在目录【{folder_path}】中未找到元数据文件 {json_filename}，已跳过。")
             continue
 
         try:
             douban_id, imdb_id = _parse_folder_name(folder_name)
             if douban_id == 'N/A':
-                logging.warning(f"【豆瓣扫描】警告：无法从文件夹名 {folder_name} 解析出豆瓣ID，已跳过。")
+                logging.warning(f"【豆瓣扫描】警告：无法从文件夹名【{folder_name}】解析出豆瓣ID，已跳过。")
                 continue
 
             with open(json_path, 'r', encoding='utf-8') as f:
@@ -96,9 +95,12 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
                         'avatar': actor.get('avatar', {})
                     } for actor in data.get('actors', [])
                 ],
-                'imdb_id': imdb_id
+                'imdb_id': imdb_id,
+                # --- 核心修改 1: 强制添加 countries 字段 ---
+                'countries': data.get('countries', [])
             }
 
+            # --- 核心修改 2: extra_fields 的处理保持不变，但 countries 已独立于它 ---
             if 'rating' in extra_fields:
                 item_data['rating'] = data.get('rating', {}).get('value')
             if 'pubdate' in extra_fields:
@@ -107,8 +109,6 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
                 item_data['card_subtitle'] = data.get('card_subtitle', '')
             if 'languages' in extra_fields:
                 item_data['languages'] = data.get('languages', [])
-            if 'countries' in extra_fields:
-                item_data['countries'] = data.get('countries', [])
             if 'durations' in extra_fields and media_type == 'Movie':
                 item_data['durations'] = data.get('durations', [])
             
@@ -117,12 +117,11 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
         except json.JSONDecodeError:
             logging.error(f"【豆瓣扫描】错误：解析JSON文件失败: {json_path}")
         except Exception as e:
-            logging.error(f"【豆瓣扫描】错误：处理文件夹 {folder_path} 时发生未知错误: {e}")
+            logging.error(f"【豆瓣扫描】错误：处理文件夹【{folder_path}】时发生未知错误: {e}")
 
     logging.info(f"【豆瓣扫描】扫描完成，共解析 {found_count} 个有效的元数据文件。")
     
     try:
-        # --- 核心修改：确保在写入前，/app/data 目录存在 ---
         cache_dir = os.path.dirname(DOUBAN_CACHE_FILE)
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir, exist_ok=True)

@@ -1,4 +1,4 @@
-# backend/douban_poster_updater_logic.py (新文件)
+# backend/douban_poster_updater_logic.py (修改后)
 
 import logging
 import threading
@@ -38,7 +38,7 @@ class DoubanPosterUpdaterLogic:
             logging.error(f"【豆瓣海报更新】加载豆瓣缓存文件失败: {e}")
             return {}
 
-    def _get_item_details(self, item_id: str, fields: str = "ProviderIds,ImageTags,ProductionLocations") -> Optional[Dict]:
+    def _get_item_details(self, item_id: str, fields: str = "ProviderIds,ImageTags") -> Optional[Dict]:
         """获取媒体项的详细信息"""
         try:
             url = f"{self.base_url}/Users/{self.user_id}/Items/{item_id}"
@@ -67,20 +67,16 @@ class DoubanPosterUpdaterLogic:
 
             upload_url = f"{self.base_url}/Items/{item_id}/Images/Primary"
             
-            # --- 新增：在上传前先尝试删除旧图片 ---
             try:
                 logging.info(f"     -- 正在删除旧的主图...")
                 self.session.delete(upload_url, params=self.params, timeout=20)
             except requests.RequestException as e:
                 logging.warning(f"     -- 删除旧主图时发生错误（可能是正常的，因为没有旧图）: {e}")
-            # --- 结束新增 ---
 
-            # --- 修改：对图片数据进行 Base64 编码 ---
             base64_encoded_data = base64.b64encode(image_data).decode('utf-8')
             headers = {'Content-Type': content_type}
             
             logging.info(f"     -- 正在上传海报到 Emby...")
-            # --- 修改：发送 Base64 编码后的数据 ---
             upload_response = self.session.post(upload_url, params=self.params, data=base64_encoded_data, headers=headers, timeout=60)
             upload_response.raise_for_status()
             return True
@@ -106,7 +102,6 @@ class DoubanPosterUpdaterLogic:
             logging.error(f"     -- 写入海报标记失败: {e}")
             return False
 
-    # --- 修改此方法 ---
     def run_poster_update_for_items(self, item_ids: Iterable[str], config: DoubanPosterUpdaterConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """为指定的媒体ID列表执行豆瓣海报更新"""
         if not self.douban_map:
@@ -130,27 +125,15 @@ class DoubanPosterUpdaterLogic:
             
             task_manager.update_task_progress(task_id, index + 1, total_items)
             
-            item_details = self._get_item_details(item_id)
-            if not item_details:
+            # 仅获取ID和名称用于日志
+            item_summary = self._get_item_details(item_id, fields="ProviderIds,Name")
+            if not item_summary:
                 continue
 
-            item_name = item_details.get("Name", f"Item {item_id}")
-            logging.info(f"  -> 正在处理: [{item_name}] (ID: {item_id})")
+            item_name = item_summary.get("Name", f"Item {item_id}")
+            logging.info(f"  -> 正在处理【{item_name}】(ID: {item_id})")
 
-            # --- 新增逻辑：判断是否跳过中国大陆影视 ---
-            if config.skip_mainland_china:
-                locations = item_details.get("ProductionLocations", [])
-                # 只有当 ProductionLocations 存在且明确包含中国相关标识时才跳过
-                if locations:
-                    is_mainland_china = any(
-                        loc.lower() in ["china", "cn", "中国", "中国大陆"] for loc in locations
-                    )
-                    if is_mainland_china:
-                        logging.info(f"     -- 跳过，检测到制片地区为中国大陆: {locations}")
-                        continue
-            # --- 新增逻辑结束 ---
-
-            provider_ids = item_details.get('ProviderIds', {})
+            provider_ids = item_summary.get('ProviderIds', {})
             douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
 
             if not douban_id:
@@ -162,6 +145,14 @@ class DoubanPosterUpdaterLogic:
                 logging.warning(f"     -- 跳过，本地豆瓣缓存中未找到ID为 {douban_id} 的数据。")
                 continue
 
+            # --- 核心修改 3: 基于豆瓣数据判断地区 ---
+            if config.skip_mainland_china:
+                countries = douban_entry.get("countries", [])
+                if any(loc in ["中国大陆", "中国"] for loc in countries):
+                    logging.info(f"     -- 跳过，根据豆瓣数据检测到制片地区为中国大陆: {countries}")
+                    continue
+            # --- 结束修改 ---
+
             poster_url = douban_entry.get('pic', {}).get('large')
             if not poster_url:
                 logging.info("     -- 跳过，该豆瓣条目无海报信息。")
@@ -172,24 +163,21 @@ class DoubanPosterUpdaterLogic:
                 logging.warning(f"     -- 跳过，无法从豆瓣海报URL中提取有效Tag: {poster_url}")
                 continue
 
-            # 智能判断逻辑 (仅当覆盖模式关闭时)
             if not config.overwrite_existing:
                 current_poster_tag = provider_ids.get('DbPosterTag')
                 if current_poster_tag == expected_poster_tag:
                     logging.info("     -- 跳过，当前海报已是最新豆瓣海报。")
                     continue
             
-            # 执行更新
             if self._upload_poster_from_url(item_id, poster_url):
                 if self._write_poster_tag_to_emby(item_id, expected_poster_tag):
                     updated_count += 1
-                    logging.info(f"     -- 媒体 [{item_name}] 海报更新并标记成功！")
+                    logging.info(f"     -- 媒体【{item_name}】海报更新并标记成功！")
                 else:
-                    logging.error(f"     -- 媒体 [{item_name}] 海报已更新，但写入标记失败！")
+                    logging.error(f"     -- 媒体【{item_name}】海报已更新，但写入标记失败！")
             else:
-                logging.error(f"     -- 媒体 [{item_name}] 海报更新失败。")
+                logging.error(f"     -- 媒体【{item_name}】海报更新失败。")
 
-            # 间隔等待
             time.sleep(config.update_interval)
 
         logging.info(f"【豆瓣海报更新-任务】执行完毕，共成功更新了 {updated_count} 个项目的海报。")
