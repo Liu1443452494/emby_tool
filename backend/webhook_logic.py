@@ -1,4 +1,4 @@
-# backend/webhook_logic.py (最终版，配合新 main.py 使用)
+# backend/webhook_logic.py (最终修复版)
 
 import logging
 import threading
@@ -63,7 +63,6 @@ class WebhookLogic:
         logging.info(f"【Webhook-数据同步】开始为豆瓣ID {douban_id} 执行增量缓存更新...")
         
         try:
-            # --- 增加文件锁，防止并发读写问题 ---
             from filelock import FileLock, Timeout
             lock_path = DOUBAN_CACHE_FILE + ".lock"
             lock = FileLock(lock_path, timeout=10)
@@ -150,6 +149,7 @@ class WebhookLogic:
             logging.error(f"【Webhook-数据同步】处理或写入新豆瓣数据时失败: {e}", exc_info=True)
             return False
 
+    # --- 核心修改 2: 调整函数签名，移除不再需要的 task_id 和 task_manager ---
     def process_new_media_task(self, item_id: str, cancellation_event: threading.Event):
         logging.info(f"【Webhook任务】已启动，开始处理新入库媒体 (ID: {item_id})")
         
@@ -224,7 +224,7 @@ class WebhookLogic:
         logging.info(f"【Webhook任务】【步骤 5/6 | 豆瓣海报更新】开始...")
         try:
             poster_logic = DoubanPosterUpdaterLogic(self.config)
-            # 移除不必要的 task_id 和 task_manager 参数
+            # --- 核心修改 3: 移除不必要的 task_id 和 task_manager 参数 ---
             poster_logic.run_poster_update_for_items([item_id], self.config.douban_poster_updater_config, cancellation_event, None, None)
         except Exception as e:
             logging.error(f"【Webhook任务】【豆瓣海报更新】步骤执行失败。错误: {e}", exc_info=True)
