@@ -1,4 +1,4 @@
-# backend/main.py (完整代码)
+# backend/main.py (修改后)
 
 import sys
 import os
@@ -32,9 +32,9 @@ from models import (
     TencentApiConfig, SiliconflowApiConfig,
     TmdbConfig, ProxyConfig,
     DoubanFixerConfig,
-    LocalExtractRequest, # 确保 LocalExtractRequest 也在这里
-    EmbyWebhookPayload,  # 确保 EmbyWebhookPayload 在这里
-    WebhookConfig        # --- 在这里添加 WebhookConfig ---
+    LocalExtractRequest,
+    EmbyWebhookPayload,
+    WebhookConfig
 
 )
 import config as app_config
@@ -131,7 +131,6 @@ def trigger_scheduled_task(task_id: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- 启动部分 (保持不变) ---
     logging.info("应用启动，开始任务广播消费者...")
     consumer_task = asyncio.create_task(task_manager.broadcast_consumer())
     config = app_config.load_app_config()
@@ -190,22 +189,18 @@ async def lifespan(app: FastAPI):
 
     yield
     
-    # --- 修改：调整关闭逻辑 ---
     logging.info("应用关闭，正在停止后台服务...")
     
-    # 1. 先关闭调度器，且不等待作业完成
     if scheduler.running:
         scheduler.shutdown(wait=False)
         logging.info("APScheduler 已被指令关闭。")
 
-    # 2. 再取消其他常驻的异步任务
     if not consumer_task.done():
         consumer_task.cancel()
         try:
             await consumer_task
         except asyncio.CancelledError:
             logging.info("任务广播消费者已成功取消。")
-    # --- 结束修改 ---
 
 app = FastAPI(lifespan=lifespan)
 origins = ["*"]
@@ -502,12 +497,10 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1)):
             lines = f.readlines()
         
         total_logs = len(lines)
-        # 计算起始和结束索引，因为是倒序，所以从后往前计算
         start_index = total_logs - ((page - 1) * page_size) - 1
         end_index = start_index - page_size
         
         paginated_logs = []
-        # 倒序遍历切片
         for i in range(start_index, end_index, -1):
             if i < 0:
                 break
@@ -642,14 +635,8 @@ class GenrePreviewRequest(BaseModel):
 class GenreApplyRequest(BaseModel):
     items_to_apply: List[Dict]
 
-
-# backend/main.py (修改 /api/media/extract-local 路由)
-
 @app.post("/api/media/extract-local")
 async def extract_local_media_api(req: LocalExtractRequest):
-    """
-    从本地文件夹提取媒体信息文件。(新版逻辑)
-    """
     config = app_config.load_app_config()
     if not config.download_config.download_directory:
         raise HTTPException(status_code=400, detail="全局下载目录未配置，请先在“Emby配置”页面设置。")
@@ -661,7 +648,7 @@ async def extract_local_media_api(req: LocalExtractRequest):
         extract_local_media_task,
         task_name,
         config,
-        req  # 直接将整个请求对象传递给任务
+        req
     )
     return {"status": "success", "message": "本地提取任务已启动", "task_id": task_id}
 
@@ -807,14 +794,12 @@ def save_scheduled_tasks_config_api(config: ScheduledTasksConfig):
         current_app_config.scheduled_tasks_config = config
         app_config.save_app_config(current_app_config)
 
-        # 动态更新 APScheduler 中的任务
         if scheduler.running:
             logging.info("【调度任务】检测到配置变更，正在更新调度器...")
             for task in config.tasks:
                 job_id = f"scheduled_{task.id}"
                 existing_job = scheduler.get_job(job_id)
                 if task.enabled and task.cron:
-                    # 添加或更新任务
                     try:
                         scheduler.add_job(
                             trigger_scheduled_task,
@@ -827,7 +812,6 @@ def save_scheduled_tasks_config_api(config: ScheduledTasksConfig):
                     except Exception as e:
                         logging.error(f"  - 更新任务 '{task.name}' 失败: {e}")
                 elif existing_job:
-                    # 移除禁用的任务
                     scheduler.remove_job(job_id)
                     logging.info(f"  - 已移除禁用的任务 '{task.name}'")
 
@@ -839,19 +823,12 @@ def save_scheduled_tasks_config_api(config: ScheduledTasksConfig):
     
 @app.post("/api/scheduled-tasks/{task_id}/trigger")
 def trigger_scheduled_task_once_api(task_id: str):
-    """
-    立即触发一次指定的定时任务，使用当前保存的通用目标范围配置。
-    """
-
     logging.info(f"【API接口】收到立即执行任务的请求: {task_id}")
-    # 检查任务是否在已定义的任务列表中
     config = app_config.load_app_config()
     defined_tasks = {task.id for task in config.scheduled_tasks_config.tasks}
     if task_id not in defined_tasks:
         raise HTTPException(status_code=404, detail=f"未找到ID为 '{task_id}' 的定时任务定义。")
 
-    # 检查是否已有同类任务在运行
-    # 我们通过任务名称来判断，例如 "定时任务-演员中文化"
     task_name_map = {
         "actor_localizer": "演员中文化",
         "douban_fixer": "豆瓣ID修复器"
@@ -863,13 +840,11 @@ def trigger_scheduled_task_once_api(task_id: str):
                  raise HTTPException(status_code=409, detail=f"已有同类定时任务(ID: {task['id']})正在运行，请勿重复启动。")
 
     try:
-        # 直接调用我们为 APScheduler 准备的函数
         trigger_scheduled_task(task_id)
         return {"status": "success", "message": f"任务 '{task_id}' 已成功触发，请在“运行任务”页面查看进度。"}
     except Exception as e:
         logging.error(f"手动触发定时任务 '{task_id}' 时失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"触发任务时发生内部错误: {e}")
-# --- 结束新增 ---
 
 @app.post("/api/config/douban-poster-updater")
 def save_douban_poster_updater_config_api(config: DoubanPosterUpdaterConfig):
@@ -897,8 +872,6 @@ def save_webhook_config_api(config: WebhookConfig):
     except Exception as e:
         logging.error(f"保存 Webhook 设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
-
-# backend/main.py (修改 @app.post("/api/webhook/emby") 端点)
 
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):
