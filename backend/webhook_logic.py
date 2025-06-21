@@ -6,7 +6,7 @@ import time
 import os
 import json
 
-from models import AppConfig
+from models import AppConfig,WebhookConfig 
 from task_manager import TaskManager
 import config as app_config
 
@@ -20,8 +20,7 @@ class WebhookLogic:
     def __init__(self, config: AppConfig):
         self.config = config
         self.server_config = config.server_config
-        self.webhook_config = config.webhook_config # 假设我们在模型中会添加这个
-
+        self.webhook_config = getattr(config, 'webhook_config', WebhookConfig())
     def _get_emby_item_details(self, item_id: str):
         """一个辅助方法，用于获取 Emby 媒体项的 ProviderIds"""
         # 这个逻辑可以从其他 logic 类中借鉴，这里为了独立性重新实现
