@@ -59,6 +59,23 @@ class WebhookLogic:
             logging.error(f"【Webhook任务】为媒体项 (ID: {item_id}) 写入标记时失败: {e}", exc_info=True)
             return False
 
+    # --- 新增函数：快速检查主缓存是否存在指定豆瓣ID ---
+    def _check_cache_exists(self, douban_id: str) -> bool:
+        """
+        快速检查主缓存文件 (douban_data.json) 中是否存在指定的豆瓣ID。
+        """
+        if not os.path.exists(DOUBAN_CACHE_FILE):
+            logging.info("【Webhook-快速检查】主缓存文件不存在，无法进行检查。")
+            return False
+        try:
+            with open(DOUBAN_CACHE_FILE, 'r', encoding='utf-8') as f:
+                douban_map = json.load(f)
+            return douban_id in douban_map
+        except (IOError, json.JSONDecodeError) as e:
+            logging.error(f"【Webhook-快速检查】读取主缓存文件失败: {e}")
+            return False
+    # --- 结束新增 ---
+
     def _update_douban_cache_incrementally(self, douban_id: str, media_type: str) -> bool:
         logging.info(f"【Webhook-数据同步】开始为豆瓣ID {douban_id} 执行增量缓存更新...")
         
@@ -149,7 +166,6 @@ class WebhookLogic:
             logging.error(f"【Webhook-数据同步】处理或写入新豆瓣数据时失败: {e}", exc_info=True)
             return False
 
-    # --- 核心修改 2: 调整函数签名，移除不再需要的 task_id 和 task_manager ---
     def process_new_media_task(self, item_id: str, cancellation_event: threading.Event):
         logging.info(f"【Webhook任务】已启动，开始处理新入库媒体 (ID: {item_id})")
         
@@ -204,13 +220,25 @@ class WebhookLogic:
             return
         if cancellation_event.is_set(): return
 
+        # --- 核心逻辑修改：实现智能等待 ---
         logging.info(f"【Webhook任务】【步骤 3/6 | 同步豆瓣数据】开始...")
-        wait_time_for_plugin = self.webhook_config.plugin_wait_time
-        logging.info(f"【Webhook任务】【数据同步】等待 {wait_time_for_plugin} 秒，以便 Emby 豆瓣插件下载元数据... (可配置)")
-        time.sleep(wait_time_for_plugin)
         
-        if not self._update_douban_cache_incrementally(douban_id, item_type):
-            logging.warning(f"【Webhook任务】【数据同步】未能从本地获取到豆瓣ID {douban_id} 的元数据，后续流程可能失败或使用旧数据。")
+        logging.info(f"【Webhook-智能等待】正在快速检查豆瓣ID {douban_id} 是否已存在于主缓存中...")
+        if self._check_cache_exists(douban_id):
+            logging.info(f"【Webhook-智能等待】命中缓存！无需等待，直接进入后续流程。")
+        else:
+            logging.info(f"【Webhook-智能等待】未命中缓存，需要等待豆瓣插件下载元数据。")
+            wait_time_for_plugin = self.webhook_config.plugin_wait_time
+            logging.info(f"【Webhook-智能等待】开始等待 {wait_time_for_plugin} 秒... (此时间可在“定时任务”页面的Webhook设置中修改)")
+            time.sleep(wait_time_for_plugin)
+            
+            if cancellation_event.is_set(): return
+
+            logging.info(f"【Webhook-智能等待】等待结束，开始尝试从本地文件系统增量更新缓存。")
+            if not self._update_douban_cache_incrementally(douban_id, item_type):
+                logging.warning(f"【Webhook-智能等待】增量更新失败。未能从本地文件找到豆瓣ID {douban_id} 的元数据，后续流程可能失败或使用旧数据。")
+        # --- 结束核心修改 ---
+        
         if cancellation_event.is_set(): return
 
         logging.info(f"【Webhook任务】【步骤 4/6 | 演员中文化】开始...")
@@ -224,7 +252,6 @@ class WebhookLogic:
         logging.info(f"【Webhook任务】【步骤 5/6 | 豆瓣海报更新】开始...")
         try:
             poster_logic = DoubanPosterUpdaterLogic(self.config)
-            # --- 核心修改 3: 移除不必要的 task_id 和 task_manager 参数 ---
             poster_logic.run_poster_update_for_items([item_id], self.config.douban_poster_updater_config, cancellation_event, None, None)
         except Exception as e:
             logging.error(f"【Webhook任务】【豆瓣海报更新】步骤执行失败。错误: {e}", exc_info=True)
