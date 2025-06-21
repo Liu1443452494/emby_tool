@@ -1,57 +1,57 @@
-// frontend/src/views/ScheduledTasksView.vue (修复模板错误)
+// frontend/src/views/ScheduledTasksView.vue (完整代码)
 <template>
   <div class="scheduled-tasks-page">
-    <!-- ... (页面头部和通用配置区保持不变) ... -->
     <div class="page-header">
       <h2>定时任务</h2>
       <p>在这里统一配置自动化任务，让工具箱按计划处理新入库的媒体，无需手动干预。</p>
     </div>
-    <div class="common-scope-area">
-      <el-card class="box-card" shadow="never">
-        <template #header>
-          <div class="card-header">
-            <span>通用目标范围</span>
-            <el-tag type="warning" effect="light">所有定时任务均采用此范围</el-tag>
-          </div>
-        </template>
-        <el-form :model="localScope" label-position="top" class="scope-form">
-          <el-radio-group v-model="localScope.mode" class="scope-radio-group">
-            <el-radio value="latest">最新入库</el-radio>
-            <el-radio value="all">所有媒体库</el-radio>
-            <el-radio value="by_type">按媒体类型</el-radio>
-            <el-radio value="by_library">按媒体库</el-radio>
-          </el-radio-group>
-          <div class="sub-options">
-            <div v-if="localScope.mode === 'latest'" class="latest-options">
-              <el-form-item label="获取最近">
-                <el-input-number v-model="localScope.days" :min="1" />
-                <span class="option-unit">天内</span>
-              </el-form-item>
-              <el-form-item label="最多处理">
-                <el-input-number v-model="localScope.limit" :min="1" :max="500" />
-                <span class="option-unit">条</span>
-              </el-form-item>
-            </div>
-            <div v-if="localScope.mode === 'by_type'">
-              <el-radio-group v-model="localScope.media_type">
-                <el-radio value="Movie">仅电影</el-radio>
-                <el-radio value="Series">仅电视剧</el-radio>
-              </el-radio-group>
-            </div>
-            <div v-if="localScope.mode === 'by_library'">
-              <el-select v-model="localScope.library_ids" multiple placeholder="请选择媒体库" style="width: 100%;" filterable>
-                <el-option v-for="item in mediaStore.libraries" :key="item.id" :label="item.name" :value="item.id" />
-              </el-select>
-            </div>
-            <div v-if="localScope.mode === 'all'">
-              <el-input v-model="localScope.library_blacklist" type="textarea" :rows="2" placeholder="输入要排除的媒体库名称，用英文逗号(,)隔开" />
-            </div>
-          </div>
-        </el-form>
-      </el-card>
-    </div>
 
-    <!-- 任务区 (可滚动) -->
+    <!-- 通用目标范围配置 -->
+    <el-card class="box-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>通用目标范围</span>
+          <el-tag type="warning" effect="light">所有定时任务均采用此范围</el-tag>
+        </div>
+      </template>
+      <el-form :model="localScope" label-position="top" class="scope-form">
+        <el-radio-group v-model="localScope.mode" class="scope-radio-group">
+          <el-radio value="latest">最新入库</el-radio>
+          <el-radio value="all">所有媒体库</el-radio>
+          <el-radio value="by_type">按媒体类型</el-radio>
+          <el-radio value="by_library">按媒体库</el-radio>
+        </el-radio-group>
+
+        <div class="sub-options">
+          <div v-if="localScope.mode === 'latest'" class="latest-options">
+            <el-form-item label="获取最近">
+              <el-input-number v-model="localScope.days" :min="1" />
+              <span class="option-unit">天内</span>
+            </el-form-item>
+            <el-form-item label="最多处理">
+              <el-input-number v-model="localScope.limit" :min="1" :max="500" />
+              <span class="option-unit">条</span>
+            </el-form-item>
+          </div>
+          <div v-if="localScope.mode === 'by_type'">
+            <el-radio-group v-model="localScope.media_type">
+              <el-radio value="Movie">仅电影</el-radio>
+              <el-radio value="Series">仅电视剧</el-radio>
+            </el-radio-group>
+          </div>
+          <div v-if="localScope.mode === 'by_library'">
+            <el-select v-model="localScope.library_ids" multiple placeholder="请选择媒体库" style="width: 100%;" filterable>
+              <el-option v-for="item in mediaStore.libraries" :key="item.id" :label="item.name" :value="item.id" />
+            </el-select>
+          </div>
+          <div v-if="localScope.mode === 'all'">
+            <el-input v-model="localScope.library_blacklist" type="textarea" :rows="2" placeholder="输入要排除的媒体库名称，用英文逗号(,)隔开" />
+          </div>
+        </div>
+      </el-form>
+    </el-card>
+
+    <!-- 任务列表容器 -->
     <div class="tasks-area">
       <div class="tasks-container">
         <!-- Webhook 卡片 (独立硬编码) -->
@@ -72,8 +72,8 @@
             </div>
           </template>
           <el-form label-position="top">
-           <el-form-item label="Webhook URL (复制到 Emby)">
-             <el-input :value="webhookUrl" readonly>
+           <el-form-item label="Webhook URL (可修改)">
+             <el-input v-model="localWebhookConfig.url_override" placeholder="请输入 Emby 能访问到的本工具后端地址">
               <template #append>
                 <el-button @click="copyWebhookUrl">复制</el-button>
               </template>
@@ -82,8 +82,7 @@
               实时处理新入库媒体，无需定时。
             </div>
            </el-form-item>
-           <!-- 为了对齐，这里也放一个空的 form-item -->
-           <el-form-item class="action-button-item-placeholder"></el-form-item>
+           <div class="action-button-container" style="height: 32px;"></div>
           </el-form>
         </el-card>
 
@@ -122,7 +121,6 @@
               </div>
             </el-form-item>
             
-            <!-- 核心修复：将按钮包裹在 el-form-item 中 -->
             <el-form-item class="action-button-item">
               <el-button 
                 type="primary" 
@@ -134,16 +132,18 @@
                 立即执行一次
               </el-button>
             </el-form-item>
-            <!-- 结束核心修复 -->
           </el-form>
         </el-card>
       </div>
     </div>
 
-    <!-- ... (保存按钮和所有对话框保持不变) ... -->
+    <!-- 保存按钮 (固定在底部) -->
     <div class="save-button-container">
       <el-button type="primary" @click="handleSave" :loading="isSaving">保存所有设置</el-button>
     </div>
+
+    <!-- 所有对话框 (Dialogs) -->
+    <!-- Webhook 设置对话框 -->
     <el-dialog
       v-model="isWebhookDialogVisible"
       title="Webhook 实时处理 - 详细配置"
@@ -180,6 +180,8 @@
         <el-button @click="isWebhookDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 豆瓣海报更新器的设置对话框 -->
     <el-dialog
       v-model="isPosterDialogVisible"
       title="豆瓣海报更新 - 独立配置"
@@ -206,11 +208,11 @@
         <el-button @click="isPosterDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
   </div>
 </template>
 
 <script setup>
-// <script setup> 部分与上一个版本完全相同，无需修改
 import { ref, onMounted, watch, reactive, computed } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
@@ -262,6 +264,12 @@ function updateStateFromConfig() {
   localScope.value = _.cloneDeep(configStore.appConfig.scheduled_tasks_config.target_scope);
   localPosterConfig.value = _.cloneDeep(configStore.appConfig.douban_poster_updater_config);
   localWebhookConfig.value = _.cloneDeep(configStore.appConfig.webhook_config);
+
+  // 如果用户没有自定义 URL，则生成一个推荐值
+  if (localWebhookConfig.value && !localWebhookConfig.value.url_override) {
+    const baseUrl = window.location.origin;
+    localWebhookConfig.value.url_override = `${baseUrl}/api/webhook/emby`;
+  }
 
   const savedTasks = configStore.appConfig.scheduled_tasks_config.tasks;
   
@@ -353,14 +361,9 @@ const parseCron = (task) => {
   }
 };
 
-const webhookUrl = computed(() => {
-  const baseUrl = window.location.origin;
-  return `${baseUrl}/api/webhook/emby`;
-});
-
 const copyWebhookUrl = async () => {
   try {
-    await navigator.clipboard.writeText(webhookUrl.value);
+    await navigator.clipboard.writeText(localWebhookConfig.value.url_override);
     ElMessage.success('Webhook URL 已成功复制到剪贴板！');
   } catch (err) {
     ElMessage.error('复制失败，您的浏览器可能不支持此功能。');
@@ -565,7 +568,6 @@ const copyWebhookUrl = async () => {
   min-height: 120px;
 }
 
-/* 新增：为按钮的 form-item 设置右对齐 */
 .action-button-item {
   display: flex;
   justify-content: flex-end;
@@ -575,9 +577,8 @@ const copyWebhookUrl = async () => {
   margin-left: 0 !important;
 }
 
-/* 新增：为 webhook 卡片中的占位符 form-item 设置样式 */
 .action-button-item-placeholder {
-  margin-bottom: 0; /* 移除底部边距 */
-  height: 40px; /* 与按钮的 form-item 高度保持一致 */
+  margin-bottom: 0;
+  height: 40px;
 }
 </style>

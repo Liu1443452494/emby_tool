@@ -140,6 +140,7 @@ class ScheduledTasksConfig(BaseModel):
 class WebhookConfig(BaseModel):
     """Webhook 相关配置"""
     enabled: bool = Field(default=False, description="是否启用 Webhook 自动处理")
+    url_override: str = Field(default="", description="用户自定义的 Webhook URL，如果为空，则前端会显示一个推荐值")
     initial_wait_time: int = Field(default=30, description="收到通知后，等待 Emby 刮削的初始时间（秒）")
     plugin_wait_time: int = Field(default=60, description="ID修复后，等待豆瓣插件下载数据的时间（秒）")
 
