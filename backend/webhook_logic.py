@@ -1,4 +1,4 @@
-# backend/webhook_logic.py (最终、最健壮的完整版)
+# backend/webhook_logic.py (最终修复版)
 
 import logging
 import threading
@@ -11,7 +11,6 @@ from models import AppConfig, WebhookConfig
 from task_manager import TaskManager
 import config as app_config
 
-# 导入需要用到的逻辑类
 from douban_fixer_logic import DoubanFixerLogic
 from actor_localizer_logic import ActorLocalizerLogic
 from douban_poster_updater_logic import DoubanPosterUpdaterLogic
@@ -22,11 +21,9 @@ class WebhookLogic:
         self.config = config
         self.server_config = config.server_config
         self.webhook_config = getattr(config, 'webhook_config', WebhookConfig())
-        # --- 核心修改 1: 定义标记的键名 ---
         self.processed_flag_key = "ToolboxWebhookProcessed"
 
     def _get_emby_item_details(self, item_id: str, fields: str = "ProviderIds,Name,Type"):
-        """一个辅助方法，用于获取 Emby 媒体项的详细信息"""
         import requests
         url = f"{self.server_config.server}/Users/{self.server_config.user_id}/Items/{item_id}"
         params = {"api_key": self.server_config.api_key, "Fields": fields}
@@ -38,13 +35,10 @@ class WebhookLogic:
             logging.error(f"【Webhook】获取 Emby 媒体详情 (ID: {item_id}) 失败: {e}")
             return None
 
-    # --- 核心修改 2: 新增写入标记的辅助函数 ---
     def _set_processed_flag(self, item_id: str) -> bool:
-        """为指定的媒体项写入处理完成的标记。"""
         logging.info(f"【Webhook任务】正在为媒体项 (ID: {item_id}) 写入处理完成标记...")
         try:
             import requests
-            # 再次获取最新的 item details，以防中途有变动
             item_details = self._get_emby_item_details(item_id, fields="ProviderIds")
             if not item_details:
                 logging.error(f"【Webhook任务】写入标记前获取媒体详情失败，无法写入标记。")
@@ -65,8 +59,8 @@ class WebhookLogic:
             logging.error(f"【Webhook任务】为媒体项 (ID: {item_id}) 写入标记时失败: {e}", exc_info=True)
             return False
 
+    # --- 核心修改：在这里确保 countries 字段被写入 ---
     def _update_douban_cache_incrementally(self, douban_id: str, media_type: str) -> bool:
-        """增量更新豆瓣缓存文件。"""
         logging.info(f"【Webhook-数据同步】开始为豆瓣ID {douban_id} 执行增量缓存更新...")
         
         try:
@@ -106,7 +100,7 @@ class WebhookLogic:
         json_path = os.path.join(found_folder, json_filename)
 
         if not os.path.isfile(json_path):
-            logging.error(f"【Webhook-数据同步】在目录 {found_folder} 中未找到元数据文件 {json_filename}。")
+            logging.error(f"【Webhook-数据同步】在目录【{found_folder}】中未找到元数据文件 {json_filename}。")
             return False
 
         try:
@@ -128,11 +122,17 @@ class WebhookLogic:
                         'avatar': actor.get('avatar', {})
                     } for actor in new_data.get('actors', [])
                 ],
-                'imdb_id': _parse_folder_name(os.path.basename(found_folder))[1]
+                'imdb_id': _parse_folder_name(os.path.basename(found_folder))[1],
+                # --- 在这里强制添加 countries 字段 ---
+                'countries': new_data.get('countries', [])
             }
+            
             extra_fields = self.config.douban_config.extra_fields
             if 'rating' in extra_fields: item_data['rating'] = new_data.get('rating', {}).get('value')
             if 'pubdate' in extra_fields: item_data['pubdate'] = new_data.get('pubdate', [])
+            if 'card_subtitle' in extra_fields: item_data['card_subtitle'] = new_data.get('card_subtitle', '')
+            if 'languages' in extra_fields: item_data['languages'] = new_data.get('languages', [])
+            if 'durations' in extra_fields and media_type == 'Movie': item_data['durations'] = new_data.get('durations', [])
 
             douban_map[douban_id] = item_data
             with open(DOUBAN_CACHE_FILE, 'w', encoding='utf-8') as f:
@@ -145,15 +145,9 @@ class WebhookLogic:
             logging.error(f"【Webhook-数据同步】处理或写入新豆瓣数据时失败: {e}", exc_info=True)
             return False
 
-    # --- 核心修改 3: 重构整个任务处理函数 ---
     def process_new_media_task(self, item_id: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-        """
-        由 Webhook 触发的，对单个新媒体项进行自动化处理的任务链。
-        (V2版，带持久化标记，防止重复处理)
-        """
         logging.info(f"【Webhook任务】已启动，开始处理新入库媒体 (ID: {item_id})")
         
-        # --- 步骤 0: 检查是否已处理过 ---
         logging.info(f"【Webhook任务】【步骤 0/6 | 检查标记】正在检查媒体项是否已被处理过...")
         item_details = self._get_emby_item_details(item_id)
         if not item_details:
@@ -161,25 +155,22 @@ class WebhookLogic:
             return
 
         item_name = item_details.get("Name", f"Item {item_id}")
-        task_manager.tasks[task_id]['name'] = f"Webhook-自动处理-{item_name}" # 尽早更新任务名
+        task_manager.tasks[task_id]['name'] = f"Webhook-自动处理-【{item_name}】"
         
         provider_ids = item_details.get("ProviderIds", {})
         if self.processed_flag_key in provider_ids:
             processed_time = provider_ids[self.processed_flag_key]
-            logging.info(f"【Webhook任务】检测到媒体 [{item_name}] 已于 {processed_time} 被处理过，本次任务跳过。")
+            logging.info(f"【Webhook任务】检测到媒体【{item_name}】已于 {processed_time} 被处理过，本次任务跳过。")
             return
 
-        logging.info(f"【Webhook任务】媒体 [{item_name}] 是首次处理，继续执行自动化流程。")
+        logging.info(f"【Webhook任务】媒体【{item_name}】是首次处理，继续执行自动化流程。")
 
-        # --- 步骤 1: 初始等待 ---
         wait_time = self.webhook_config.initial_wait_time
         logging.info(f"【Webhook任务】【步骤 1/6 | 初始等待】等待 {wait_time} 秒，以便 Emby 自动刮削... (可配置)")
         time.sleep(wait_time)
         if cancellation_event.is_set(): return
 
-        # --- 步骤 2: 获取豆瓣ID ---
         logging.info(f"【Webhook任务】【步骤 2/6 | 获取豆瓣ID】开始...")
-        # 重新获取一次详情，以防初始等待期间信息有变
         item_details = self._get_emby_item_details(item_id)
         if not item_details:
             logging.error(f"【Webhook任务】等待后无法再次获取媒体 {item_id} 的详细信息，任务中止。")
@@ -190,9 +181,9 @@ class WebhookLogic:
         douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
 
         if douban_id:
-            logging.info(f"【Webhook任务】【豆瓣ID修复】媒体 [{item_name}] 已有关联的豆瓣ID: {douban_id}，跳过ID修复步骤。")
+            logging.info(f"【Webhook任务】【豆瓣ID修复】媒体【{item_name}】已有关联的豆瓣ID: {douban_id}，跳过ID修复步骤。")
         else:
-            logging.info(f"【Webhook任务】【豆瓣ID修复】媒体 [{item_name}] 缺少豆瓣ID，开始执行ID修复...")
+            logging.info(f"【Webhook任务】【豆瓣ID修复】媒体【{item_name}】缺少豆瓣ID，开始执行ID修复...")
             fixer_logic = DoubanFixerLogic(self.config)
             if fixer_logic._process_single_item_for_fixing(item_id):
                 refreshed_details = self._get_emby_item_details(item_id)
@@ -209,7 +200,6 @@ class WebhookLogic:
             return
         if cancellation_event.is_set(): return
 
-        # --- 步骤 3: 同步豆瓣数据 ---
         logging.info(f"【Webhook任务】【步骤 3/6 | 同步豆瓣数据】开始...")
         wait_time_for_plugin = self.webhook_config.plugin_wait_time
         logging.info(f"【Webhook任务】【数据同步】等待 {wait_time_for_plugin} 秒，以便 Emby 豆瓣插件下载元数据... (可配置)")
@@ -219,7 +209,6 @@ class WebhookLogic:
             logging.warning(f"【Webhook任务】【数据同步】未能从本地获取到豆瓣ID {douban_id} 的元数据，后续流程可能失败或使用旧数据。")
         if cancellation_event.is_set(): return
 
-        # --- 步骤 4: 演员中文化 ---
         logging.info(f"【Webhook任务】【步骤 4/6 | 演员中文化】开始...")
         try:
             localizer_logic = ActorLocalizerLogic(self.config)
@@ -228,7 +217,6 @@ class WebhookLogic:
             logging.error(f"【Webhook任务】【演员中文化】步骤执行失败，但将继续后续任务。错误: {e}", exc_info=True)
         if cancellation_event.is_set(): return
 
-        # --- 步骤 5: 豆瓣海报更新 ---
         logging.info(f"【Webhook任务】【步骤 5/6 | 豆瓣海报更新】开始...")
         try:
             poster_logic = DoubanPosterUpdaterLogic(self.config)
@@ -237,9 +225,8 @@ class WebhookLogic:
             logging.error(f"【Webhook任务】【豆瓣海报更新】步骤执行失败。错误: {e}", exc_info=True)
         if cancellation_event.is_set(): return
         
-        # --- 步骤 6: 写入完成标记 ---
         logging.info(f"【Webhook任务】【步骤 6/6 | 写入标记】所有自动化步骤执行完毕，开始写入完成标记...")
         if self._set_processed_flag(item_id):
-            logging.info(f"【Webhook任务】媒体 [{item_name}] 的首次自动化处理流程已全部执行完毕并成功标记。")
+            logging.info(f"【Webhook任务】媒体【{item_name}】的首次自动化处理流程已全部执行完毕并成功标记。")
         else:
-            logging.warning(f"【Webhook任务】媒体 [{item_name}] 的自动化流程已执行，但写入完成标记失败。下次可能会重复执行。")
+            logging.warning(f"【Webhook任务】媒体【{item_name}】的自动化流程已执行，但写入完成标记失败。下次可能会重复执行。")
