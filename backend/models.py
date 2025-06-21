@@ -318,4 +318,4 @@ class EmbyWebhookItem(BaseModel):
 class EmbyWebhookPayload(BaseModel):
     Event: str # "item.add"
     User: Dict[str, Any]
-    Item: EmbyWebhookItem
+    Item: Optional[EmbyWebhookItem] = None

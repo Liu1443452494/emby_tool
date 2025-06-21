@@ -898,7 +898,8 @@ def save_webhook_config_api(config: WebhookConfig):
         logging.error(f"保存 Webhook 设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
 
-# 4. 在文件末尾附近，添加新的 Webhook 接收端点
+# backend/main.py (修改 @app.post("/api/webhook/emby") 端点)
+
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     """
@@ -907,19 +908,24 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     logging.info(f"【Webhook】收到来自 Emby 的通知，事件: {payload.Event}")
     
     config = app_config.load_app_config()
-    # 检查 Webhook 功能是否已在配置中启用
     if not config.webhook_config.enabled:
         logging.info("【Webhook】Webhook 功能未启用，跳过处理。")
         return {"status": "skipped", "message": "Webhook processing is disabled."}
 
-    # 我们只关心新媒体添加事件，且类型为电影或剧集
+    # --- 核心修改：增加对 payload.Item 的检查 ---
+    if not payload.Item:
+        # 这很可能是测试通知，或者是一个我们不关心的事件类型
+        logging.info("【Webhook】收到的通知中不包含有效的 Item 信息，可能是测试通知或无关事件，已成功接收并跳过。")
+        # 对于测试通知，返回成功状态码是关键
+        return {"status": "success_test_skipped", "message": "Test notification received successfully."}
+    # --- 结束修改 ---
+
     if payload.Event == "item.add" and payload.Item.Type in ["Movie", "Series"]:
         item = payload.Item
         logging.info(f"【Webhook】检测到新媒体入库: [{item.Name}] (ID: {item.Id})")
         
         logic = WebhookLogic(config)
         
-        # 注册一个后台任务来处理这个新媒体
         task_name = f"Webhook-自动处理-{item.Name}"
         task_manager.register_task(
             logic.process_new_media_task,
