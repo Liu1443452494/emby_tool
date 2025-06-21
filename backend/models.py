@@ -137,6 +137,12 @@ class ScheduledTasksConfig(BaseModel):
         ScheduledTaskItem(id="douban_poster_updater", name="豆瓣海报更新")
     ])
 
+class WebhookConfig(BaseModel):
+    """Webhook 相关配置"""
+    enabled: bool = Field(default=False, description="是否启用 Webhook 自动处理")
+    initial_wait_time: int = Field(default=30, description="收到通知后，等待 Emby 刮削的初始时间（秒）")
+    plugin_wait_time: int = Field(default=60, description="ID修复后，等待豆瓣插件下载数据的时间（秒）")
+
 class AppConfig(BaseModel):
     """应用的主配置模型，聚合所有子配置"""
     server_config: ServerConfig = Field(default_factory=ServerConfig)
@@ -150,6 +156,7 @@ class AppConfig(BaseModel):
     douban_fixer_config: DoubanFixerConfig = Field(default_factory=DoubanFixerConfig)
     scheduled_tasks_config: ScheduledTasksConfig = Field(default_factory=ScheduledTasksConfig)
     douban_poster_updater_config: DoubanPosterUpdaterConfig = Field(default_factory=DoubanPosterUpdaterConfig)
+    webhook_config: WebhookConfig = Field(default_factory=WebhookConfig)
 
 # --- (其他模型保持不变) ---
 class TargetScope(BaseModel):
@@ -299,3 +306,15 @@ class LocalExtractRequest(BaseModel):
     extensions: List[str] = Field(default_factory=list)
     # 要匹配的特定文件名（不含后缀），例如 ["poster", "fanart", "logo"]
     filenames: List[str] = Field(default_factory=list)
+
+# backend/models.py (在文件末尾追加)
+
+class EmbyWebhookItem(BaseModel):
+    Name: str
+    Id: str
+    Type: str # "Movie", "Series", "Episode" etc.
+
+class EmbyWebhookPayload(BaseModel):
+    Event: str # "item.add"
+    User: Dict[str, Any]
+    Item: EmbyWebhookItem

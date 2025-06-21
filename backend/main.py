@@ -24,13 +24,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+
 from models import (
     ServerConfig, DownloadConfig, AppConfig, MediaSearchQuery, 
     DownloadRequest, BatchDownloadRequest, DoubanConfig, DoubanCacheStatus,
     ActorLocalizerConfig, ActorLocalizerPreviewRequest, ActorLocalizerApplyRequest,
     TencentApiConfig, SiliconflowApiConfig,
     TmdbConfig, ProxyConfig,
-    DoubanFixerConfig
+    DoubanFixerConfig,
+    LocalExtractRequest, # 确保 LocalExtractRequest 也在这里
+    EmbyWebhookPayload,  # 确保 EmbyWebhookPayload 在这里
+    WebhookConfig        # --- 在这里添加 WebhookConfig ---
+
 )
 import config as app_config
 from emby_downloader import EmbyDownloader, batch_download_task
@@ -42,6 +47,7 @@ from actor_localizer_logic import ActorLocalizerLogic
 from actor_gallery_router import router as actor_gallery_router
 from douban_fixer_logic import DoubanFixerLogic
 from douban_fixer_router import router as douban_fixer_router
+from webhook_logic import WebhookLogic
 
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
@@ -877,3 +883,51 @@ def save_douban_poster_updater_config_api(config: DoubanPosterUpdaterConfig):
     except Exception as e:
         logging.error(f"保存豆瓣海报更新器设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+    
+
+@app.post("/api/config/webhook")
+def save_webhook_config_api(config: WebhookConfig):
+    try:
+        logging.info("正在保存 Webhook 设置...")
+        current_app_config = app_config.load_app_config()
+        current_app_config.webhook_config = config
+        app_config.save_app_config(current_app_config)
+        logging.info("Webhook 设置保存成功！")
+        return {"success": True, "message": "设置已保存！"}
+    except Exception as e:
+        logging.error(f"保存 Webhook 设置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+
+# 4. 在文件末尾附近，添加新的 Webhook 接收端点
+@app.post("/api/webhook/emby")
+async def emby_webhook_receiver(payload: EmbyWebhookPayload):
+    """
+    接收来自 Emby 的 Webhook 通知。
+    """
+    logging.info(f"【Webhook】收到来自 Emby 的通知，事件: {payload.Event}")
+    
+    config = app_config.load_app_config()
+    # 检查 Webhook 功能是否已在配置中启用
+    if not config.webhook_config.enabled:
+        logging.info("【Webhook】Webhook 功能未启用，跳过处理。")
+        return {"status": "skipped", "message": "Webhook processing is disabled."}
+
+    # 我们只关心新媒体添加事件，且类型为电影或剧集
+    if payload.Event == "item.add" and payload.Item.Type in ["Movie", "Series"]:
+        item = payload.Item
+        logging.info(f"【Webhook】检测到新媒体入库: [{item.Name}] (ID: {item.Id})")
+        
+        logic = WebhookLogic(config)
+        
+        # 注册一个后台任务来处理这个新媒体
+        task_name = f"Webhook-自动处理-{item.Name}"
+        task_manager.register_task(
+            logic.process_new_media_task,
+            task_name,
+            item_id=item.Id
+        )
+        
+        return {"status": "success", "message": f"Task registered for item {item.Id}"}
+    
+    logging.info(f"【Webhook】事件 '{payload.Event}' 或类型 '{payload.Item.Type}' 无需处理，已跳过。")
+    return {"status": "skipped", "message": "Event not applicable"}

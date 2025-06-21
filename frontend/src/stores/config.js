@@ -39,6 +39,11 @@ export const useConfigStore = defineStore('config', () => {
       update_interval: 1.0,
       overwrite_existing: false,
       skip_mainland_china: false
+    },
+    webhook_config: {
+      enabled: false,
+      initial_wait_time: 30,
+      plugin_wait_time: 60
     }
     // --- 结束新增 ---
   })
@@ -81,6 +86,10 @@ export const useConfigStore = defineStore('config', () => {
           fullConfig.douban_poster_updater_config = { update_interval: 1.0, overwrite_existing: false, skip_mainland_china: false };
         } else if (typeof fullConfig.douban_poster_updater_config.skip_mainland_china === 'undefined') {
           fullConfig.douban_poster_updater_config.skip_mainland_china = false;
+        }
+
+        if (!fullConfig.webhook_config) {
+          fullConfig.webhook_config = { enabled: false, initial_wait_time: 30, plugin_wait_time: 60 };
         }
         // --- 结束新增 ---
         appConfig.value = fullConfig
@@ -263,6 +272,23 @@ export const useConfigStore = defineStore('config', () => {
       return { success: false, message: error.message };
     }
   }
+
+  async function saveWebhookConfig(newConfig) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/config/webhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '未知错误');
+      
+      appConfig.value.webhook_config = newConfig;
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
   // --- 结束新增 ---
 
   return { 
@@ -280,6 +306,7 @@ export const useConfigStore = defineStore('config', () => {
     saveScheduledTasksConfig,
     triggerScheduledTaskOnce,
     // --- 新增：导出新方法 ---
-    saveDoubanPosterUpdaterConfig
+    saveDoubanPosterUpdaterConfig,
+    saveWebhookConfig
   }
 })

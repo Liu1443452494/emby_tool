@@ -100,6 +100,9 @@ def load_app_config() -> AppConfig:
     if "douban_poster_updater_config" not in config_data:
         config_data["douban_poster_updater_config"] = {}
 
+    if "webhook_config" not in config_data:
+        config_data["webhook_config"] = {}
+
     if "subtitle_processor_config" in config_data:
         del config_data["subtitle_processor_config"]
 
