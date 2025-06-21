@@ -1,4 +1,4 @@
-# backend/actor_localizer_logic.py (完整修改版)
+# backend/actor_localizer_logic.py (修改后)
 
 import logging
 import threading
@@ -144,10 +144,8 @@ class ActorLocalizerLogic:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # 只有在重试时（attempt > 0）才会 sleep
                 if attempt > 0:
                     logging.warning(f"【翻译】第 {attempt + 1}/{max_retries} 次重试翻译: '{text}'")
-                    # 注意：这里的冷却只针对重试，主冷却逻辑已移出
                     if config.api_cooldown_enabled and config.api_cooldown_time > 0:
                         time.sleep(config.api_cooldown_time)
 
@@ -177,6 +175,7 @@ class ActorLocalizerLogic:
 
         return text
 
+    # --- 核心修改：在这个函数里增加日志 ---
     def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig) -> bool:
         details = self._get_item_details(item_id)
         if not details: return False
@@ -213,8 +212,13 @@ class ActorLocalizerLogic:
             if emby_actor_name in douban_standard_roles:
                 new_role = douban_standard_roles[emby_actor_name]
                 source = "豆瓣"
+                # --- 新增日志 ---
                 logging.info(f"     -- 更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自{source})")
+                # --- 结束新增 ---
             elif config.translation_enabled:
+                if config.api_cooldown_enabled and config.api_cooldown_time > 0:
+                    time.sleep(config.api_cooldown_time)
+                translated_role = self._translate_text(original_role, config, context_title=item_name)
                 if translated_role and translated_role != original_role:
                     new_role = translated_role
                     source = "翻译"
@@ -241,6 +245,7 @@ class ActorLocalizerLogic:
             logging.error(f"     -- 应用更新到 Emby 失败。")
         
         return False
+    # --- 结束修改 ---
 
     def run_localization_for_items(self, item_ids: Iterable[str], config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         if not self.douban_map:
@@ -438,7 +443,6 @@ class ActorLocalizerLogic:
                 for actor_info in actors_to_process_further:
                     if cancellation_event.is_set(): break
                     
-                    # --- 核心修改：将冷却逻辑放在这里 ---
                     if config.api_cooldown_enabled and config.api_cooldown_time > 0:
                         time.sleep(config.api_cooldown_time)
                     
@@ -565,7 +569,6 @@ class ActorLocalizerLogic:
                     new_role = douban_standard_roles[emby_actor_name]
                     source = "豆瓣"
                 elif config.translation_enabled:
-                    # --- 核心修改：将冷却逻辑放在这里 ---
                     if config.api_cooldown_enabled and config.api_cooldown_time > 0:
                         time.sleep(config.api_cooldown_time)
                     translated_role = self._translate_text(original_role, config, context_title=item_name)
