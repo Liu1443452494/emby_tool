@@ -1,4 +1,4 @@
-# backend/models.py (再次确认的完整正确版)
+# backend/models.py (请使用这个最终正确版)
 
 from pydantic import BaseModel, Field
 from typing import Literal, List, Optional, Dict, Any
@@ -70,8 +70,8 @@ class SiliconflowApiConfig(BaseModel):
     temperature: float = Field(
         default=0.0, 
         description="温度，控制生成文本的随机性。0.0 表示最确定性的输出。",
-        ge=0.0, # 大于等于 0
-        le=2.0  # 小于等于 2
+        ge=0.0,
+        le=2.0
     )
     top_p: float = Field(
         default=1.0,
@@ -82,8 +82,8 @@ class SiliconflowApiConfig(BaseModel):
     timeout: int = Field(
         default=20,
         description="API 请求超时时间（秒）。",
-        ge=5,  # 最小5秒
-        le=120 # 最大120秒
+        ge=5,
+        le=120
     )
 
 class ActorLocalizerConfig(BaseModel):
@@ -130,7 +130,6 @@ class ScheduledTasksTargetScope(BaseModel):
 class ScheduledTasksConfig(BaseModel):
     """定时任务总配置"""
     target_scope: ScheduledTasksTargetScope = Field(default_factory=ScheduledTasksTargetScope)
-    # --- 核心修改：确保这里包含所有三个任务 ---
     tasks: List[ScheduledTaskItem] = Field(default_factory=lambda: [
         ScheduledTaskItem(id="actor_localizer", name="演员中文化"),
         ScheduledTaskItem(id="douban_fixer", name="豆瓣ID修复器"),
@@ -159,7 +158,6 @@ class AppConfig(BaseModel):
     douban_poster_updater_config: DoubanPosterUpdaterConfig = Field(default_factory=DoubanPosterUpdaterConfig)
     webhook_config: WebhookConfig = Field(default_factory=WebhookConfig)
 
-# --- (其他模型保持不变) ---
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]
     media_type: Optional[Literal["Movie", "Series"]] = None
@@ -298,26 +296,20 @@ class CombinedAvatarResponse(BaseModel):
     intervention_details: Optional[Any] = None
     warnings: List[str] = Field(default_factory=list)
 
-    # backend/models.py (在文件末尾追加)
-
 class LocalExtractRequest(BaseModel):
     """本地提取请求模型 (新版)"""
     source_path: str
-    # 要匹配的文件后缀名列表，例如 [".nfo", ".strm"]
     extensions: List[str] = Field(default_factory=list)
-    # 要匹配的特定文件名（不含后缀），例如 ["poster", "fanart", "logo"]
     filenames: List[str] = Field(default_factory=list)
-
-# backend/models.py (在文件末尾追加)
 
 class EmbyWebhookItem(BaseModel):
     Name: str
     Id: str
-    Type: str # "Movie", "Series", "Episode" etc.
+    Type: str
 
 class EmbyWebhookPayload(BaseModel):
-    Event: str # "item.add"
-    User: Dict[str, Any]
+    Event: str
+    User: Optional[Dict[str, Any]] = None
     Item: Optional[EmbyWebhookItem] = None
 
     class Config:
