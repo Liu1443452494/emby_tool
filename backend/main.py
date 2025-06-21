@@ -1,4 +1,4 @@
-# backend/main.py (修改后)
+# backend/main.py (最终、最健壮的完整版)
 
 import sys
 import os
@@ -52,6 +52,8 @@ from webhook_logic import WebhookLogic
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
+# --- 移除旧的去重缓存 ---
+
 def trigger_douban_refresh():
     logging.info("【调度任务】开始执行豆瓣数据强制刷新...")
     config = app_config.load_app_config()
@@ -82,12 +84,10 @@ def trigger_actor_localizer_apply():
     task_manager.register_task(logic.apply_actor_changes_directly_task, "演员中文化-定时自动应用", config.actor_localizer_config)
 
 def trigger_scheduled_task(task_id: str):
-    """由 APScheduler 调度的通用任务触发器"""
     logging.info(f"【调度任务】开始执行定时任务: {task_id}")
     
     config = app_config.load_app_config()
     
-    # 1. 获取通用目标范围
     scope = config.scheduled_tasks_config.target_scope
     selector = MediaSelector(config)
     item_ids = selector.get_item_ids(scope)
@@ -96,7 +96,6 @@ def trigger_scheduled_task(task_id: str):
         logging.info(f"【调度任务-{task_id}】未根据范围找到任何媒体项，任务结束。")
         return
 
-    # 2. 根据 task_id 执行不同逻辑
     if task_id == "actor_localizer":
         logic = ActorLocalizerLogic(config)
         task_name = f"定时任务-演员中文化({scope.mode})"
@@ -485,10 +484,6 @@ LOG_FILE = os.path.join('/app/data', "app.log")
 
 @app.get("/api/logs")
 def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1)):
-    """
-    分页获取历史日志。
-    日志是倒序返回的，最新的在最前面。
-    """
     if not os.path.exists(LOG_FILE):
         return {"total": 0, "logs": []}
     
@@ -513,9 +508,6 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1)):
 
 @app.delete("/api/logs")
 def clear_logs_api():
-    """
-    清空 app.log 文件的内容。
-    """
     try:
         with open(LOG_FILE, "w", encoding="utf-8") as f:
             f.write("")
@@ -873,21 +865,13 @@ def save_webhook_config_api(config: WebhookConfig):
         logging.error(f"保存 Webhook 设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
 
-# backend/main.py (请使用这个最终调试版函数替换)
-
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):
-    """
-    接收来自 Emby 的 Webhook 通知。
-    """
-    # --- 新增调试日志 ---
     try:
-        # 使用 Pydantic 的 model_dump_json 方法可以优雅地处理 Optional 字段
         payload_json_str = payload.model_dump_json(indent=4, exclude_unset=True)
         logging.info(f"【Webhook调试】收到来自 Emby 的完整 Payload 内容:\n{payload_json_str}")
     except Exception as e:
         logging.error(f"【Webhook调试】打印 Payload 时发生错误: {e}")
-    # --- 结束新增 ---
 
     logging.info(f"【Webhook】收到来自 Emby 的通知，事件: {payload.Event}")
     
@@ -900,20 +884,46 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
         logging.info("【Webhook】收到的通知中不包含有效的 Item 信息，可能是测试通知或无关事件，已成功接收并跳过。")
         return {"status": "success_test_skipped", "message": "Test notification received successfully."}
 
-    if payload.Event in ["item.add", "library.new"] and payload.Item.Type in ["Movie", "Series"]:
-        item = payload.Item
-        logging.info(f"【Webhook】检测到新媒体入库: [{item.Name}] (ID: {item.Id})，事件类型: {payload.Event}")
+    target_item_id = None
+    target_item_name = payload.Item.Name
+
+    if payload.Event in ["item.add", "library.new"]:
+        if payload.Item.Type in ["Movie", "Series"]:
+            target_item_id = payload.Item.Id
+            logging.info(f"【Webhook】检测到新 [电影/剧集] 入库: [{target_item_name}] (ID: {target_item_id})，事件类型: {payload.Event}")
         
+        elif payload.Item.Type == "Episode":
+            episode_id = payload.Item.Id
+            logging.info(f"【Webhook】检测到新 [剧集分集] 入库: [{target_item_name}] (ID: {episode_id})，正在查找其所属剧集...")
+            
+            try:
+                server_conf = config.server_config
+                url = f"{server_conf.server}/Users/{server_conf.user_id}/Items/{episode_id}"
+                params = {"api_key": server_conf.api_key, "Fields": "SeriesId,SeriesName"}
+                response = requests.get(url, params=params, timeout=15)
+                response.raise_for_status()
+                episode_details = response.json()
+                
+                target_item_id = episode_details.get("SeriesId")
+                if target_item_id:
+                    target_item_name = episode_details.get("SeriesName", f"Series {target_item_id}")
+                    logging.info(f"【Webhook】成功找到所属剧集: [{target_item_name}] (ID: {target_item_id})")
+                else:
+                    logging.warning(f"【Webhook】无法从剧集 [{target_item_name}] 中找到所属剧集的ID，跳过处理。")
+
+            except requests.RequestException as e:
+                logging.error(f"【Webhook】查询剧集详情失败: {e}，跳过处理。")
+        
+    if target_item_id:
+        # 启动任务
         logic = WebhookLogic(config)
-        
-        task_name = f"Webhook-自动处理-{item.Name}"
+        task_name = f"Webhook-自动处理-{target_item_name}"
         task_manager.register_task(
             logic.process_new_media_task,
             task_name,
-            item_id=item.Id
+            item_id=target_item_id
         )
-        
-        return {"status": "success", "message": f"Task registered for item {item.Id}"}
+        return {"status": "success", "message": f"Task registered for item {target_item_id}"}
     
     logging.info(f"【Webhook】事件 '{payload.Event}' 或类型 '{payload.Item.Type}' 无需处理，已跳过。")
     return {"status": "skipped", "message": "Event not applicable"}
