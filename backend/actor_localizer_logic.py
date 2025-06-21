@@ -213,24 +213,22 @@ class ActorLocalizerLogic:
             if emby_actor_name in douban_standard_roles:
                 new_role = douban_standard_roles[emby_actor_name]
                 source = "豆瓣"
+                logging.info(f"     -- 更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自{source})")
             elif config.translation_enabled:
-                # --- 核心修改：将冷却逻辑放在这里 ---
-                if config.api_cooldown_enabled and config.api_cooldown_time > 0:
-                    time.sleep(config.api_cooldown_time)
-                translated_role = self._translate_text(original_role, config, context_title=item_name)
                 if translated_role and translated_role != original_role:
                     new_role = translated_role
                     source = "翻译"
+                    logging.info(f"     -- 更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自{source})")
             elif config.replace_english_role and self._is_pure_english(original_role):
                 new_role = "演员"
                 source = "替换"
+                logging.info(f"     -- 更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自{source})")
             
             if new_role:
                 has_changes = True
                 for person in new_people_list:
                     if person.get('Name') == emby_actor_name:
                         person['Role'] = new_role
-                        logging.info(f"     -- 更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自{source})")
                         break
         
         if has_changes:

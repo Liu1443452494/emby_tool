@@ -1,4 +1,4 @@
-// frontend/src/views/LogView.vue (新文件)
+// frontend/src/views/LogView.vue (修改后)
 <template>
   <div class="log-page">
     <div class="page-header">
@@ -7,22 +7,18 @@
     </div>
 
     <div class="log-toolbar">
-      <div class="pagination-controls">
-        <el-button 
-          @click="changePage(logStore.currentPage - 1)" 
-          :disabled="logStore.currentPage <= 1"
-        >
-          上一页
-        </el-button>
-        <span>第 {{ logStore.currentPage }} / {{ logStore.totalPages }} 页 (共 {{ logStore.totalLogs }} 条)</span>
-        <el-button 
-          @click="changePage(logStore.currentPage + 1)" 
-          :disabled="logStore.currentPage >= logStore.totalPages"
-        >
-          下一页
-        </el-button>
-      </div>
-      <el-button type="danger" @click="logStore.clearLogs">清空日志</el-button>
+      <!-- 核心修改：使用 el-pagination 组件 -->
+      <el-pagination
+        v-model:current-page="logStore.currentPage"
+        :page-size="100"
+        :total="logStore.totalLogs"
+        layout="total, prev, pager, next, jumper"
+        background
+        @current-change="handlePageChange"
+        :disabled="logStore.totalLogs === 0"
+      />
+      <!-- 结束修改 -->
+      <el-button type="danger" @click="logStore.clearLogs" :disabled="logStore.totalLogs === 0">清空日志</el-button>
     </div>
 
     <div class="log-container">
@@ -49,10 +45,9 @@ onUnmounted(() => {
   logStore.disconnect(); // 离开页面时断开连接
 });
 
-const changePage = (page) => {
-  if (page > 0 && page <= logStore.totalPages) {
-    logStore.fetchHistoricalLogs(page);
-  }
+// 核心修改：定义新的页码改变处理函数
+const handlePageChange = (page) => {
+  logStore.fetchHistoricalLogs(page);
 };
 </script>
 
@@ -80,11 +75,7 @@ const changePage = (page) => {
   flex-shrink: 0;
 }
 
-.pagination-controls {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-}
+/* 核心修改：移除旧的 pagination-controls 样式 */
 
 .log-container {
   flex-grow: 1;
@@ -106,5 +97,10 @@ const changePage = (page) => {
 
 .log-line {
   line-height: 1.6;
+}
+
+/* 核心修改：为 el-pagination 添加主题色 */
+.log-page :deep(.el-pagination.is-background .el-pager li.is-active) {
+  background-color: #609e95;
 }
 </style>
