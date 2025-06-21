@@ -1,4 +1,4 @@
-# backend/webhook_logic.py (最终修复版)
+# backend/webhook_logic.py (最终版，配合新 main.py 使用)
 
 import logging
 import threading
@@ -59,93 +59,98 @@ class WebhookLogic:
             logging.error(f"【Webhook任务】为媒体项 (ID: {item_id}) 写入标记时失败: {e}", exc_info=True)
             return False
 
-    # --- 核心修改：在这里确保 countries 字段被写入 ---
     def _update_douban_cache_incrementally(self, douban_id: str, media_type: str) -> bool:
         logging.info(f"【Webhook-数据同步】开始为豆瓣ID {douban_id} 执行增量缓存更新...")
         
         try:
-            with open(DOUBAN_CACHE_FILE, 'r', encoding='utf-8') as f:
-                douban_map = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            douban_map = {}
+            # --- 增加文件锁，防止并发读写问题 ---
+            from filelock import FileLock, Timeout
+            lock_path = DOUBAN_CACHE_FILE + ".lock"
+            lock = FileLock(lock_path, timeout=10)
+            with lock:
+                if os.path.exists(DOUBAN_CACHE_FILE):
+                    with open(DOUBAN_CACHE_FILE, 'r', encoding='utf-8') as f:
+                        douban_map = json.load(f)
+                else:
+                    douban_map = {}
+                
+                if douban_id in douban_map:
+                    logging.info(f"【Webhook-数据同步】豆瓣ID {douban_id} 的数据已存在于缓存中，跳过文件更新。")
+                    return True
 
-        if douban_id in douban_map:
-            logging.info(f"【Webhook-数据同步】豆瓣ID {douban_id} 的数据已存在于缓存中，跳过文件更新。")
-            return True
+                douban_data_root = self.config.douban_config.directory
+                if not douban_data_root or not os.path.isdir(douban_data_root):
+                    logging.error("【Webhook-数据同步】豆瓣数据根目录未配置或无效，无法进行增量更新。")
+                    return False
 
-        douban_data_root = self.config.douban_config.directory
-        if not douban_data_root or not os.path.isdir(douban_data_root):
-            logging.error("【Webhook-数据同步】豆瓣数据根目录未配置或无效，无法进行增量更新。")
+                sub_dir = 'douban-movies' if media_type == 'Movie' else 'douban-tv'
+                target_dir = os.path.join(douban_data_root, sub_dir)
+
+                if not os.path.isdir(target_dir):
+                    logging.error(f"【Webhook-数据同步】找不到豆瓣数据子目录: {target_dir}")
+                    return False
+
+                found_folder = None
+                for folder_name in os.listdir(target_dir):
+                    parsed_db_id, _ = _parse_folder_name(folder_name)
+                    if parsed_db_id == douban_id:
+                        found_folder = os.path.join(target_dir, folder_name)
+                        break
+                
+                if not found_folder:
+                    logging.error(f"【Webhook-数据同步】在 {target_dir} 中未找到与豆瓣ID {douban_id} 匹配的文件夹。")
+                    return False
+
+                json_filename = 'all.json' if media_type == 'Movie' else 'series.json'
+                json_path = os.path.join(found_folder, json_filename)
+
+                if not os.path.isfile(json_path):
+                    logging.error(f"【Webhook-数据同步】在目录【{found_folder}】中未找到元数据文件 {json_filename}。")
+                    return False
+
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    new_data = json.load(f)
+                
+                item_data = {
+                    'type': media_type,
+                    'title': new_data.get('title', 'N/A'),
+                    'year': new_data.get('year', ''),
+                    'genres': new_data.get('genres', []),
+                    'intro': new_data.get('intro', ''),
+                    'pic': new_data.get('pic', {}),
+                    'actors': [
+                        {
+                            'id': actor.get('id'),
+                            'name': actor.get('name'),
+                            'character': actor.get('character'),
+                            'avatar': actor.get('avatar', {})
+                        } for actor in new_data.get('actors', [])
+                    ],
+                    'imdb_id': _parse_folder_name(os.path.basename(found_folder))[1],
+                    'countries': new_data.get('countries', [])
+                }
+                
+                extra_fields = self.config.douban_config.extra_fields
+                if 'rating' in extra_fields: item_data['rating'] = new_data.get('rating', {}).get('value')
+                if 'pubdate' in extra_fields: item_data['pubdate'] = new_data.get('pubdate', [])
+                if 'card_subtitle' in extra_fields: item_data['card_subtitle'] = new_data.get('card_subtitle', '')
+                if 'languages' in extra_fields: item_data['languages'] = new_data.get('languages', [])
+                if 'durations' in extra_fields and media_type == 'Movie': item_data['durations'] = new_data.get('durations', [])
+
+                douban_map[douban_id] = item_data
+                with open(DOUBAN_CACHE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(douban_map, f, ensure_ascii=False, indent=4)
+                
+                logging.info(f"【Webhook-数据同步】成功将豆瓣ID {douban_id} 的数据增量更新到缓存文件。")
+                return True
+        except Timeout:
+            logging.error("【Webhook-数据同步】获取文件锁超时，另一个进程可能正在写入缓存文件。")
             return False
-
-        sub_dir = 'douban-movies' if media_type == 'Movie' else 'douban-tv'
-        target_dir = os.path.join(douban_data_root, sub_dir)
-
-        if not os.path.isdir(target_dir):
-            logging.error(f"【Webhook-数据同步】找不到豆瓣数据子目录: {target_dir}")
-            return False
-
-        found_folder = None
-        for folder_name in os.listdir(target_dir):
-            parsed_db_id, _ = _parse_folder_name(folder_name)
-            if parsed_db_id == douban_id:
-                found_folder = os.path.join(target_dir, folder_name)
-                break
-        
-        if not found_folder:
-            logging.error(f"【Webhook-数据同步】在 {target_dir} 中未找到与豆瓣ID {douban_id} 匹配的文件夹。")
-            return False
-
-        json_filename = 'all.json' if media_type == 'Movie' else 'series.json'
-        json_path = os.path.join(found_folder, json_filename)
-
-        if not os.path.isfile(json_path):
-            logging.error(f"【Webhook-数据同步】在目录【{found_folder}】中未找到元数据文件 {json_filename}。")
-            return False
-
-        try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                new_data = json.load(f)
-            
-            item_data = {
-                'type': media_type,
-                'title': new_data.get('title', 'N/A'),
-                'year': new_data.get('year', ''),
-                'genres': new_data.get('genres', []),
-                'intro': new_data.get('intro', ''),
-                'pic': new_data.get('pic', {}),
-                'actors': [
-                    {
-                        'id': actor.get('id'),
-                        'name': actor.get('name'),
-                        'character': actor.get('character'),
-                        'avatar': actor.get('avatar', {})
-                    } for actor in new_data.get('actors', [])
-                ],
-                'imdb_id': _parse_folder_name(os.path.basename(found_folder))[1],
-                # --- 在这里强制添加 countries 字段 ---
-                'countries': new_data.get('countries', [])
-            }
-            
-            extra_fields = self.config.douban_config.extra_fields
-            if 'rating' in extra_fields: item_data['rating'] = new_data.get('rating', {}).get('value')
-            if 'pubdate' in extra_fields: item_data['pubdate'] = new_data.get('pubdate', [])
-            if 'card_subtitle' in extra_fields: item_data['card_subtitle'] = new_data.get('card_subtitle', '')
-            if 'languages' in extra_fields: item_data['languages'] = new_data.get('languages', [])
-            if 'durations' in extra_fields and media_type == 'Movie': item_data['durations'] = new_data.get('durations', [])
-
-            douban_map[douban_id] = item_data
-            with open(DOUBAN_CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(douban_map, f, ensure_ascii=False, indent=4)
-            
-            logging.info(f"【Webhook-数据同步】成功将豆瓣ID {douban_id} 的数据增量更新到缓存文件。")
-            return True
-
         except Exception as e:
             logging.error(f"【Webhook-数据同步】处理或写入新豆瓣数据时失败: {e}", exc_info=True)
             return False
 
-    def process_new_media_task(self, item_id: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def process_new_media_task(self, item_id: str, cancellation_event: threading.Event):
         logging.info(f"【Webhook任务】已启动，开始处理新入库媒体 (ID: {item_id})")
         
         logging.info(f"【Webhook任务】【步骤 0/6 | 检查标记】正在检查媒体项是否已被处理过...")
@@ -155,7 +160,6 @@ class WebhookLogic:
             return
 
         item_name = item_details.get("Name", f"Item {item_id}")
-        task_manager.tasks[task_id]['name'] = f"Webhook-自动处理-【{item_name}】"
         
         provider_ids = item_details.get("ProviderIds", {})
         if self.processed_flag_key in provider_ids:
@@ -173,7 +177,7 @@ class WebhookLogic:
         logging.info(f"【Webhook任务】【步骤 2/6 | 获取豆瓣ID】开始...")
         item_details = self._get_emby_item_details(item_id)
         if not item_details:
-            logging.error(f"【Webhook任务】等待后无法再次获取媒体 {item_id} 的详细信息，任务中止。")
+            logging.error(f"【Webhook任务】等待后无法再次获取媒体【{item_name}】的详细信息，任务中止。")
             return
         
         item_type = item_details.get("Type", "Movie")
@@ -220,7 +224,8 @@ class WebhookLogic:
         logging.info(f"【Webhook任务】【步骤 5/6 | 豆瓣海报更新】开始...")
         try:
             poster_logic = DoubanPosterUpdaterLogic(self.config)
-            poster_logic.run_poster_update_for_items([item_id], self.config.douban_poster_updater_config, cancellation_event, task_id, task_manager)
+            # 移除不必要的 task_id 和 task_manager 参数
+            poster_logic.run_poster_update_for_items([item_id], self.config.douban_poster_updater_config, cancellation_event, None, None)
         except Exception as e:
             logging.error(f"【Webhook任务】【豆瓣海报更新】步骤执行失败。错误: {e}", exc_info=True)
         if cancellation_event.is_set(): return

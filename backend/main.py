@@ -1,4 +1,4 @@
-# backend/main.py (最终、最健壮的完整版)
+# backend/main.py (最终架构版)
 
 import sys
 import os
@@ -17,7 +17,7 @@ from models import DoubanPosterUpdaterConfig
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
-from typing import List, Dict, Optional, Literal
+from typing import List, Dict, Optional, Literal, Tuple
 from local_extractor import extract_local_media_task
 from models import LocalExtractRequest
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,7 +52,58 @@ from webhook_logic import WebhookLogic
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
-# --- 移除旧的去重缓存 ---
+# --- 核心修改 1: 引入全局的异步队列和集合 ---
+webhook_queue = asyncio.Queue()
+# 使用集合来快速判断一个 item_id 是否已在队列中，实现高效去重
+webhook_processing_set = set()
+# --- 结束修改 ---
+
+# --- 核心修改 2: 创建后台工作者函数 ---
+async def webhook_worker():
+    logging.info("【Webhook工作者】已启动，等待处理任务...")
+    while True:
+        try:
+            # 从队列中获取一个任务
+            item_id, item_name = await webhook_queue.get()
+            
+            # 注册一个可见的后台任务，方便在前端监控
+            task_id = task_manager.register_task(
+                _webhook_task_runner, 
+                f"Webhook-自动处理-【{item_name}】",
+                item_id=item_id
+            )
+            
+            # 等待任务完成（虽然 register_task 是异步的，但我们在这里可以等待）
+            # 这里的等待不是必须的，但可以确保任务真正串行
+            while task_id in task_manager.tasks:
+                await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            logging.info("【Webhook工作者】收到关闭信号，正在退出...")
+            break
+        except Exception as e:
+            logging.error(f"【Webhook工作者】处理任务时发生未知错误: {e}", exc_info=True)
+            # 即使出错也继续循环，保证工作者的健壮性
+            await asyncio.sleep(5)
+        finally:
+            # 任务处理完成后，从集合中移除
+            if item_id in webhook_processing_set:
+                webhook_processing_set.remove(item_id)
+            # 标记队列任务已完成
+            webhook_queue.task_done()
+
+def _webhook_task_runner(item_id: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    """
+    这是一个简单的包装函数，用于被 TaskManager 调用。
+    它会加载最新的配置并执行 WebhookLogic 的核心处理方法。
+    """
+    current_config = app_config.load_app_config()
+    logic = WebhookLogic(current_config)
+    # 注意：这里我们不再需要传递 task_manager 和 task_id，因为进度更新已不适用
+    logic.process_new_media_task(item_id, cancellation_event)
+
+# --- 结束修改 ---
+
 
 def trigger_douban_refresh():
     logging.info("【调度任务】开始执行豆瓣数据强制刷新...")
@@ -130,8 +181,12 @@ def trigger_scheduled_task(task_id: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.info("应用启动，开始任务广播消费者...")
-    consumer_task = asyncio.create_task(task_manager.broadcast_consumer())
+    logging.info("应用启动...")
+    # --- 核心修改 3: 在应用启动时，启动所有后台任务 ---
+    task_manager_consumer = asyncio.create_task(task_manager.broadcast_consumer())
+    webhook_worker_task = asyncio.create_task(webhook_worker())
+    # --- 结束修改 ---
+
     config = app_config.load_app_config()
     
     douban_conf = config.douban_config
@@ -194,12 +249,12 @@ async def lifespan(app: FastAPI):
         scheduler.shutdown(wait=False)
         logging.info("APScheduler 已被指令关闭。")
 
-    if not consumer_task.done():
-        consumer_task.cancel()
-        try:
-            await consumer_task
-        except asyncio.CancelledError:
-            logging.info("任务广播消费者已成功取消。")
+    # --- 核心修改 4: 在应用关闭时，优雅地取消后台任务 ---
+    webhook_worker_task.cancel()
+    task_manager_consumer.cancel()
+    await asyncio.gather(webhook_worker_task, task_manager_consumer, return_exceptions=True)
+    logging.info("所有后台任务已成功取消。")
+    # --- 结束修改 ---
 
 app = FastAPI(lifespan=lifespan)
 origins = ["*"]
@@ -214,6 +269,7 @@ app.add_middleware(
 app.include_router(actor_gallery_router, prefix="/api/gallery")
 app.include_router(douban_fixer_router, prefix="/api/douban-fixer")
 
+# ... (其他路由保持不变) ...
 @app.get("/api/image-proxy")
 async def image_proxy(url: str):
     try:
@@ -865,6 +921,7 @@ def save_webhook_config_api(config: WebhookConfig):
         logging.error(f"保存 Webhook 设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
 
+# --- 核心修改 5: 重构 Webhook 接收器，使其将任务放入队列 ---
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     try:
@@ -886,15 +943,16 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
 
     target_item_id = None
     target_item_name = payload.Item.Name
+    target_item_type = payload.Item.Type
 
     if payload.Event in ["item.add", "library.new"]:
-        if payload.Item.Type in ["Movie", "Series"]:
+        if target_item_type in ["Movie", "Series"]:
             target_item_id = payload.Item.Id
-            logging.info(f"【Webhook】检测到新 [电影/剧集] 入库: [{target_item_name}] (ID: {target_item_id})，事件类型: {payload.Event}")
+            logging.info(f"【Webhook】检测到新 [电影/剧集] 入库: 【{target_item_name}】 (ID: {target_item_id})")
         
-        elif payload.Item.Type == "Episode":
+        elif target_item_type == "Episode":
             episode_id = payload.Item.Id
-            logging.info(f"【Webhook】检测到新 [剧集分集] 入库: [{target_item_name}] (ID: {episode_id})，正在查找其所属剧集...")
+            logging.info(f"【Webhook】检测到新 [剧集分集] 入库: 【{target_item_name}】 (ID: {episode_id})，正在查找其所属剧集...")
             
             try:
                 server_conf = config.server_config
@@ -907,23 +965,26 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
                 target_item_id = episode_details.get("SeriesId")
                 if target_item_id:
                     target_item_name = episode_details.get("SeriesName", f"Series {target_item_id}")
-                    logging.info(f"【Webhook】成功找到所属剧集: [{target_item_name}] (ID: {target_item_id})")
+                    logging.info(f"【Webhook】成功找到所属剧集: 【{target_item_name}】 (ID: {target_item_id})")
                 else:
-                    logging.warning(f"【Webhook】无法从剧集 [{target_item_name}] 中找到所属剧集的ID，跳过处理。")
+                    logging.warning(f"【Webhook】无法从剧集【{target_item_name}】中找到所属剧集的ID，跳过处理。")
 
             except requests.RequestException as e:
                 logging.error(f"【Webhook】查询剧集详情失败: {e}，跳过处理。")
         
     if target_item_id:
-        # 启动任务
-        logic = WebhookLogic(config)
-        task_name = f"Webhook-自动处理-{target_item_name}"
-        task_manager.register_task(
-            logic.process_new_media_task,
-            task_name,
-            item_id=target_item_id
-        )
-        return {"status": "success", "message": f"Task registered for item {target_item_id}"}
+        # 检查是否已在处理队列中
+        if target_item_id in webhook_processing_set:
+            logging.info(f"【Webhook】任务【{target_item_name}】(ID: {target_item_id}) 已存在于处理队列中，本次通知跳过。")
+            return {"status": "skipped_in_queue", "message": "Task is already in the processing queue."}
+        
+        # 放入队列并更新集合
+        await webhook_queue.put((target_item_id, target_item_name))
+        webhook_processing_set.add(target_item_id)
+        logging.info(f"【Webhook】已将任务【{target_item_name}】(ID: {target_item_id}) 添加到处理队列。当前队列长度: {webhook_queue.qsize()}")
+        
+        return {"status": "success_queued", "message": f"Task for item {target_item_id} has been queued."}
     
-    logging.info(f"【Webhook】事件 '{payload.Event}' 或类型 '{payload.Item.Type}' 无需处理，已跳过。")
+    logging.info(f"【Webhook】事件 '{payload.Event}' 或类型 '{target_item_type}' 无需处理，已跳过。")
     return {"status": "skipped", "message": "Event not applicable"}
+# --- 结束修改 ---
