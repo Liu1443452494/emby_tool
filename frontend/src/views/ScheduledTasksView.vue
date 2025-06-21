@@ -1,4 +1,4 @@
-// frontend/src/views/ScheduledTasksView.vue (完整代码)
+// frontend/src/views/ScheduledTasksView.vue (修改后)
 <template>
   <div class="scheduled-tasks-page">
     <div class="page-header">
@@ -7,7 +7,7 @@
     </div>
 
     <!-- 通用目标范围配置 -->
-    <el-card class="box-card" shadow="never">
+    <el-card class="box-card common-scope-area" shadow="never">
       <template #header>
         <div class="card-header">
           <span>通用目标范围</span>
@@ -51,7 +51,7 @@
       </el-form>
     </el-card>
 
-    <!-- 任务列表容器 -->
+    <!-- 任务列表容器 (可滚动区域) -->
     <div class="tasks-area">
       <div class="tasks-container">
         <!-- Webhook 卡片 (独立硬编码) -->
@@ -143,7 +143,6 @@
     </div>
 
     <!-- 所有对话框 (Dialogs) -->
-    <!-- Webhook 设置对话框 -->
     <el-dialog
       v-model="isWebhookDialogVisible"
       title="Webhook 实时处理 - 详细配置"
@@ -181,7 +180,6 @@
       </template>
     </el-dialog>
 
-    <!-- 豆瓣海报更新器的设置对话框 -->
     <el-dialog
       v-model="isPosterDialogVisible"
       title="豆瓣海报更新 - 独立配置"
@@ -265,7 +263,6 @@ function updateStateFromConfig() {
   localPosterConfig.value = _.cloneDeep(configStore.appConfig.douban_poster_updater_config);
   localWebhookConfig.value = _.cloneDeep(configStore.appConfig.webhook_config);
 
-  // 如果用户没有自定义 URL，则生成一个推荐值
   if (localWebhookConfig.value && !localWebhookConfig.value.url_override) {
     const baseUrl = window.location.origin;
     localWebhookConfig.value.url_override = `${baseUrl}/api/webhook/emby`;
@@ -378,21 +375,25 @@ const copyWebhookUrl = async () => {
   --custom-theme-color-active: #4a8a7f;
 }
 
+/* --- 核心修改：Flexbox 布局 --- */
 .scheduled-tasks-page {
   padding: 0 20px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: hidden; /* 防止外层出现滚动条 */
 }
+
 .page-header, .common-scope-area, .save-button-container {
-  flex-shrink: 0;
+  flex-shrink: 0; /* 固定区域，不允许收缩 */
 }
+
 .tasks-area {
-  flex-grow: 1;
-  overflow-y: auto;
-  padding-bottom: 20px;
+  flex-grow: 1; /* 伸缩区域，占据剩余空间 */
+  overflow-y: auto; /* 内容超出时，自身出现滚动条 */
+  padding-bottom: 20px; /* 给滚动到底部留出一些空间 */
 }
+/* --- 结束核心修改 --- */
 
 .page-header {
   padding: 20px 0;
@@ -405,6 +406,12 @@ const copyWebhookUrl = async () => {
   margin-top: 20px;
   border: 1px solid var(--el-border-color-lighter);
 }
+/* --- 新增：为通用范围卡片添加一个 class --- */
+.common-scope-area {
+  margin-top: 20px;
+}
+/* --- 结束新增 --- */
+
 .card-header {
   display: flex;
   justify-content: space-between;
