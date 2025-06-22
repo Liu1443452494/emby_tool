@@ -1,4 +1,4 @@
-# backend/actor_localizer_logic.py (优化后)
+# backend/actor_localizer_logic.py (修正后)
 
 import logging
 import threading
@@ -23,7 +23,7 @@ from task_manager import TaskManager
 from douban_manager import DOUBAN_CACHE_FILE
 
 class ActorLocalizerLogic:
-    # ... (除了 _process_single_item_for_localization 之外的所有函数保持不变) ...
+    # ... (除了 _process_single_item_for_localization 和 preview_actor_changes_task 之外的所有函数保持不变) ...
     def __init__(self, app_config: AppConfig):
         self.server_config = app_config.server_config
         self.base_url = self.server_config.server
@@ -200,7 +200,6 @@ class ActorLocalizerLogic:
             return False
         
         people = details.get('People', [])
-        # --- 核心修改 1：增加 p.get('Role') 判断，过滤掉没有角色名的演员 ---
         actors_with_roles = [p for p in people if p.get('Type') == 'Actor' and p.get('Role')]
         if not any(not self._contains_chinese(p.get('Role', '')) for p in actors_with_roles):
             logging.debug(f"     -- 跳过，所有角色名均已包含中文或为空。")
@@ -211,7 +210,6 @@ class ActorLocalizerLogic:
             logging.warning(f"     -- 跳过，本地无豆瓣ID {douban_id} 的数据。")
             return False
 
-        # --- 核心修改 1 (续)：使用过滤后的列表进行匹配 ---
         emby_actors_to_match = {p['Name']: p.get('Role', '') for p in people[:config.person_limit] if p.get('Type') == 'Actor' and p.get('Role') and not self._contains_chinese(p.get('Role', ''))}
         douban_standard_roles = {actor.get('name'): self._clean_douban_character(actor.get('character', '')) for actor in douban_item.get('actors', []) if self._clean_douban_character(actor.get('character', '')) and self._contains_chinese(self._clean_douban_character(actor.get('character', '')))}
 
@@ -243,13 +241,14 @@ class ActorLocalizerLogic:
         if config.translation_enabled and actors_to_translate:
             logging.info(f"【翻译】为媒体《{item_name}》收集到 {len(actors_to_translate)} 个待翻译角色。")
             
-            if config.api_cooldown_enabled and config.api_cooldown_time > 0:
-                logging.info(f"【翻译】API冷却，等待 {config.api_cooldown_time} 秒...")
-                time.sleep(config.api_cooldown_time)
-            
             use_batch = (config.translation_mode == 'siliconflow' and config.siliconflow_config.batch_translation_enabled)
             
             if use_batch:
+                # 批量模式下，冷却一次
+                if config.api_cooldown_enabled and config.api_cooldown_time > 0:
+                    logging.info(f"【翻译】API冷却 (批量模式)，等待 {config.api_cooldown_time} 秒...")
+                    time.sleep(config.api_cooldown_time)
+
                 logging.info("【翻译】检测到批量翻译已开启，开始尝试批量处理...")
                 original_roles = [actor['role'] for actor in actors_to_translate]
                 translated_roles = self._translate_batch_with_retry(original_roles, config, item_name)
@@ -273,6 +272,12 @@ class ActorLocalizerLogic:
 
             if not use_batch:
                 for actor_info in actors_to_translate:
+                    # --- 核心修改：将冷却逻辑移入单个翻译的循环内 ---
+                    if config.api_cooldown_enabled and config.api_cooldown_time > 0:
+                        logging.info(f"【翻译】API冷却 (单个模式)，等待 {config.api_cooldown_time} 秒...")
+                        time.sleep(config.api_cooldown_time)
+                    # --- 结束修改 ---
+
                     new_role = self._translate_text_with_retry(actor_info['role'], config, item_name)
                     if new_role and new_role != actor_info['role']:
                         has_changes = True
@@ -284,7 +289,6 @@ class ActorLocalizerLogic:
                     else:
                         logging.info(f"     -- 跳过: {actor_info['name']}: '{actor_info['role']}' -> '{new_role}' (无变化)")
 
-        # --- 核心修改 2：增加无变更时的日志反馈 ---
         if has_changes:
             full_item_json = self._get_item_details(item_id, full_json=True)
             if full_item_json:
@@ -295,7 +299,6 @@ class ActorLocalizerLogic:
             logging.error(f"     -- 应用更新到 Emby 失败。")
         else:
             logging.info(f"     -- 处理完成，无任何变更。")
-        # --- 结束修改 ---
         
         return False
 
@@ -514,11 +517,11 @@ class ActorLocalizerLogic:
                         item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': new_role, 'source': 'replace'}
                         logging.info(f"     -- 预览更新: {actor_info['name']}: '{actor_info['role']}' -> '{new_role}' (来自替换)")
             elif config.translation_enabled and actors_to_process_further:
-                if config.api_cooldown_enabled and config.api_cooldown_time > 0:
-                    logging.info(f"【翻译】API冷却，等待 {config.api_cooldown_time} 秒...")
-                    time.sleep(config.api_cooldown_time)
                 use_batch = (config.translation_mode == 'siliconflow' and config.siliconflow_config.batch_translation_enabled)
                 if use_batch:
+                    if config.api_cooldown_enabled and config.api_cooldown_time > 0:
+                        logging.info(f"【翻译】API冷却 (批量模式)，等待 {config.api_cooldown_time} 秒...")
+                        time.sleep(config.api_cooldown_time)
                     original_roles = [actor['role'] for actor in actors_to_process_further]
                     translated_roles = self._translate_batch_with_retry(original_roles, config, item_name)
                     if translated_roles:
@@ -534,6 +537,9 @@ class ActorLocalizerLogic:
                 if not use_batch:
                     for actor_info in actors_to_process_further:
                         if cancellation_event.is_set(): break
+                        if config.api_cooldown_enabled and config.api_cooldown_time > 0:
+                            logging.info(f"【翻译】API冷却 (单个模式)，等待 {config.api_cooldown_time} 秒...")
+                            time.sleep(config.api_cooldown_time)
                         new_role = self._translate_text_with_retry(actor_info['role'], config, context_title=item_name)
                         if new_role and new_role != actor_info['role']:
                             item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': new_role, 'source': 'translation'}
