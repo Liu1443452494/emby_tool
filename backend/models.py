@@ -61,6 +61,8 @@ class TencentApiConfig(BaseModel):
     secret_key: str = ""
     region: str = "ap-guangzhou"
 
+# backend/models.py (修改部分)
+
 class SiliconflowApiConfig(BaseModel):
     """SiliconFlow 大模型 API 配置"""
     api_key: str = ""
@@ -79,11 +81,23 @@ class SiliconflowApiConfig(BaseModel):
         ge=0.0,
         le=1.0
     )
-    timeout: int = Field(
+    # --- 核心修改：彻底移除旧的 timeout 字段 ---
+    timeout_single: int = Field(
         default=20,
-        description="API 请求超时时间（秒）。",
+        description="单个翻译的API请求超时时间（秒）。",
         ge=5,
         le=120
+    )
+    timeout_batch: int = Field(
+        default=45,
+        description="批量翻译的API请求超时时间（秒）。",
+        ge=10,
+        le=300
+    )
+    # --- 结束修改 ---
+    batch_translation_enabled: bool = Field(
+        default=True,
+        description="是否启用批量翻译模式，可大幅减少API请求次数"
     )
 
 class ActorLocalizerConfig(BaseModel):

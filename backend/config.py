@@ -1,6 +1,7 @@
 # backend/config.py (修改后)
 import json
 import os
+import logging
 from models import AppConfig
 
 CONFIG_FILE = os.path.join('/app/data', 'config.json')
@@ -61,7 +62,6 @@ def load_app_config() -> AppConfig:
         if "custom_api_domain" not in config_data["tmdb_config"]:
             config_data["tmdb_config"]["custom_api_domain"] = "https://api.themoviedb.org"
 
-    # --- 修改：为 download_config 添加 nfo_actor_limit 的兼容性处理 ---
     if "download_config" not in config_data:
         config_data["download_config"] = {"download_directory": "", "download_behavior": "skip", "directory_naming_rule": "tmdb_id", "nfo_actor_limit": 20}
     else:
@@ -69,7 +69,6 @@ def load_app_config() -> AppConfig:
             config_data["download_config"]["directory_naming_rule"] = "tmdb_id"
         if "nfo_actor_limit" not in config_data["download_config"]:
             config_data["download_config"]["nfo_actor_limit"] = 20
-    # --- 结束修改 ---
 
     if not config_data.get("genre_mapping"):
         config_data["genre_mapping"] = DEFAULT_GENRE_MAP
@@ -79,17 +78,38 @@ def load_app_config() -> AppConfig:
     elif "extra_fields" not in config_data["douban_config"]:
         config_data["douban_config"]["extra_fields"] = []
 
+    # --- 核心修改：调整 actor_localizer_config 的加载和兼容性处理 ---
     if "actor_localizer_config" not in config_data:
         config_data["actor_localizer_config"] = {}
     
     actor_conf = config_data["actor_localizer_config"]
+    
     if "siliconflow_config" not in actor_conf:
-        actor_conf["siliconflow_config"] = {"model_remarks": DEFAULT_SF_MODEL_REMARKS}
-    elif not actor_conf["siliconflow_config"].get("model_remarks"):
-        actor_conf["siliconflow_config"]["model_remarks"] = DEFAULT_SF_MODEL_REMARKS
+        actor_conf["siliconflow_config"] = {}
+        
+    sf_conf = actor_conf.get("siliconflow_config", {})
+
+    if not sf_conf.get("model_remarks"):
+        sf_conf["model_remarks"] = DEFAULT_SF_MODEL_REMARKS
+
+    # 兼容性处理：如果存在旧的 timeout 字段，则进行迁移
+    migration_needed = "timeout" in sf_conf
+    if migration_needed:
+        logging.info("【配置兼容】检测到旧的 'timeout' 配置，将自动迁移到新的 'timeout_single' 和 'timeout_batch'。")
+        old_timeout = sf_conf.get("timeout", 20)
+        
+        # 只有在新字段不存在时才进行赋值，避免覆盖用户已有的设置
+        if "timeout_single" not in sf_conf:
+            sf_conf["timeout_single"] = old_timeout
+        if "timeout_batch" not in sf_conf:
+            sf_conf["timeout_batch"] = max(old_timeout + 25, 45)
+            
+        # 迁移完成后，删除旧的键
+        del sf_conf["timeout"]
 
     if "apply_cron" not in actor_conf:
         actor_conf["apply_cron"] = ""
+    # --- 结束修改 ---
 
     if "douban_fixer_config" not in config_data:
         config_data["douban_fixer_config"] = {"cookie": "", "api_cooldown": 2.0, "scan_cron": ""}
@@ -122,19 +142,15 @@ def load_app_config() -> AppConfig:
             config_data["scheduled_tasks_config"] = {}
         config_data["scheduled_tasks_config"]["tasks"] = current_tasks
 
-    should_rewrite = not os.path.exists(CONFIG_FILE)
-    if not should_rewrite:
-        try:
-            final_temp_app_config = AppConfig(**config_data)
-            if json.dumps(final_temp_app_config.model_dump(mode='json'), sort_keys=True) != json.dumps(config_data, sort_keys=True):
-                should_rewrite = True
-        except Exception:
-            should_rewrite = True
+    # 检查是否需要重写配置文件（例如，因为我们删除了旧的timeout键）
+    should_rewrite = not os.path.exists(CONFIG_FILE) or migration_needed
 
     if should_rewrite:
         final_config = AppConfig(**config_data).model_dump(mode='json')
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(final_config, f, ensure_ascii=False, indent=4)
+        if migration_needed:
+            logging.info("【配置兼容】配置文件已更新到最新结构。")
 
     return AppConfig(**config_data)
 

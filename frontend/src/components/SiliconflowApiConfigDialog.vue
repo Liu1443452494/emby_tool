@@ -1,4 +1,3 @@
-// frontend/src/components/SiliconflowApiConfigDialog.vue (修改后)
 <template>
   <el-dialog
     :model-value="visible"
@@ -39,6 +38,18 @@
       <el-form-item>
         <template #label>
           <span>
+            批量翻译模式
+            <el-tooltip effect="dark" content="开启后，将一次性翻译一个媒体中的所有角色名，能大幅减少API请求次数和时间。推荐开启。" placement="top">
+              <el-icon><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+        </template>
+        <el-switch v-model="localConfig.batch_translation_enabled" />
+      </el-form-item>
+
+      <el-form-item>
+        <template #label>
+          <span>
             温度 (Temperature)
             <el-tooltip effect="dark" content="控制输出的随机性。值越低，输出越确定和重复；值越高，输出越随机和有创意。对于翻译任务，建议使用较低的值。" placement="top">
               <el-icon><QuestionFilled /></el-icon>
@@ -64,19 +75,29 @@
         </div>
       </el-form-item>
 
-      <!-- --- 新增超时时间配置 --- -->
       <el-form-item>
          <template #label>
           <span>
-            API 超时时间 (秒)
-            <el-tooltip effect="dark" content="等待 API 响应的最长时间。如果您的网络状况不佳或使用大型模型，可以适当增加此值。" placement="top">
+            单个翻译超时 (秒)
+            <el-tooltip effect="dark" content="等待单个角色名翻译结果的最长时间。" placement="top">
               <el-icon><QuestionFilled /></el-icon>
             </el-tooltip>
           </span>
         </template>
-        <el-input-number v-model="localConfig.timeout" :min="5" :max="120" />
+        <el-input-number v-model="localConfig.timeout_single" :min="5" :max="120" />
       </el-form-item>
-      <!-- --- 结束新增 --- -->
+      
+      <el-form-item>
+         <template #label>
+          <span>
+            批量翻译超时 (秒)
+            <el-tooltip effect="dark" content="等待一次性翻译多个角色名结果的最长时间。如果批量翻译时频繁超时，请适当增加此值。" placement="top">
+              <el-icon><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+        </template>
+        <el-input-number v-model="localConfig.timeout_batch" :min="10" :max="300" />
+      </el-form-item>
 
     </el-form>
     <div v-if="testResult" :class="['test-result', testResult.success ? 'success' : 'error']">
@@ -113,6 +134,15 @@ const testResult = ref(null);
 watch(() => props.visible, (newVal) => {
   if (newVal) {
     localConfig.value = JSON.parse(JSON.stringify(props.config));
+    
+    // 确保新字段有默认值，以防配置文件不完整
+    if (typeof localConfig.value.timeout_single === 'undefined') {
+      localConfig.value.timeout_single = 20;
+    }
+    if (typeof localConfig.value.timeout_batch === 'undefined') {
+      localConfig.value.timeout_batch = 45;
+    }
+
     if (!localConfig.value.model_remarks) {
       localConfig.value.model_remarks = {};
     }
@@ -122,11 +152,9 @@ watch(() => props.visible, (newVal) => {
     if (typeof localConfig.value.top_p === 'undefined') {
       localConfig.value.top_p = 1.0;
     }
-    // --- 新增：为 timeout 设置默认值，以兼容旧的配置文件 ---
-    if (typeof localConfig.value.timeout === 'undefined') {
-      localConfig.value.timeout = 20;
+    if (typeof localConfig.value.batch_translation_enabled === 'undefined') {
+      localConfig.value.batch_translation_enabled = true;
     }
-    // --- 结束新增 ---
     testResult.value = null;
   }
 });
