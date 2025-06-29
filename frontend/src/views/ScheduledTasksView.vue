@@ -1,4 +1,3 @@
-// frontend/src/views/ScheduledTasksView.vue (修改后)
 <template>
   <div class="scheduled-tasks-page">
     <div class="page-header">
@@ -207,6 +206,41 @@
       </template>
     </el-dialog>
 
+    <!-- --- 新增：剧集刷新器设置对话框 --- -->
+    <el-dialog
+      v-model="isRefresherDialogVisible"
+      title="剧集元数据刷新 - 独立配置"
+      width="500px"
+      :close-on-click-modal="false"
+    >
+      <div v-if="localRefresherConfig" class="independent-task-config">
+        <el-form :model="localRefresherConfig" label-position="top">
+          <el-form-item label="刷新模式">
+            <el-radio-group v-model="localRefresherConfig.overwrite_metadata">
+              <el-radio :value="false">搜索缺少的元数据</el-radio>
+              <el-radio :value="true">覆盖所有元数据</el-radio>
+            </el-radio-group>
+            <div class="form-item-description">
+              “搜索缺少”模式仅补充空缺的字段。“覆盖所有”模式则会用刮削源的数据替换所有字段。
+            </div>
+          </el-form-item>
+          <!-- --- 结束修改 --- -->
+
+          <!-- --- 新增：智能跳过开关 --- -->
+          <el-form-item label="智能跳过">
+            <el-switch v-model="localRefresherConfig.skip_if_complete" active-text="开启智能跳过" />
+            <div class="form-item-description">
+              开启后，如果一个分集已经拥有标题、简介和主图片，任务将自动跳过该分集，以提高效率。
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="isRefresherDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+    <!-- --- 结束新增 --- -->
+
   </div>
 </template>
 
@@ -222,20 +256,29 @@ import cronstrue from 'cronstrue/i18n';
 const configStore = useConfigStore();
 const mediaStore = useMediaStore();
 
+// --- 修改：在任务定义中添加新任务 ---
 const definedTasks = ref([
   { id: 'actor_localizer', name: '演员中文化', hasSettings: false },
   { id: 'douban_fixer', name: '豆瓣ID修复器', hasSettings: false },
-  { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true }
+  { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
+  { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true }
 ]);
+// --- 结束修改 ---
 
 const localScope = ref({});
 const localTaskStates = reactive({});
 const localPosterConfig = ref(null);
 const localWebhookConfig = ref(null);
+// --- 新增：为新配置创建 ref ---
+const localRefresherConfig = ref(null);
+// --- 结束新增 ---
 const isSaving = ref(false);
 const isTriggering = reactive({});
 const isPosterDialogVisible = ref(false);
 const isWebhookDialogVisible = ref(false);
+// --- 新增：为新对话框创建 ref ---
+const isRefresherDialogVisible = ref(false);
+// --- 结束新增 ---
 
 definedTasks.value.forEach(taskDef => {
   localTaskStates[taskDef.id] = {
@@ -258,10 +301,12 @@ onMounted(() => {
   }, { immediate: true });
 });
 
+// --- 修改：更新状态函数，增加对新配置的处理 ---
 function updateStateFromConfig() {
   localScope.value = _.cloneDeep(configStore.appConfig.scheduled_tasks_config.target_scope);
   localPosterConfig.value = _.cloneDeep(configStore.appConfig.douban_poster_updater_config);
   localWebhookConfig.value = _.cloneDeep(configStore.appConfig.webhook_config);
+  localRefresherConfig.value = _.cloneDeep(configStore.appConfig.episode_refresher_config);
 
   if (localWebhookConfig.value && !localWebhookConfig.value.url_override) {
     const baseUrl = window.location.origin;
@@ -286,7 +331,9 @@ function updateStateFromConfig() {
     }
   });
 }
+// --- 结束修改 ---
 
+// --- 修改：保存函数，增加对新配置的保存调用 ---
 const handleSave = async () => {
   isSaving.value = true;
   
@@ -302,14 +349,16 @@ const handleSave = async () => {
   const result1 = await configStore.saveScheduledTasksConfig(scheduledConfig);
   const result2 = await configStore.saveDoubanPosterUpdaterConfig(localPosterConfig.value);
   const result3 = await configStore.saveWebhookConfig(localWebhookConfig.value);
+  const result4 = await configStore.saveEpisodeRefresherConfig(localRefresherConfig.value);
 
-  if (result1.success && result2.success && result3.success) {
+  if (result1.success && result2.success && result3.success && result4.success) {
     ElMessage.success('所有设置已成功保存！');
   } else {
-    ElMessage.error(`保存失败: ${result1.message || result2.message || result3.message}`);
+    ElMessage.error(`保存失败: ${result1.message || result2.message || result3.message || result4.message}`);
   }
   isSaving.value = false;
 };
+// --- 结束修改 ---
 
 const handleTriggerOnce = async (taskId) => {
   try {
@@ -337,11 +386,15 @@ const handleTriggerOnce = async (taskId) => {
   }
 };
 
+// --- 修改：打开设置对话框函数，增加对新任务的处理 ---
 const openSettingsDialog = (taskId) => {
   if (taskId === 'douban_poster_updater') {
     isPosterDialogVisible.value = true;
+  } else if (taskId === 'episode_refresher') {
+    isRefresherDialogVisible.value = true;
   }
 };
+// --- 结束修改 ---
 
 const parseCron = (task) => {
   if (!task || !task.cron || task.cron.trim() === '') {
@@ -587,5 +640,10 @@ const copyWebhookUrl = async () => {
 .action-button-item-placeholder {
   margin-bottom: 0;
   height: 40px;
+}
+
+/* --- 新增：为独立配置对话框添加通用样式 --- */
+.independent-task-config {
+  padding-top: 10px;
 }
 </style>

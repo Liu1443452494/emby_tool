@@ -1,14 +1,43 @@
-// frontend/src/views/LogView.vue (修改后)
 <template>
   <div class="log-page">
     <div class="page-header">
       <h2>应用日志</h2>
-      <p>这里会实时显示应用后端的运行日志，最新的日志会显示在最上方。</p>
+      <p>实时显示应用后端的运行日志，可按级别筛选，最新的日志会显示在最上方。</p>
     </div>
 
+    <!-- 工具栏 -->
     <div class="log-toolbar">
-      <!-- 核心修改：使用 el-pagination 组件 -->
-      <el-pagination
+      <div class="left-controls">
+        <el-radio-group v-model="logLevelProxy" @change="handleLevelChange">
+          <el-radio-button label="INFO">重要</el-radio-button>
+          <el-radio-button label="WARNING">警告</el-radio-button>
+          <el-radio-button label="ERROR">错误</el-radio-button>
+          <el-radio-button label="ALL">全部</el-radio-button>
+        </el-radio-group>
+      </div>
+      <div class="right-controls">
+        <el-button type="danger" @click="logStore.clearLogs" :disabled="logStore.totalLogs === 0">清空日志</el-button>
+      </div>
+    </div>
+
+    <div class="log-container">
+      <div v-if="logStore.logs.length > 0" class="log-content">
+        <div v-for="(log, index) in logStore.logs" :key="index" class="log-line">
+          <span class="line-number">{{ getLineNumber(index) }}</span>
+          <span :class="['log-level', `log-level-${log.level.toLowerCase()}`]">{{ log.level }}:</span>
+          <span class="log-timestamp">{{ log.timestamp }}</span>
+          <span class="log-separator">-</span>
+          <span class="log-category">{{ log.category }}</span>
+          <span class="log-arrow">→</span>
+          <span class="log-message">{{ log.message }}</span>
+        </div>
+      </div>
+      <el-empty v-else description="暂无日志" />
+    </div>
+
+    <!-- 分页器 -->
+    <div class="pagination-footer">
+       <el-pagination
         v-model:current-page="logStore.currentPage"
         :page-size="100"
         :total="logStore.totalLogs"
@@ -17,37 +46,40 @@
         @current-change="handlePageChange"
         :disabled="logStore.totalLogs === 0"
       />
-      <!-- 结束修改 -->
-      <el-button type="danger" @click="logStore.clearLogs" :disabled="logStore.totalLogs === 0">清空日志</el-button>
-    </div>
-
-    <div class="log-container">
-      <pre v-if="logStore.logs.length > 0" class="log-content">
-        <div v-for="(log, index) in logStore.logs" :key="index" class="log-line">{{ log }}</div>
-      </pre>
-      <el-empty v-else description="暂无日志" />
     </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, onUnmounted } from 'vue';
+import { onMounted, onUnmounted, computed } from 'vue';
 import { useLogStore } from '@/stores/log';
 
 const logStore = useLogStore();
 
+const logLevelProxy = computed({
+  get: () => logStore.logLevel,
+  set: (val) => {} // 只读代理
+});
+
 onMounted(() => {
-  logStore.fetchHistoricalLogs(1); // 加载第一页
-  logStore.connect(); // 建立 WebSocket 连接
+  logStore.fetchHistoricalLogs(1);
+  logStore.connect();
 });
 
 onUnmounted(() => {
-  logStore.disconnect(); // 离开页面时断开连接
+  logStore.disconnect();
 });
 
-// 核心修改：定义新的页码改变处理函数
 const handlePageChange = (page) => {
   logStore.fetchHistoricalLogs(page);
+};
+
+const handleLevelChange = (newLevel) => {
+  logStore.setLogLevelAndFetch(newLevel);
+};
+
+const getLineNumber = (index) => {
+  return logStore.totalLogs - ((logStore.currentPage - 1) * 100) - index;
 };
 </script>
 
@@ -75,32 +107,119 @@ const handlePageChange = (page) => {
   flex-shrink: 0;
 }
 
-/* 核心修改：移除旧的 pagination-controls 样式 */
-
 .log-container {
   flex-grow: 1;
-  background-color: #1e1e1e;
+  background-color: #292A2D; 
   border-radius: 8px;
-  padding: 15px;
+  padding: 10px 0;
   overflow-y: auto;
   border: 1px solid var(--el-border-color-lighter);
 }
 
 .log-content {
-  margin: 0;
   font-family: 'Courier New', Courier, monospace;
   font-size: 14px;
-  color: #d4d4d4;
-  white-space: pre-wrap;
+  color: #bdc1c6;
+}
+
+/* --- 核心修改：调整 log-line 及其子元素的样式 --- */
+.log-line {
+  display: flex;
+  align-items: baseline;
+  line-height: 1.6;
+  padding: 2px 10px;
+  /* 移除 white-space: pre，让 flexbox 控制布局 */
+}
+.log-line:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.line-number,
+.log-level,
+.log-timestamp,
+.log-separator,
+.log-category,
+.log-arrow {
+  /* flex-shrink: 0 保证这些元素不会被压缩 */
+  flex-shrink: 0;
+  /* white-space: pre 保证元素内部的连续空格被保留 */
+  white-space: pre;
+}
+
+.line-number {
+  width: 50px;
+  text-align: right;
+  color: #7f8389;
+  user-select: none;
+  margin-right: 15px;
+}
+
+.log-level {
+  font-weight: bold;
+  /* 移除固定宽度，让其自适应内容 */
+  /* width: 80px; */ 
+  margin-right: 10px; /* 增加右边距以分隔 */
+}
+
+.log-timestamp {
+  color: #969ba1;
+}
+
+.log-separator {
+  margin: 0 10px;
+  color: #7f8389;
+}
+
+.log-category {
+  /* 移除固定宽度 */
+  /* width: 140px; */
+  color: #8ab4f8; /* 任务类别颜色 */
+}
+
+.log-arrow {
+  margin: 0 10px;
+  color: #7f8389;
+}
+
+.log-message {
+  /* flex-grow: 1 让消息部分填充所有剩余空间 */
+  flex-grow: 1;
+  /* 允许消息内容换行 */
+  white-space: pre-wrap; 
   word-break: break-all;
 }
+/* --- 结束核心修改 --- */
 
-.log-line {
-  line-height: 1.6;
+.log-level-info { color: #67c23a; }
+.log-level-warning { color: #e6a23c; }
+.log-level-error { color: #f56c6c; }
+.log-level-critical { color: #f56c6c; }
+.log-level-debug { color: #909399; }
+
+.pagination-footer {
+  display: flex;
+  justify-content: center;
+  padding: 15px 0;
+  flex-shrink: 0;
 }
 
-/* 核心修改：为 el-pagination 添加主题色 */
 .log-page :deep(.el-pagination.is-background .el-pager li.is-active) {
   background-color: #609e95;
+}
+.log-page :deep(.el-radio-button__inner) {
+  border-radius: 0;
+}
+.log-page :deep(.el-radio-button:first-child .el-radio-button__inner) {
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+}
+.log-page :deep(.el-radio-button:last-child .el-radio-button__inner) {
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+.log-page :deep(.el-radio-button__original-radio:checked+.el-radio-button__inner) {
+  background-color: #609e95;
+  border-color: #609e95;
+  box-shadow: -1px 0 0 0 #609e95;
 }
 </style>

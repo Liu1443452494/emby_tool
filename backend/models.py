@@ -1,4 +1,4 @@
-# backend/models.py (请使用这个最终正确版)
+# backend/models.py (修改后)
 
 from pydantic import BaseModel, Field
 from typing import Literal, List, Optional, Dict, Any
@@ -125,6 +125,13 @@ class DoubanPosterUpdaterConfig(BaseModel):
     overwrite_existing: bool = Field(default=False, description="是否覆盖已有海报")
     skip_mainland_china: bool = Field(default=False, description="是否跳过中国大陆地区的影视")
 
+# --- 新增：剧集元数据刷新器配置模型 ---
+class EpisodeRefresherConfig(BaseModel):
+    """剧集元数据刷新器功能的配置"""
+    overwrite_metadata: bool = Field(default=True, description="刷新时是否覆盖现有元数据")
+    skip_if_complete: bool = Field(default=True, description="如果分集已有标题、简介和图片，则跳过刷新")
+# --- 结束新增 ---
+
 class ScheduledTaskItem(BaseModel):
     """单个定时任务的配置"""
     id: str
@@ -144,11 +151,14 @@ class ScheduledTasksTargetScope(BaseModel):
 class ScheduledTasksConfig(BaseModel):
     """定时任务总配置"""
     target_scope: ScheduledTasksTargetScope = Field(default_factory=ScheduledTasksTargetScope)
+    # --- 修改：在任务列表中添加新任务 ---
     tasks: List[ScheduledTaskItem] = Field(default_factory=lambda: [
         ScheduledTaskItem(id="actor_localizer", name="演员中文化"),
         ScheduledTaskItem(id="douban_fixer", name="豆瓣ID修复器"),
-        ScheduledTaskItem(id="douban_poster_updater", name="豆瓣海报更新")
+        ScheduledTaskItem(id="douban_poster_updater", name="豆瓣海报更新"),
+        ScheduledTaskItem(id="episode_refresher", name="剧集元数据刷新")
     ])
+    # --- 结束修改 ---
 
 class WebhookConfig(BaseModel):
     """Webhook 相关配置"""
@@ -171,6 +181,9 @@ class AppConfig(BaseModel):
     scheduled_tasks_config: ScheduledTasksConfig = Field(default_factory=ScheduledTasksConfig)
     douban_poster_updater_config: DoubanPosterUpdaterConfig = Field(default_factory=DoubanPosterUpdaterConfig)
     webhook_config: WebhookConfig = Field(default_factory=WebhookConfig)
+    # --- 新增：将新配置模型添加到主配置中 ---
+    episode_refresher_config: EpisodeRefresherConfig = Field(default_factory=EpisodeRefresherConfig)
+    # --- 结束新增 ---
 
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]

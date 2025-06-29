@@ -1,5 +1,3 @@
-# backend/main.py (最终修复版)
-
 import sys
 import os
 import requests
@@ -8,6 +6,7 @@ import asyncio
 import threading
 import json
 import time
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Dict, Optional, Literal, Tuple
@@ -24,7 +23,10 @@ from task_manager import TaskManager, task_manager
 from media_selector import MediaSelector
 from models import ScheduledTasksConfig
 from douban_poster_updater_logic import DoubanPosterUpdaterLogic
-from models import DoubanPosterUpdaterConfig
+# --- 新增：导入新模型和逻辑 ---
+from models import DoubanPosterUpdaterConfig, EpisodeRefresherConfig
+from episode_refresher_logic import EpisodeRefresherLogic
+# --- 结束新增 ---
 from local_extractor import extract_local_media_task
 from models import LocalExtractRequest
 from models import (
@@ -39,7 +41,7 @@ from models import (
 )
 import config as app_config
 from emby_downloader import EmbyDownloader, batch_download_task
-from log_manager import setup_logging, broadcaster as log_broadcaster
+from log_manager import setup_logging, broadcaster as log_broadcaster, ui_logger
 from genre_logic import GenreLogic
 from douban_manager import scan_douban_directory_task, DOUBAN_CACHE_FILE
 from actor_localizer_logic import ActorLocalizerLogic
@@ -116,17 +118,87 @@ def trigger_actor_localizer_apply():
     logic = ActorLocalizerLogic(config)
     task_manager.register_task(logic.apply_actor_changes_directly_task, "演员中文化-定时自动应用", config.actor_localizer_config)
 
+# 在 main.py 的顶部，确保 ui_logger 已导入
+from log_manager import ui_logger
+
+# ... 其他代码 ...
+
+def _episode_refresher_task_runner(
+    series_ids: List[str], 
+    config: AppConfig, 
+    cancellation_event: threading.Event, 
+    task_id: str, 
+    task_manager: TaskManager,
+    task_name: str # 新增 task_name 参数
+):
+    """
+    这个函数在后台线程中运行，负责获取分集并调用刷新逻辑。
+    """
+    # --- 核心修改：使用 task_name 作为任务类别 ---
+    task_cat = task_name
+    ui_logger.info(f"开始从 {len(series_ids)} 个剧集(Series)中获取所有分集(Episode)...", task_category=task_cat)
+    task_manager.update_task_progress(task_id, 0, len(series_ids))
+
+    all_episode_ids = []
+    session = requests.Session()
+    for i, series_id in enumerate(series_ids):
+        if cancellation_event.is_set():
+            ui_logger.warning("在获取分集阶段被取消。", task_category=task_cat)
+            return
+
+        try:
+            episodes_url = f"{config.server_config.server}/Items"
+            episodes_params = {
+                "api_key": config.server_config.api_key,
+                "ParentId": series_id,
+                "IncludeItemTypes": "Episode",
+                "Recursive": "true",
+                "Fields": "Id"
+            }
+            episodes_resp = session.get(episodes_url, params=episodes_params, timeout=30)
+            if episodes_resp.ok:
+                episodes = episodes_resp.json().get("Items", [])
+                all_episode_ids.extend([ep['Id'] for ep in episodes])
+        except Exception as e:
+            ui_logger.error(f"获取剧集 {series_id} 的分集时失败: {e}", task_category=task_cat)
+        
+        task_manager.update_task_progress(task_id, i + 1, len(series_ids))
+
+    ui_logger.info(f"分集获取完毕，共找到 {len(all_episode_ids)} 个分集需要刷新。", task_category=task_cat)
+    
+    logic = EpisodeRefresherLogic(config)
+    logic.run_refresh_for_episodes(
+        all_episode_ids,
+        config.episode_refresher_config,
+        cancellation_event,
+        task_id,
+        task_manager,
+        task_cat # 将任务类别传递给下一层
+    )
+
 def trigger_scheduled_task(task_id: str):
-    logging.info(f"【调度任务】开始执行定时任务: {task_id}")
+    # --- 核心修改：使用 ui_logger 并定义 task_name ---
+    task_name_map = {
+        "actor_localizer": "演员中文化",
+        "douban_fixer": "豆瓣ID修复",
+        "douban_poster_updater": "豆瓣海报更新",
+        "episode_refresher": "剧集元数据刷新"
+    }
+    task_display_name = task_name_map.get(task_id, task_id)
+    ui_logger.info(f"开始执行定时任务: {task_display_name}", task_category="定时任务")
     
     config = app_config.load_app_config()
-    
     scope = config.scheduled_tasks_config.target_scope
     selector = MediaSelector(config)
-    item_ids = selector.get_item_ids(scope)
+    
+    target_collection_type = None
+    if task_id == "episode_refresher":
+        target_collection_type = "tvshows"
+        
+    item_ids = selector.get_item_ids(scope, target_collection_type=target_collection_type)
 
     if not item_ids:
-        logging.info(f"【调度任务-{task_id}】未根据范围找到任何媒体项，任务结束。")
+        ui_logger.info(f"未根据范围找到任何媒体项，任务结束。", task_category=f"定时任务-{task_display_name}")
         return
 
     if task_id == "actor_localizer":
@@ -146,7 +218,6 @@ def trigger_scheduled_task(task_id: str):
             task_name,
             item_ids
         )
-
     elif task_id == "douban_poster_updater":
         logic = DoubanPosterUpdaterLogic(config)
         task_name = f"定时任务-豆瓣海报更新({scope.mode})"
@@ -156,14 +227,21 @@ def trigger_scheduled_task(task_id: str):
             item_ids,
             config.douban_poster_updater_config
         )
+    elif task_id == "episode_refresher":
+        task_name = f"定时任务-剧集元数据刷新({scope.mode})"
+        task_manager.register_task(
+            _episode_refresher_task_runner,
+            task_name,
+            series_ids=item_ids,
+            config=config,
+            task_name=task_name # 传递 task_name
+        )
     else:
         logging.warning(f"【调度任务】未知的任务ID: {task_id}")
 
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.info("应用启动...")
+    ui_logger.info("应用启动...")
     task_manager_consumer = asyncio.create_task(task_manager.broadcast_consumer())
     webhook_worker_task = asyncio.create_task(webhook_worker())
 
@@ -172,7 +250,7 @@ async def lifespan(app: FastAPI):
     douban_conf = config.douban_config
     if douban_conf.directory and os.path.isdir(douban_conf.directory):
         if not os.path.exists(DOUBAN_CACHE_FILE):
-            logging.info("【启动检查】未发现豆瓣缓存文件，将自动执行首次扫描。")
+            ui_logger.info("【启动检查】未发现豆瓣缓存文件，将自动执行首次扫描。")
             task_manager.register_task(scan_douban_directory_task, "首次启动豆瓣扫描", douban_conf.directory, douban_conf.extra_fields)
         else:
             logging.info(f"【启动检查】已找到豆瓣缓存文件: {DOUBAN_CACHE_FILE}，跳过自动扫描。")
@@ -182,7 +260,7 @@ async def lifespan(app: FastAPI):
     if douban_conf.refresh_cron:
         try:
             scheduler.add_job(trigger_douban_refresh, CronTrigger.from_crontab(douban_conf.refresh_cron), id="douban_refresh_job", replace_existing=True)
-            logging.info(f"【调度任务】已成功设置豆瓣数据定时刷新任务，CRON表达式: '{douban_conf.refresh_cron}'")
+            ui_logger.info(f"【调度任务】已成功设置豆瓣数据定时刷新任务，CRON表达式: '{douban_conf.refresh_cron}'")
         except Exception as e:
             logging.error(f"【调度任务】设置定时刷新任务失败，CRON表达式可能无效: {e}")
 
@@ -367,13 +445,21 @@ def save_download_config_api(download_config: DownloadConfig):
 @app.post("/api/config/proxy")
 def save_proxy_config_api(proxy_config: ProxyConfig):
     try:
-        logging.info(f"正在保存代理设置: {proxy_config.model_dump_json()}")
+        # --- 核心修改：使用 ui_logger 发送中文日志给前端 ---
+        ui_logger.info("正在保存网络代理设置...")
+        # --- 使用 logging.debug 记录详细的技术日志到后端 ---
+        logging.debug(f"接收到的代理配置原始数据: {proxy_config.model_dump_json()}")
+        
         if proxy_config.url and not (proxy_config.url.startswith("http://") or proxy_config.url.startswith("https://")):
              raise ValueError("代理地址格式不正确，必须以 http:// 或 https:// 开头。")
+        
         current_app_config = app_config.load_app_config()
         current_app_config.proxy_config = proxy_config
         app_config.save_app_config(current_app_config)
-        logging.info("代理设置保存成功！")
+        
+        # --- 核心修改：使用 ui_logger 发送中文成功日志给前端 ---
+        ui_logger.info("代理设置保存成功！")
+        
         return {"success": True, "message": "代理设置已保存！"}
     except Exception as e:
         logging.error(f"保存代理设置失败: {e}")
@@ -482,7 +568,6 @@ def save_douban_fixer_config_api(config: DoubanFixerConfig):
         logging.info("正在保存豆瓣ID修复器设置...")
         current_app_config = app_config.load_app_config()
         current_app_config.douban_fixer_config = config
-        app_config.save_app_config(current_app_config)
         
         if scheduler.running:
             job_id = "douban_fixer_scan_job"
@@ -517,15 +602,34 @@ def force_refresh_douban_data_api():
 LOG_FILE = os.path.join('/app/data', "app.log")
 
 @app.get("/api/logs")
-def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1)):
+def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1), level: str = Query("INFO")):
     if not os.path.exists(LOG_FILE):
         return {"total": 0, "logs": []}
     
     try:
         with open(LOG_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+            all_lines = f.readlines()
         
-        total_logs = len(lines)
+        # 正则表达式用于解析新的日志格式
+        # 格式: LEVEL:      TIMESTAMP          - CATEGORY      → MESSAGE
+        log_pattern = re.compile(
+            r"^(?P<level>\w+):\s+"
+            r"(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+-\s+"
+            r"(?P<category>.+?)\s+→\s+"
+            r"(?P<message>.*)$"
+        )
+
+        filtered_lines = []
+        if level != "ALL":
+            level_pattern_filter = re.compile(r"^" + level.upper() + r":")
+            all_lines = [line for line in all_lines if level_pattern_filter.match(line)]
+
+        for line in all_lines:
+            match = log_pattern.match(line.strip())
+            if match:
+                filtered_lines.append(match.groupdict())
+        
+        total_logs = len(filtered_lines)
         start_index = total_logs - ((page - 1) * page_size) - 1
         end_index = start_index - page_size
         
@@ -533,13 +637,13 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1)):
         for i in range(start_index, end_index, -1):
             if i < 0:
                 break
-            paginated_logs.append(lines[i].strip())
+            paginated_logs.append(filtered_lines[i])
             
         return {"total": total_logs, "logs": paginated_logs}
     except Exception as e:
         logging.error(f"读取日志文件失败: {e}")
         raise HTTPException(status_code=500, detail=f"读取日志文件失败: {e}")
-
+    
 @app.delete("/api/logs")
 def clear_logs_api():
     try:
@@ -898,6 +1002,21 @@ def save_webhook_config_api(config: WebhookConfig):
     except Exception as e:
         logging.error(f"保存 Webhook 设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+
+# --- 新增：保存剧集刷新器配置的 API 端点 ---
+@app.post("/api/config/episode-refresher")
+def save_episode_refresher_config_api(config: EpisodeRefresherConfig):
+    try:
+        logging.info("正在保存剧集元数据刷新器设置...")
+        current_app_config = app_config.load_app_config()
+        current_app_config.episode_refresher_config = config
+        app_config.save_app_config(current_app_config)
+        logging.info("剧集元数据刷新器设置保存成功！")
+        return {"success": True, "message": "设置已保存！"}
+    except Exception as e:
+        logging.error(f"保存剧集元数据刷新器设置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+# --- 结束新增 ---
 
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):

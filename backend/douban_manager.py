@@ -9,6 +9,7 @@ from datetime import datetime
 from task_manager import TaskManager
 import config as app_config
 from models import DoubanCacheStatus
+from log_manager import ui_logger
 
 DOUBAN_CACHE_FILE = os.path.join('/app/data', 'douban_data.json')
 
@@ -28,7 +29,9 @@ def _parse_folder_name(folder_name):
     return douban_id, imdb_id
 
 def scan_douban_directory_task(directory: str, extra_fields: List[str], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-    logging.info(f"【豆瓣扫描】任务启动，开始扫描目录: {directory}")
+    task_cat = "豆瓣扫描"
+    ui_logger.info("【步骤 1/5】任务启动，开始扫描豆瓣数据目录...", task_category=task_cat)
+    
     movie_dir = os.path.join(directory, 'douban-movies')
     series_dir = os.path.join(directory, 'douban-tv')
     
@@ -47,13 +50,16 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
 
     total_folders = len(media_folders)
     task_manager.update_task_progress(task_id, 0, total_folders)
-    logging.info(f"【豆瓣扫描】共找到 {total_folders} 个媒体文件夹待处理。")
+    
+    ui_logger.info(f"【步骤 2/5】目录扫描完成，共找到 {total_folders} 个媒体文件夹。", task_category=task_cat)
+    ui_logger.info("【步骤 3/5】开始解析元数据文件，这可能需要一些时间，请稍候...", task_category=task_cat)
     
     final_data = {}
     found_count = 0
 
     for i, folder_info in enumerate(media_folders):
         if cancellation_event.is_set():
+            # 对于非前端显示的日志，可以继续使用 logging
             logging.warning("【豆瓣扫描】任务被用户取消。")
             return
 
@@ -61,20 +67,23 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
         folder_name = os.path.basename(folder_path)
         media_type = folder_info['type']
         
-        logging.info(f"【豆瓣扫描】进度 {i+1}/{total_folders}: 正在处理【{folder_name}】")
+        # --- 核心修改：将 logging.debug 替换为 ui_logger.debug ---
+        # 并且也传入 task_category
+        ui_logger.debug(f"进度 {i+1}/{total_folders}: 正在处理【{folder_name}】", task_category=task_cat)
         task_manager.update_task_progress(task_id, i + 1, total_folders)
 
         json_filename = 'all.json' if media_type == 'Movie' else 'series.json'
         json_path = os.path.join(folder_path, json_filename)
 
         if not os.path.isfile(json_path):
-            logging.warning(f"【豆瓣扫描】警告：在目录【{folder_path}】中未找到元数据文件 {json_filename}，已跳过。")
+            # 对于警告和错误，也可以使用 ui_logger，这样前端也能看到
+            ui_logger.warning(f"警告：在目录【{folder_path}】中未找到元数据文件 {json_filename}，已跳过。", task_category=task_cat)
             continue
 
         try:
             douban_id, imdb_id = _parse_folder_name(folder_name)
             if douban_id == 'N/A':
-                logging.warning(f"【豆瓣扫描】警告：无法从文件夹名【{folder_name}】解析出豆瓣ID，已跳过。")
+                ui_logger.warning(f"警告：无法从文件夹名【{folder_name}】解析出豆瓣ID，已跳过。", task_category=task_cat)
                 continue
 
             with open(json_path, 'r', encoding='utf-8') as f:
@@ -96,11 +105,9 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
                     } for actor in data.get('actors', [])
                 ],
                 'imdb_id': imdb_id,
-                # --- 核心修改 1: 强制添加 countries 字段 ---
                 'countries': data.get('countries', [])
             }
 
-            # --- 核心修改 2: extra_fields 的处理保持不变，但 countries 已独立于它 ---
             if 'rating' in extra_fields:
                 item_data['rating'] = data.get('rating', {}).get('value')
             if 'pubdate' in extra_fields:
@@ -115,21 +122,37 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
             final_data[douban_id] = item_data
             found_count += 1
         except json.JSONDecodeError:
-            logging.error(f"【豆瓣扫描】错误：解析JSON文件失败: {json_path}")
+            ui_logger.error(f"错误：解析JSON文件失败: {json_path}", task_category=task_cat)
         except Exception as e:
-            logging.error(f"【豆瓣扫描】错误：处理文件夹【{folder_path}】时发生未知错误: {e}")
+            ui_logger.error(f"错误：处理文件夹【{folder_path}】时发生未知错误: {e}", task_category=task_cat)
 
-    logging.info(f"【豆瓣扫描】扫描完成，共解析 {found_count} 个有效的元数据文件。")
+    ui_logger.info(f"【步骤 4/5】元数据解析完成，共获得 {found_count} 条有效数据。", task_category=task_cat)
     
     try:
         cache_dir = os.path.dirname(DOUBAN_CACHE_FILE)
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir, exist_ok=True)
 
-        logging.info(f"【豆瓣扫描】正在将 {found_count} 条数据写入缓存文件: {DOUBAN_CACHE_FILE}")
+        old_data_keys = set()
+        if os.path.exists(DOUBAN_CACHE_FILE):
+            try:
+                with open(DOUBAN_CACHE_FILE, 'r', encoding='utf-8') as f:
+                    old_data = json.load(f)
+                old_data_keys = set(old_data.keys())
+            except (IOError, json.JSONDecodeError):
+                ui_logger.warning("读取旧缓存文件失败，无法进行数据对比。", task_category=task_cat)
+
+        new_data_keys = set(final_data.keys())
+        added_count = len(new_data_keys - old_data_keys)
+        removed_count = len(old_data_keys - new_data_keys)
+        
+        if old_data_keys:
+            ui_logger.info(f"数据对比：新增 {added_count} 条，移除 {removed_count} 条。", task_category=task_cat)
+
+        ui_logger.info(f"【步骤 5/5】正在将 {found_count} 条数据写入缓存文件...", task_category=task_cat)
         with open(DOUBAN_CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(final_data, f, ensure_ascii=False, indent=4)
-        logging.info("【豆瓣扫描】缓存文件写入成功！")
+        ui_logger.info("【步骤 5/5】缓存文件写入成功！", task_category=task_cat)
 
         config = app_config.load_app_config()
         mtime = os.path.getmtime(DOUBAN_CACHE_FILE)
@@ -142,9 +165,10 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
             is_scanning=False
         )
         app_config.save_app_config(config)
-        logging.info("【豆瓣扫描】已更新配置文件中的缓存状态。")
+        # 这个日志只给后端看，所以用 logging
+        logging.info("已更新配置文件中的缓存状态。")
 
     except Exception as e:
-        logging.error(f"【豆瓣扫描】错误：写入缓存或更新配置失败: {e}")
+        ui_logger.error(f"错误：写入缓存或更新配置失败: {e}", task_category=task_cat)
 
     return {"found_count": found_count}

@@ -34,26 +34,24 @@ class MediaSelector:
             logging.error(f"【媒体选择器】获取最新项目失败: {e}")
             return []
 
-    def get_item_ids(self, scope: ScheduledTasksTargetScope) -> List[str]:
-        """根据范围配置获取媒体ID列表"""
+  # backend/media_selector.py (修改 get_item_ids 方法)
+
+    def get_item_ids(self, scope: ScheduledTasksTargetScope, target_collection_type: Optional[str] = None) -> List[str]:
+        """
+        根据范围配置获取媒体ID列表
+        - 新增 target_collection_type 参数用于预过滤媒体库类型
+        """
         logging.info(f"【媒体选择器】开始根据范围 '{scope.mode}' 获取媒体ID...")
+        if target_collection_type:
+            logging.info(f"  - 任务目标类型: {target_collection_type}")
 
         if scope.mode == 'latest':
-            # 获取最近N天，最多M条
+            # 'latest' 模式不受影响，因为它直接查询最新的项目，不区分库
             logging.info(f"  - 模式: 最新入库 (最近 {scope.days} 天, 最多 {scope.limit} 条)")
-            
-            # --- 修改：不再硬编码，而是允许所有类型，便于未来扩展 ---
-            # 虽然当前UI没地方选，但这样更健壮
             item_types_to_fetch = "Movie,Series,Episode" 
             logging.info(f"  - 正在请求的媒体类型: {item_types_to_fetch}")
-            # --- 结束修改 ---
-
-            # 请求500条作为基数进行过滤
             all_latest = self._get_latest_items(item_types_to_fetch, 500)
-            
-            # --- 新增日志 ---
             logging.info(f"  - 从 Emby API 获取到 {len(all_latest)} 个原始最新项目。")
-            # --- 结束新增 ---
 
             filtered_items = []
             now = datetime.now(timezone.utc)
@@ -64,7 +62,6 @@ class MediaSelector:
                 if not date_created_str: continue
                 try:
                     date_created = datetime.fromisoformat(date_created_str.replace('Z', '+00:00'))
-                    
                     if date_created >= cutoff_date:
                         filtered_items.append(item)
                     else:
@@ -72,38 +69,64 @@ class MediaSelector:
                 except ValueError:
                     continue
             
-            # --- 新增日志 ---
             logging.info(f"  - 按日期过滤后，剩下 {len(filtered_items)} 个项目。")
-            # --- 结束新增 ---
-
-            # 应用最终数量限制
             final_items = filtered_items[:scope.limit]
             item_ids = [item['Id'] for item in final_items]
             logging.info(f"【媒体选择器】成功获取 {len(item_ids)} 个最新入库的媒体ID。")
             return item_ids
 
-        # --- 处理全库、按类型、按媒体库的逻辑 (这部分可以从 genre_logic.py 借鉴和改造) ---
-        
         item_types_to_scan = "Movie,Series"
-        parent_ids_to_scan = []
+        library_ids_to_scan = []
         
+        all_views = []
+        try:
+            views_url = f"{self.base_url}/Users/{self.user_id}/Views"
+            views_resp = self.session.get(views_url, params=self.params)
+            all_views = views_resp.json().get("Items", [])
+        except requests.RequestException as e:
+            logging.error(f"【媒体选择器】获取媒体库列表时出错: {e}")
+            return []
+
         if scope.mode == 'by_type':
             logging.info(f"  - 模式: 按媒体类型 ({scope.media_type})")
             if not scope.media_type: return []
+
+            # --- 核心修改：增加任务目标与范围的兼容性检查 ---
+            if target_collection_type == 'tvshows' and scope.media_type == 'Movie':
+                logging.warning(f"【媒体选择器】任务目标是电视剧库 (tvshows)，但范围选择了仅电影 (Movie)，范围不匹配，返回空列表。")
+                return []
+            if target_collection_type == 'movies' and scope.media_type == 'Series':
+                logging.warning(f"【媒体选择器】任务目标是电影库 (movies)，但范围选择了仅剧集 (Series)，范围不匹配，返回空列表。")
+                return []
+            # --- 结束修改 ---
+
             item_types_to_scan = scope.media_type
-            parent_ids_to_scan.append(None) # 代表扫描所有库
+            library_ids_to_scan.append(None) # 代表扫描所有库
+        
         elif scope.mode == 'by_library':
             logging.info(f"  - 模式: 按媒体库 (IDs: {scope.library_ids})")
             if not scope.library_ids: return []
-            parent_ids_to_scan.extend(scope.library_ids)
+            selected_views = [v for v in all_views if v['Id'] in scope.library_ids]
+            if target_collection_type:
+                selected_views = [v for v in selected_views if v.get("CollectionType") == target_collection_type]
+                logging.info(f"  - 已过滤，仅保留类型为 '{target_collection_type}' 的媒体库。")
+            library_ids_to_scan.extend([v['Id'] for v in selected_views])
+
         elif scope.mode == 'all':
             logging.info("  - 模式: 所有媒体库")
-            parent_ids_to_scan.append(None) # 代表扫描所有库
+            if scope.library_blacklist:
+                blacklist_names = {name.strip() for name in scope.library_blacklist.split(',') if name.strip()}
+                all_views = [v for v in all_views if v['Name'] not in blacklist_names]
+                logging.info(f"  - 已应用黑名单，排除: {blacklist_names}")
+            if target_collection_type:
+                all_views = [v for v in all_views if v.get("CollectionType") == target_collection_type]
+                logging.info(f"  - 已应用目标类型过滤，仅保留类型为 '{target_collection_type}' 的媒体库。")
+            library_ids_to_scan.extend([v['Id'] for v in all_views])
 
         all_items = []
-        for p_id in parent_ids_to_scan:
+        for p_id in library_ids_to_scan:
             url = f"{self.base_url}/Items"
-            params = {**self.params, "Recursive": "true", "IncludeItemTypes": item_types_to_scan, "Fields": "Id,ParentId"}
+            params = {**self.params, "Recursive": "true", "IncludeItemTypes": item_types_to_scan, "Fields": "Id"}
             if p_id:
                 params["ParentId"] = p_id
             
@@ -120,18 +143,6 @@ class MediaSelector:
                 except requests.RequestException as e:
                     logging.error(f"【媒体选择器】获取媒体列表时出错: {e}")
                     break
-        
-        # 应用黑名单
-        if scope.mode == 'all' and scope.library_blacklist:
-            views_url = f"{self.base_url}/Users/{self.user_id}/Views"
-            try:
-                views_resp = self.session.get(views_url, params=self.params)
-                views = views_resp.json().get("Items", [])
-                blacklist_names = {name.strip() for name in scope.library_blacklist.split(',') if name.strip()}
-                blacklisted_ids = {view['Id'] for view in views if view['Name'] in blacklist_names}
-                all_items = [item for item in all_items if item.get("ParentId") not in blacklisted_ids]
-            except requests.RequestException as e:
-                logging.error(f"【媒体选择器】获取媒体库黑名单时出错: {e}")
 
         item_ids = [item['Id'] for item in all_items]
         logging.info(f"【媒体选择器】成功获取 {len(item_ids)} 个媒体ID。")

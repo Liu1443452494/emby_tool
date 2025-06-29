@@ -1,4 +1,3 @@
-// frontend/src/stores/config.js (修改后)
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { API_BASE_URL } from '@/config/apiConfig';
@@ -34,7 +33,6 @@ export const useConfigStore = defineStore('config', () => {
       },
       tasks: []
     },
-    // --- 新增：为 appConfig 添加新任务的默认结构 ---
     douban_poster_updater_config: {
       update_interval: 1.0,
       overwrite_existing: false,
@@ -44,6 +42,11 @@ export const useConfigStore = defineStore('config', () => {
       enabled: false,
       initial_wait_time: 30,
       plugin_wait_time: 60
+    },
+    // --- 新增：为 appConfig 添加新任务的默认结构 ---
+    episode_refresher_config: {
+      overwrite_metadata: true,
+      skip_if_complete: true
     }
     // --- 结束新增 ---
   })
@@ -90,6 +93,12 @@ export const useConfigStore = defineStore('config', () => {
 
         if (!fullConfig.webhook_config) {
           fullConfig.webhook_config = { enabled: false, initial_wait_time: 30, plugin_wait_time: 60 };
+        }
+        // --- 新增：添加新配置的兼容性加载 ---
+        if (!fullConfig.episode_refresher_config) {
+          fullConfig.episode_refresher_config = { overwrite_metadata: true, skip_if_complete: true };
+        } else if (typeof fullConfig.episode_refresher_config.skip_if_complete === 'undefined') {
+          fullConfig.episode_refresher_config.skip_if_complete = true;
         }
         // --- 结束新增 ---
         appConfig.value = fullConfig
@@ -255,7 +264,6 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
-  // --- 新增：保存豆瓣海报更新器配置的 action ---
   async function saveDoubanPosterUpdaterConfig(newConfig) {
     try {
       const response = await fetch(`${API_BASE_URL}/api/config/douban-poster-updater`, {
@@ -289,6 +297,24 @@ export const useConfigStore = defineStore('config', () => {
       return { success: false, message: error.message };
     }
   }
+  
+  // --- 新增：保存剧集刷新器配置的 action ---
+  async function saveEpisodeRefresherConfig(newConfig) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/config/episode-refresher`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '未知错误');
+      
+      appConfig.value.episode_refresher_config = newConfig;
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
   // --- 结束新增 ---
 
   return { 
@@ -305,8 +331,9 @@ export const useConfigStore = defineStore('config', () => {
     saveDoubanFixerConfig,
     saveScheduledTasksConfig,
     triggerScheduledTaskOnce,
-    // --- 新增：导出新方法 ---
     saveDoubanPosterUpdaterConfig,
-    saveWebhookConfig
+    saveWebhookConfig,
+    // --- 新增：导出新方法 ---
+    saveEpisodeRefresherConfig
   }
 })

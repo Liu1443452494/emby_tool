@@ -29,6 +29,8 @@ DEFAULT_SF_MODEL_REMARKS = {
     "deepseek-ai/DeepSeek-V2.5": "（收费 输入：￥1.33/ M Tokens）"
 }
 
+# backend/config.py (修改 load_app_config 函数)
+
 def load_app_config() -> AppConfig:
     config_dir = os.path.dirname(CONFIG_FILE)
     if not os.path.exists(config_dir):
@@ -122,6 +124,11 @@ def load_app_config() -> AppConfig:
 
     if "webhook_config" not in config_data:
         config_data["webhook_config"] = {}
+        
+    # --- 新增：为新配置添加加载逻辑 ---
+    if "episode_refresher_config" not in config_data:
+        config_data["episode_refresher_config"] = {}
+    # --- 结束新增 ---
 
     if "subtitle_processor_config" in config_data:
         del config_data["subtitle_processor_config"]

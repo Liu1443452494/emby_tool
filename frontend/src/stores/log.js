@@ -11,6 +11,7 @@ export const useLogStore = defineStore('log', () => {
   const totalLogs = ref(0)
   const currentPage = ref(1)
   const isConnected = ref(false)
+  const logLevel = ref('INFO')
   let ws = null
   let reconnectTimer = null
 
@@ -22,10 +23,11 @@ export const useLogStore = defineStore('log', () => {
 
   async function fetchHistoricalLogs(page = 1) {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/logs?page=${page}&page_size=${PAGE_SIZE}`)
+      const response = await fetch(`${API_BASE_URL}/api/logs?page=${page}&page_size=${PAGE_SIZE}&level=${logLevel.value}`)
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || '获取历史日志失败')
       
+      // 后端现在直接返回结构化数据
       logs.value = data.logs
       totalLogs.value = data.total
       currentPage.value = page
@@ -34,7 +36,12 @@ export const useLogStore = defineStore('log', () => {
     }
   }
 
-  function connect() {
+  async function setLogLevelAndFetch(newLevel) {
+    logLevel.value = newLevel;
+    await fetchHistoricalLogs(1);
+  }
+
+    function connect() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
     ws = new WebSocket(`${WS_BASE_URL}/ws/logs`)
     ws.onopen = () => {
@@ -44,16 +51,25 @@ export const useLogStore = defineStore('log', () => {
     }
     ws.onmessage = (event) => {
       const logData = JSON.parse(event.data)
-      const formattedLog = `${logData.timestamp} - ${logData.name} - ${logData.level} - ${logData.message}`
-      // 只在用户正在查看第一页时，才将新日志实时推送到顶部
-      if (currentPage.value === 1) {
-        logs.value.unshift(formattedLog)
-        // 保持页面大小，移除最旧的一条日志
-        if (logs.value.length > PAGE_SIZE) {
-          logs.value.pop()
+      
+      const currentLevel = logLevel.value.toUpperCase();
+      const logItemLevel = logData.level.toUpperCase();
+      
+      // 判断日志是否应该在当前筛选级别下可见
+      const isVisibleAtCurrentLevel = currentLevel === 'ALL' || logItemLevel === currentLevel;
+      
+      if (isVisibleAtCurrentLevel) {
+        // 如果日志可见，总数总是要增加的
+        totalLogs.value++;
+
+        // 如果用户正在查看第一页，则将新日志添加到视图中
+        if (currentPage.value === 1) {
+          logs.value.unshift(logData);
+          if (logs.value.length > PAGE_SIZE) {
+            logs.value.pop();
+          }
         }
       }
-      totalLogs.value++
     }
     ws.onclose = () => {
       isConnected.value = false
@@ -68,7 +84,6 @@ export const useLogStore = defineStore('log', () => {
     if (ws) { ws.onclose = null; ws.close(); ws = null; isConnected.value = false; console.log("日志 WebSocket 已手动断开") }
   }
 
-  // --- 核心修复：实现真正的清空日志功能 ---
   async function clearLogs() {
     try {
       await ElMessageBox.confirm(
@@ -81,13 +96,11 @@ export const useLogStore = defineStore('log', () => {
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || '清空失败')
       
-      // 清空成功后，重置前端状态
       logs.value = []
       totalLogs.value = 0
       currentPage.value = 1
       showMessage('success', '日志已成功清空！')
     } catch (error) {
-      // 用户点击取消时，error 的值为 'cancel'，此时不显示错误消息
       if (error !== 'cancel') { 
         showMessage('error', `清空日志失败: ${error.message}`) 
       }
@@ -95,7 +108,7 @@ export const useLogStore = defineStore('log', () => {
   }
 
   return { 
-    logs, totalLogs, currentPage, totalPages, isConnected, 
-    fetchHistoricalLogs, connect, disconnect, clearLogs 
+    logs, totalLogs, currentPage, totalPages, isConnected, logLevel,
+    fetchHistoricalLogs, connect, disconnect, clearLogs, setLogLevelAndFetch
   }
 })
