@@ -166,13 +166,19 @@ class WebhookLogic:
             logging.error(f"【Webhook-数据同步】处理或写入新豆瓣数据时失败: {e}", exc_info=True)
             return False
 
+    # backend/webhook_logic.py (修改 process_new_media_task 函数)
+
     def process_new_media_task(self, item_id: str, cancellation_event: threading.Event):
-        logging.info(f"【Webhook任务】已启动，开始处理新入库媒体 (ID: {item_id})")
+        item_details_pre = self._get_emby_item_details(item_id)
+        item_name_pre = item_details_pre.get("Name", f"Item {item_id}") if item_details_pre else f"Item {item_id}"
+        task_cat = f"Webhook-{item_name_pre}"
+
+        ui_logger.info(f"【Webhook任务】已启动，开始处理新入库媒体: {item_name_pre} (ID: {item_id})", task_category=task_cat)
         
-        logging.info(f"【Webhook任务】【步骤 0/6 | 检查标记】正在检查媒体项是否已被处理过...")
+        ui_logger.info(f"【步骤 0/6 | 检查标记】正在检查媒体项是否已被处理过...", task_category=task_cat)
         item_details = self._get_emby_item_details(item_id)
         if not item_details:
-            logging.error(f"【Webhook任务】无法获取媒体 {item_id} 的详细信息，任务中止。")
+            ui_logger.error(f"无法获取媒体 {item_id} 的详细信息，任务中止。", task_category=task_cat)
             return
 
         item_name = item_details.get("Name", f"Item {item_id}")
@@ -180,20 +186,20 @@ class WebhookLogic:
         provider_ids = item_details.get("ProviderIds", {})
         if self.processed_flag_key in provider_ids:
             processed_time = provider_ids[self.processed_flag_key]
-            logging.info(f"【Webhook任务】检测到媒体【{item_name}】已于 {processed_time} 被处理过，本次任务跳过。")
+            ui_logger.info(f"检测到媒体【{item_name}】已于 {processed_time} 被处理过，本次任务跳过。", task_category=task_cat)
             return
 
-        logging.info(f"【Webhook任务】媒体【{item_name}】是首次处理，继续执行自动化流程。")
+        ui_logger.info(f"媒体【{item_name}】是首次处理，继续执行自动化流程。", task_category=task_cat)
 
         wait_time = self.webhook_config.initial_wait_time
-        logging.info(f"【Webhook任务】【步骤 1/6 | 初始等待】等待 {wait_time} 秒，以便 Emby 自动刮削... (可配置)")
+        ui_logger.info(f"【步骤 1/6 | 初始等待】等待 {wait_time} 秒，以便 Emby 自动刮削... (可配置)", task_category=task_cat)
         time.sleep(wait_time)
         if cancellation_event.is_set(): return
 
-        logging.info(f"【Webhook任务】【步骤 2/6 | 获取豆瓣ID】开始...")
+        ui_logger.info(f"【步骤 2/6 | 获取豆瓣ID】开始...", task_category=task_cat)
         item_details = self._get_emby_item_details(item_id)
         if not item_details:
-            logging.error(f"【Webhook任务】等待后无法再次获取媒体【{item_name}】的详细信息，任务中止。")
+            ui_logger.error(f"等待后无法再次获取媒体【{item_name}】的详细信息，任务中止。", task_category=task_cat)
             return
         
         item_type = item_details.get("Type", "Movie")
@@ -201,64 +207,62 @@ class WebhookLogic:
         douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
 
         if douban_id:
-            logging.info(f"【Webhook任务】【豆瓣ID修复】媒体【{item_name}】已有关联的豆瓣ID: {douban_id}，跳过ID修复步骤。")
+            ui_logger.info(f"【豆瓣ID修复】媒体【{item_name}】已有关联的豆瓣ID: {douban_id}，跳过ID修复步骤。", task_category=task_cat)
         else:
-            logging.info(f"【Webhook任务】【豆瓣ID修复】媒体【{item_name}】缺少豆瓣ID，开始执行ID修复...")
+            ui_logger.info(f"【豆瓣ID修复】媒体【{item_name}】缺少豆瓣ID，开始执行ID修复...", task_category=task_cat)
             fixer_logic = DoubanFixerLogic(self.config)
             if fixer_logic._process_single_item_for_fixing(item_id):
                 refreshed_details = self._get_emby_item_details(item_id)
                 douban_id = next((v for k, v in refreshed_details.get("ProviderIds", {}).items() if k.lower() == 'douban'), None)
                 if douban_id:
-                    logging.info(f"【Webhook任务】【豆瓣ID修复】成功修复并获取到新的豆瓣ID: {douban_id}")
+                    ui_logger.info(f"【豆瓣ID修复】成功修复并获取到新的豆瓣ID: {douban_id}", task_category=task_cat)
                 else:
-                    logging.error(f"【Webhook任务】【豆瓣ID修复】修复任务声称成功，但仍未获取到豆瓣ID。")
+                    ui_logger.error(f"【豆瓣ID修复】修复任务声称成功，但仍未获取到豆瓣ID。", task_category=task_cat)
             else:
-                logging.error(f"【Webhook任务】【豆瓣ID修复】ID修复失败。")
+                ui_logger.error(f"【豆瓣ID修复】ID修复失败。", task_category=task_cat)
         
         if not douban_id:
-            logging.error(f"【Webhook任务】最终未能获取到豆瓣ID，自动化流程中止。")
+            ui_logger.error(f"最终未能获取到豆瓣ID，自动化流程中止。", task_category=task_cat)
             return
         if cancellation_event.is_set(): return
 
-        # --- 核心逻辑修改：实现智能等待 ---
-        logging.info(f"【Webhook任务】【步骤 3/6 | 同步豆瓣数据】开始...")
+        ui_logger.info(f"【步骤 3/6 | 同步豆瓣数据】开始...", task_category=task_cat)
         
-        logging.info(f"【Webhook-智能等待】正在快速检查豆瓣ID {douban_id} 是否已存在于主缓存中...")
+        ui_logger.info(f"【智能等待】正在快速检查豆瓣ID {douban_id} 是否已存在于主缓存中...", task_category=task_cat)
         if self._check_cache_exists(douban_id):
-            logging.info(f"【Webhook-智能等待】命中缓存！无需等待，直接进入后续流程。")
+            ui_logger.info(f"【智能等待】命中缓存！无需等待，直接进入后续流程。", task_category=task_cat)
         else:
-            logging.info(f"【Webhook-智能等待】未命中缓存，需要等待豆瓣插件下载元数据。")
+            ui_logger.info(f"【智能等待】未命中缓存，需要等待豆瓣插件下载元数据。", task_category=task_cat)
             wait_time_for_plugin = self.webhook_config.plugin_wait_time
-            logging.info(f"【Webhook-智能等待】开始等待 {wait_time_for_plugin} 秒... (此时间可在“定时任务”页面的Webhook设置中修改)")
+            ui_logger.info(f"【智能等待】开始等待 {wait_time_for_plugin} 秒... (此时间可在“定时任务”页面的Webhook设置中修改)", task_category=task_cat)
             time.sleep(wait_time_for_plugin)
             
             if cancellation_event.is_set(): return
 
-            logging.info(f"【Webhook-智能等待】等待结束，开始尝试从本地文件系统增量更新缓存。")
+            ui_logger.info(f"【智能等待】等待结束，开始尝试从本地文件系统增量更新缓存。", task_category=task_cat)
             if not self._update_douban_cache_incrementally(douban_id, item_type):
-                logging.warning(f"【Webhook-智能等待】增量更新失败。未能从本地文件找到豆瓣ID {douban_id} 的元数据，后续流程可能失败或使用旧数据。")
-        # --- 结束核心修改 ---
+                ui_logger.warning(f"【智能等待】增量更新失败。未能从本地文件找到豆瓣ID {douban_id} 的元数据，后续流程可能失败或使用旧数据。", task_category=task_cat)
         
         if cancellation_event.is_set(): return
 
-        logging.info(f"【Webhook任务】【步骤 4/6 | 演员中文化】开始...")
+        ui_logger.info(f"【步骤 4/6 | 演员中文化】开始...", task_category=task_cat)
         try:
             localizer_logic = ActorLocalizerLogic(self.config)
-            localizer_logic._process_single_item_for_localization(item_id, self.config.actor_localizer_config)
+            localizer_logic._process_single_item_for_localization(item_id, self.config.actor_localizer_config, task_category=task_cat)
         except Exception as e:
-            logging.error(f"【Webhook任务】【演员中文化】步骤执行失败，但将继续后续任务。错误: {e}", exc_info=True)
+            ui_logger.error(f"【演员中文化】步骤执行失败，但将继续后续任务。错误: {e}", task_category=task_cat, exc_info=True)
         if cancellation_event.is_set(): return
 
-        logging.info(f"【Webhook任务】【步骤 5/6 | 豆瓣海报更新】开始...")
+        ui_logger.info(f"【步骤 5/6 | 豆瓣海报更新】开始...", task_category=task_cat)
         try:
             poster_logic = DoubanPosterUpdaterLogic(self.config)
             poster_logic.run_poster_update_for_items([item_id], self.config.douban_poster_updater_config, cancellation_event, None, None)
         except Exception as e:
-            logging.error(f"【Webhook任务】【豆瓣海报更新】步骤执行失败。错误: {e}", exc_info=True)
+            ui_logger.error(f"【豆瓣海报更新】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
         if cancellation_event.is_set(): return
         
-        logging.info(f"【Webhook任务】【步骤 6/6 | 写入标记】所有自动化步骤执行完毕，开始写入完成标记...")
+        ui_logger.info(f"【步骤 6/6 | 写入标记】所有自动化步骤执行完毕，开始写入完成标记...", task_category=task_cat)
         if self._set_processed_flag(item_id):
-            logging.info(f"【Webhook任务】媒体【{item_name}】的首次自动化处理流程已全部执行完毕并成功标记。")
+            ui_logger.info(f"媒体【{item_name}】的首次自动化处理流程已全部执行完毕并成功标记。", task_category=task_cat)
         else:
-            logging.warning(f"【Webhook任务】媒体【{item_name}】的自动化流程已执行，但写入完成标记失败。下次可能会重复执行。")
+            ui_logger.warning(f"媒体【{item_name}】的自动化流程已执行，但写入完成标记失败。下次可能会重复执行。", task_category=task_cat)

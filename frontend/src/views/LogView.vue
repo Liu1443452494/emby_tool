@@ -1,3 +1,4 @@
+<!-- frontend/src/views/LogView.vue (修改后) -->
 <template>
   <div class="log-page">
     <div class="page-header">
@@ -10,6 +11,7 @@
       <div class="left-controls">
         <el-radio-group v-model="logLevelProxy" @change="handleLevelChange">
           <el-radio-button label="INFO">重要</el-radio-button>
+          <el-radio-button label="DEBUG">调试</el-radio-button>
           <el-radio-button label="WARNING">警告</el-radio-button>
           <el-radio-button label="ERROR">错误</el-radio-button>
           <el-radio-button label="ALL">全部</el-radio-button>
@@ -117,33 +119,21 @@ const getLineNumber = (index) => {
 }
 
 .log-content {
-  font-family: 'Courier New', Courier, monospace;
+  /* 使用等宽字体是实现对齐的关键 */
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
   font-size: 14px;
   color: #bdc1c6;
 }
 
-/* --- 核心修改：调整 log-line 及其子元素的样式 --- */
 .log-line {
   display: flex;
   align-items: baseline;
   line-height: 1.6;
   padding: 2px 10px;
-  /* 移除 white-space: pre，让 flexbox 控制布局 */
+  white-space: pre; /* 保证空格被保留，对于对齐至关重要 */
 }
 .log-line:hover {
   background-color: rgba(255, 255, 255, 0.05);
-}
-
-.line-number,
-.log-level,
-.log-timestamp,
-.log-separator,
-.log-category,
-.log-arrow {
-  /* flex-shrink: 0 保证这些元素不会被压缩 */
-  flex-shrink: 0;
-  /* white-space: pre 保证元素内部的连续空格被保留 */
-  white-space: pre;
 }
 
 .line-number {
@@ -152,43 +142,46 @@ const getLineNumber = (index) => {
   color: #7f8389;
   user-select: none;
   margin-right: 15px;
+  flex-shrink: 0;
 }
 
 .log-level {
   font-weight: bold;
-  /* 移除固定宽度，让其自适应内容 */
-  /* width: 80px; */ 
-  margin-right: 10px; /* 增加右边距以分隔 */
+  width: 80px; /* 固定宽度以对齐 */
+  flex-shrink: 0;
 }
 
 .log-timestamp {
   color: #969ba1;
+  flex-shrink: 0;
 }
 
 .log-separator {
   margin: 0 10px;
   color: #7f8389;
+  flex-shrink: 0;
 }
 
 .log-category {
-  /* 移除固定宽度 */
-  /* width: 140px; */
+  width: 140px; /* 固定宽度以对齐 */
   color: #8ab4f8; /* 任务类别颜色 */
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-arrow {
   margin: 0 10px;
   color: #7f8389;
+  flex-shrink: 0;
 }
 
 .log-message {
-  /* flex-grow: 1 让消息部分填充所有剩余空间 */
   flex-grow: 1;
-  /* 允许消息内容换行 */
   white-space: pre-wrap; 
   word-break: break-all;
 }
-/* --- 结束核心修改 --- */
 
 .log-level-info { color: #67c23a; }
 .log-level-warning { color: #e6a23c; }

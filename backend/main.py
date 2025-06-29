@@ -176,8 +176,9 @@ def _episode_refresher_task_runner(
         task_cat # 将任务类别传递给下一层
     )
 
+# backend/main.py (修改 trigger_scheduled_task 函数)
+
 def trigger_scheduled_task(task_id: str):
-    # --- 核心修改：使用 ui_logger 并定义 task_name ---
     task_name_map = {
         "actor_localizer": "演员中文化",
         "douban_fixer": "豆瓣ID修复",
@@ -208,7 +209,8 @@ def trigger_scheduled_task(task_id: str):
             logic.run_localization_for_items, 
             task_name, 
             item_ids, 
-            config.actor_localizer_config
+            config.actor_localizer_config,
+            task_category=task_name  # 传递 task_category
         )
     elif task_id == "douban_fixer":
         logic = DoubanFixerLogic(config)
@@ -234,7 +236,7 @@ def trigger_scheduled_task(task_id: str):
             task_name,
             series_ids=item_ids,
             config=config,
-            task_name=task_name # 传递 task_name
+            task_name=task_name
         )
     else:
         logging.warning(f"【调度任务】未知的任务ID: {task_id}")
@@ -875,6 +877,8 @@ def apply_actor_changes_api(req: ActorLocalizerApplyRequest):
     )
     return {"status": "success", "message": "应用演员中文化任务已启动", "task_id": task_id}
 
+# backend/main.py (修改 apply_actor_changes_directly_api 函数)
+
 @app.post("/api/actor-localizer/apply-directly")
 def apply_actor_changes_directly_api():
     config = app_config.load_app_config()
@@ -887,7 +891,8 @@ def apply_actor_changes_directly_api():
     task_id = task_manager.register_task(
         logic.apply_actor_changes_directly_task,
         task_name,
-        config.actor_localizer_config
+        config.actor_localizer_config,
+        task_category=task_name # 传递 task_category
     )
     return {"status": "success", "message": "自动应用任务已启动", "task_id": task_id}
 
