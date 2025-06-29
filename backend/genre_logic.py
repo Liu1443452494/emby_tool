@@ -1,14 +1,17 @@
-# backend/genre_logic.py (完整代码)
+# backend/genre_logic.py (修改后)
 
 import logging
 import threading
 import time
 import requests
 from typing import List, Dict, Any
+
+# --- 核心修改 1: 导入 ui_logger ---
+from log_manager import ui_logger
 from models import AppConfig
 from task_manager import TaskManager
 
-# --- NFO 生成逻辑 (为了完整性包含，实际未修改) ---
+# NFO 生成逻辑保持不变
 def create_nfo_from_details(details: dict) -> str:
     from xml.sax.saxutils import escape
     item_type = details.get("Type", "Movie")
@@ -163,28 +166,35 @@ class GenreLogic:
             
         return new_items, has_change
 
+    # --- 核心修改 2: 重构 preview_changes_task 函数 ---
     def preview_changes_task(self, mapping: Dict[str, str], mode: str, media_type: str, library_ids: List[str], blacklist: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-        logging.info(f"开始类型替换预览任务，模式: {mode}")
-        items_to_scan = self._get_items_to_scan(mode, media_type, library_ids, blacklist, cancellation_event)
+        task_cat = f"类型替换预览({mode})"
+        ui_logger.info(f"【步骤 1/3】任务启动，模式: {mode}", task_category=task_cat)
         
+        items_to_scan = self._get_items_to_scan(mode, media_type, library_ids, blacklist, cancellation_event)
         total_count = len(items_to_scan)
+        
+        ui_logger.info(f"【步骤 2/3】范围扫描完成，共找到 {total_count} 个媒体项需要检查。", task_category=task_cat)
+        ui_logger.info("【步骤 3/3】开始逐一检查媒体类型，这可能需要一些时间...", task_category=task_cat)
         task_manager.update_task_progress(task_id, 0, total_count)
         
         changes_found = []
-        log_lines = [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 开始扫描，共找到 {total_count} 个媒体项..."]
+        console_log_lines = []
 
         for i, item in enumerate(items_to_scan):
             if cancellation_event.is_set():
-                logging.info("预览任务被用户取消。")
-                return
+                ui_logger.warning("预览任务被用户取消。", task_category=task_cat)
+                break
 
             item_name = item.get('name', f"Item {item['id']}")
-            logging.info(f"预览进度 {i+1}/{total_count}: 正在扫描 [{item_name}]")
+            ui_logger.debug(f"进度 {i+1}/{total_count}: 正在扫描 [{item_name}]", task_category=task_cat)
             
             try:
                 full_item = self._get_full_item(item['id'])
                 current_genres = full_item.get('GenreItems', [])
-                if not current_genres: continue
+                if not current_genres:
+                    ui_logger.debug(f"  -> 跳过 [{item_name}]，无类型信息。", task_category=task_cat)
+                    continue
                 
                 new_genre_items, has_change = self._build_new_genre_items(current_genres, mapping)
                 
@@ -192,7 +202,8 @@ class GenreLogic:
                     old_names = sorted([g['Name'] for g in current_genres])
                     new_names = sorted([g['Name'] for g in new_genre_items])
                     log_message = f"发现变更: [{item_name}] | 旧: {old_names} -> 新: {new_names}"
-                    log_lines.append(log_message)
+                    ui_logger.info(log_message, task_category=task_cat)
+                    console_log_lines.append(log_message)
                     
                     changes_found.append({
                         "id": item['id'],
@@ -203,38 +214,45 @@ class GenreLogic:
                     })
             except Exception as e:
                 error_message = f"扫描项目 [{item_name}] (ID: {item['id']}) 时出错: {e}"
-                log_lines.append(error_message)
-                logging.error(error_message)
+                ui_logger.error(error_message, task_category=task_cat)
+                console_log_lines.append(error_message)
             
             task_manager.update_task_progress(task_id, i + 1, total_count)
         
         if not cancellation_event.is_set():
-            log_lines.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 预览完成。共发现 {len(changes_found)} 个可应用的修改。")
+            final_log = f"预览完成。共发现 {len(changes_found)} 个可应用的修改。"
+            ui_logger.info(final_log, task_category=task_cat)
+            console_log_lines.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {final_log}")
         
-        # 关键修改：返回结果
-        return {"logs": "\n".join(log_lines), "results": changes_found}
+        return {"logs": "\n".join(console_log_lines), "results": changes_found}
 
-
+    # --- 核心修改 3: 重构 apply_changes_task 函数 ---
     def apply_changes_task(self, items_to_apply: List[Dict], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        task_cat = "类型替换应用"
         total_count = len(items_to_apply)
-        logging.info(f"开始应用类型替换，共 {total_count} 个项目。")
+        ui_logger.info(f"任务启动，开始应用类型替换，共 {total_count} 个项目。", task_category=task_cat)
         task_manager.update_task_progress(task_id, 0, total_count)
+        
         for i, item_data in enumerate(items_to_apply):
             if cancellation_event.is_set():
-                logging.info(f"类型替换任务在处理第 {i+1} 个项目时被取消。")
-                return
+                ui_logger.warning(f"类型替换任务在处理第 {i+1} 个项目时被取消。", task_category=task_cat)
+                break
+                
             item_id, item_name, new_genre_items = item_data['id'], item_data['name'], item_data['new_genre_items_for_apply']
-            logging.info(f"应用进度 {i+1}/{total_count}: 正在应用到 [{item_name}]")
+            ui_logger.info(f"进度 {i+1}/{total_count}: 正在应用到 [{item_name}]", task_category=task_cat)
+            
             try:
                 full_item = self._get_full_item(item_id)
                 full_item['GenreItems'] = new_genre_items
                 if self._update_item_on_server(item_id, full_item):
-                    logging.info(f"成功更新 [{item_name}]")
+                    ui_logger.debug(f"  -> 成功更新 [{item_name}]", task_category=task_cat)
                 else:
-                    logging.warning(f"更新 [{item_name}] 失败，服务器未返回成功状态。")
+                    ui_logger.warning(f"  -> 更新 [{item_name}] 失败，服务器未返回成功状态。", task_category=task_cat)
                 time.sleep(0.1)
             except Exception as e:
-                logging.error(f"应用到 [{item_name}] (ID: {item_id}) 时出错: {e}")
+                ui_logger.error(f"  -> 应用到 [{item_name}] (ID: {item_id}) 时出错: {e}", task_category=task_cat)
+            
             task_manager.update_task_progress(task_id, i + 1, total_count)
+            
         if not cancellation_event.is_set():
-            logging.info("类型替换应用任务完成。")
+            ui_logger.info("类型替换应用任务完成。", task_category=task_cat)

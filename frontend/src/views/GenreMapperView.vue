@@ -242,10 +242,20 @@ const saveFromEditor = async () => {
   isEditorVisible.value = false
 }
 
+// --- 核心修改 4: 监听任务变化，并正确处理日志 ---
 watch(() => taskStore.tasks, (newTasks, oldTasks) => {
   const activePreviewId = genreStore.activePreviewTaskId;
   const activeApplyId = genreStore.activeApplyTaskId;
 
+  // 实时更新预览日志
+  if (activePreviewId) {
+    const previewTask = newTasks.find(t => t.id === activePreviewId);
+    if (previewTask && previewTask.result && previewTask.result.logs) {
+      genreStore.consoleOutput = previewTask.result.logs;
+    }
+  }
+
+  // 预览任务结束
   if (activePreviewId && !newTasks.some(t => t.id === activePreviewId)) {
     const finishedTask = oldTasks.find(t => t.id === activePreviewId);
     
@@ -253,7 +263,7 @@ watch(() => taskStore.tasks, (newTasks, oldTasks) => {
       if (finishedTask.status === 'completed' && finishedTask.result) {
         const result = finishedTask.result;
         genreStore.previewResults = result.results;
-        genreStore.consoleOutput = result.logs;
+        genreStore.consoleOutput = result.logs; // 确保最终日志被设置
         ElMessage.success('预览任务完成！');
       } else if (finishedTask.status === 'failed') {
         ElMessage.error('预览任务失败，请检查应用日志。');
@@ -267,6 +277,7 @@ watch(() => taskStore.tasks, (newTasks, oldTasks) => {
     genreStore.clearActivePreviewTask();
   }
 
+  // 应用任务结束
   if (activeApplyId && !newTasks.some(t => t.id === activeApplyId)) {
     const finishedTask = oldTasks.find(t => t.id === activeApplyId);
 
@@ -286,7 +297,7 @@ watch(() => taskStore.tasks, (newTasks, oldTasks) => {
 }, { deep: true });
 </script>
 
-<!-- 核心修改: 添加 scoped style -->
+<!-- 样式部分保持不变 -->
 <style scoped>
 .genre-mapper-page {
   --custom-theme-color: #609e95;
