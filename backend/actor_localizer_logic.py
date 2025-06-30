@@ -1,5 +1,3 @@
-# backend/actor_localizer_logic.py (修改后)
-
 import logging
 import threading
 import time
@@ -15,6 +13,7 @@ from typing import List, Dict, Any, Generator, Optional, Iterable
 try:
     import translators as ts
 except ImportError:
+    # 底层依赖缺失，保留 logging.warning
     logging.warning("【演员中文化】'translators' 库未安装，相关功能将不可用。请运行 'pip install translators'。")
     ts = None
 
@@ -33,17 +32,17 @@ class ActorLocalizerLogic:
         self.douban_map = self._load_douban_data()
 
     def _load_douban_data(self) -> Dict:
-        task_cat = "系统初始化"
+        task_cat = "演员中文化-初始化" # --- 统一任务类别 ---
         if not os.path.exists(DOUBAN_CACHE_FILE):
-            ui_logger.warning("【演员中文化】未找到豆瓣缓存文件，匹配功能将无法使用。", task_category=task_cat)
+            ui_logger.warning("未找到豆瓣缓存文件，匹配功能将无法使用。", task_category=task_cat)
             return {}
         try:
             with open(DOUBAN_CACHE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            ui_logger.info(f"【演员中文化】成功加载 {len(data)} 条豆瓣缓存数据。", task_category=task_cat)
+            ui_logger.info(f"成功加载 {len(data)} 条豆瓣缓存数据。", task_category=task_cat)
             return data
         except Exception as e:
-            ui_logger.error(f"【演员中文化】加载豆瓣缓存文件失败: {e}", task_category=task_cat)
+            ui_logger.error(f"加载豆瓣缓存文件失败: {e}", task_category=task_cat)
             return {}
 
     def _contains_chinese(self, text: str) -> bool:
@@ -133,60 +132,62 @@ class ActorLocalizerLogic:
             return False
 
     def _translate_text_with_retry(self, text: str, config: ActorLocalizerConfig, context_title: Optional[str] = None) -> str:
+        task_cat = f"翻译引擎({config.translation_mode})" # --- 定义任务类别 ---
         if not text: return ""
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
-                    logging.warning(f"【翻译-单个】第 {attempt + 1}/{max_retries} 次重试翻译: '{text}'")
+                    ui_logger.warning(f"第 {attempt + 1}/{max_retries} 次重试翻译: '{text}'", task_category=task_cat)
                 if config.translation_mode == 'translators':
                     if ts is None: raise ImportError("translators 库未安装")
-                    logging.info(f"【翻译-单个】[translators:{config.translator_engine}] 正在翻译: '{text}'")
+                    ui_logger.debug(f"[translators:{config.translator_engine}] 正在翻译: '{text}'", task_category=task_cat)
                     return ts.translate_text(text, translator=config.translator_engine, to_language='zh')
                 elif config.translation_mode == 'tencent':
-                    logging.info(f"【翻译-单个】[腾讯云API] 正在翻译: '{text}'")
+                    ui_logger.debug(f"[腾讯云API] 正在翻译: '{text}'", task_category=task_cat)
                     return self.translate_with_tencent_api(text, config.tencent_config)
                 elif config.translation_mode == 'siliconflow':
-                    logging.info(f"【翻译-单个】[SiliconFlow:{config.siliconflow_config.model_name}] 正在翻译: '{text}' (上下文: {context_title or '无'})")
+                    ui_logger.debug(f"[SiliconFlow:{config.siliconflow_config.model_name}] 正在翻译: '{text}' (上下文: {context_title or '无'})", task_category=task_cat)
                     return self.translate_with_siliconflow_api(text, config.siliconflow_config, context_title)
                 return text
             except requests.exceptions.RequestException as e:
-                logging.error(f"【翻译-单个】翻译 '{text}' 时发生网络错误 (尝试 {attempt + 1}/{max_retries}): {e}")
+                ui_logger.error(f"翻译 '{text}' 时发生网络错误 (尝试 {attempt + 1}/{max_retries}): {e}", task_category=task_cat)
                 if attempt + 1 >= max_retries:
-                    logging.error(f"【翻译-单个】已达到最大重试次数，放弃翻译 '{text}'。")
+                    ui_logger.error(f"已达到最大重试次数，放弃翻译 '{text}'。", task_category=task_cat)
                     return text
             except Exception as e:
-                logging.error(f"【翻译-单个】翻译 '{text}' 时发生不可重试的错误: {e}")
+                ui_logger.error(f"翻译 '{text}' 时发生不可重试的错误: {e}", task_category=task_cat)
                 return text
         return text
 
     def _translate_batch_with_retry(self, texts: List[str], config: ActorLocalizerConfig, context_title: Optional[str] = None) -> Optional[List[str]]:
+        task_cat = f"翻译引擎({config.translation_mode})" # --- 定义任务类别 ---
         if not texts: return []
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
-                    logging.warning(f"【翻译-批量】第 {attempt + 1}/{max_retries} 次重试批量翻译 (共 {len(texts)} 项)...")
+                    ui_logger.warning(f"第 {attempt + 1}/{max_retries} 次重试批量翻译 (共 {len(texts)} 项)...", task_category=task_cat)
                 if config.translation_mode == 'siliconflow':
-                    logging.info(f"【翻译-批量】[SiliconFlow:{config.siliconflow_config.model_name}] 正在批量翻译 {len(texts)} 个角色名 (上下文: {context_title or '无'})")
-                    logging.debug(f"【翻译-批量】请求内容: {texts}")
+                    ui_logger.debug(f"[SiliconFlow:{config.siliconflow_config.model_name}] 正在批量翻译 {len(texts)} 个角色名 (上下文: {context_title or '无'})", task_category=task_cat)
+                    logging.debug(f"【翻译-批量】请求内容: {texts}") # 保留底层详细日志
                     translated_texts = self.translate_with_siliconflow_api_batch(texts, config.siliconflow_config, context_title)
-                    logging.debug(f"【翻译-批量】返回内容: {translated_texts}")
+                    logging.debug(f"【翻译-批量】返回内容: {translated_texts}") # 保留底层详细日志
                     if len(translated_texts) != len(texts):
-                        logging.error(f"【翻译-批量】严重错误：API返回结果数量 ({len(translated_texts)}) 与请求数量 ({len(texts)}) 不匹配！")
+                        ui_logger.error(f"严重错误：API返回结果数量 ({len(translated_texts)}) 与请求数量 ({len(texts)}) 不匹配！", task_category=task_cat)
                         raise ValueError("Batch translation result count mismatch.")
-                    logging.info(f"【翻译-批量】成功完成，返回 {len(translated_texts)} 个结果。")
+                    ui_logger.info(f"批量翻译成功，返回 {len(translated_texts)} 个结果。", task_category=task_cat)
                     return translated_texts
                 else:
-                    logging.warning(f"【翻译-批量】当前翻译模式 '{config.translation_mode}' 不支持批量翻译，将自动降级。")
+                    ui_logger.warning(f"当前翻译模式 '{config.translation_mode}' 不支持批量翻译，将自动降级。", task_category=task_cat)
                     return None
             except Exception as e:
-                logging.error(f"【翻译-批量】批量翻译时发生错误 (尝试 {attempt + 1}/{max_retries}): {e}")
+                ui_logger.error(f"批量翻译时发生错误 (尝试 {attempt + 1}/{max_retries}): {e}", task_category=task_cat)
                 if attempt + 1 >= max_retries:
-                    logging.error(f"【翻译-批量】已达到最大重试次数，批量翻译失败。")
+                    ui_logger.error(f"已达到最大重试次数，批量翻译失败。", task_category=task_cat)
                     return None
         return None
-
+    
     def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig, task_category: str) -> bool:
         details = self._get_item_details(item_id)
         if not details: return False

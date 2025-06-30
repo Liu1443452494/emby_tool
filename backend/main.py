@@ -449,11 +449,12 @@ def save_download_config_api(download_config: DownloadConfig):
     except Exception as e:
         logging.error(f"保存下载设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存下载设置时发生错误: {e}")
+
 @app.post("/api/config/proxy")
 def save_proxy_config_api(proxy_config: ProxyConfig):
     try:
         # --- 核心修改：使用 ui_logger 发送中文日志给前端 ---
-        ui_logger.info("正在保存网络代理设置...")
+        ui_logger.info("正在保存网络代理设置...", task_category="系统配置")
         # --- 使用 logging.debug 记录详细的技术日志到后端 ---
         logging.debug(f"接收到的代理配置原始数据: {proxy_config.model_dump_json()}")
         
@@ -465,23 +466,25 @@ def save_proxy_config_api(proxy_config: ProxyConfig):
         app_config.save_app_config(current_app_config)
         
         # --- 核心修改：使用 ui_logger 发送中文成功日志给前端 ---
-        ui_logger.info("代理设置保存成功！")
+        ui_logger.info("代理设置保存成功！", task_category="系统配置")
         
         return {"success": True, "message": "代理设置已保存！"}
     except Exception as e:
         logging.error(f"保存代理设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存代理设置时发生错误: {e}")
+
 @app.post("/api/config/proxy/test")
 def test_proxy_config_api(proxy_config: ProxyConfig):
+    task_cat = "代理测试" # --- 定义任务类别 ---
     if not proxy_config.enabled:
-        logging.info("【代理测试】代理未启用，跳过测试。")
+        ui_logger.info("代理未启用，跳过测试。", task_category=task_cat)
         return {"success": True, "message": "代理未启用，无需测试。"}
     proxy_url = proxy_config.url
     if not proxy_url:
         raise HTTPException(status_code=400, detail="代理已启用，但代理地址不能为空。")
     if not (proxy_url.startswith("http://") or proxy_url.startswith("https://")):
         raise HTTPException(status_code=400, detail="代理地址格式不正确，必须以 http:// 或 https:// 开头。")
-    logging.info(f"【代理测试】开始测试，将通过代理 '{proxy_url}' 连接外部网络...")
+    ui_logger.info(f"开始测试，将通过代理 '{proxy_url}' 连接外部网络...", task_category=task_cat)
     proxies = {'http': proxy_url, 'https': proxy_url}
     test_target_url = "https://www.baidu.com" 
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'}
@@ -492,20 +495,21 @@ def test_proxy_config_api(proxy_config: ProxyConfig):
         latency_ms = (end_time - start_time) * 1000
         response.raise_for_status()
         success_msg = f"代理连接成功！能够访问 {test_target_url}。"
-        logging.info(f"【代理测试】成功！服务器返回状态码: {response.status_code}。延迟: {latency_ms:.2f} ms。")
+        ui_logger.info(f"成功！服务器返回状态码: {response.status_code}。延迟: {latency_ms:.2f} ms。", task_category=task_cat)
         return {"success": True, "message": success_msg, "latency": f"{latency_ms:.2f} ms"}
     except requests.exceptions.ProxyError as e:
-        logging.error(f"【代理测试】失败！代理错误: {e}", exc_info=True)
+        ui_logger.error(f"失败！代理错误: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=500, detail=f"代理服务器错误，请检查地址和端口是否正确，以及代理服务是否正常运行。")
     except requests.exceptions.ConnectTimeout:
-        logging.error(f"【代理测试】失败！连接代理服务器超时。")
+        ui_logger.error(f"失败！连接代理服务器超时。", task_category=task_cat)
         raise HTTPException(status_code=500, detail="连接代理服务器超时，请检查网络或代理设置。")
     except requests.exceptions.RequestException as e:
-        logging.error(f"【代理测试】失败！发生网络请求异常: {e}", exc_info=True)
+        ui_logger.error(f"失败！发生网络请求异常: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=500, detail=f"通过代理访问外部网络失败，请检查代理是否能访问公网。错误: {e}")
     except Exception as e:
-        logging.error(f"【代理测试】失败！发生未知错误: {e}", exc_info=True)
+        ui_logger.error(f"失败！发生未知错误: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=500, detail=f"发生未知错误: {e}")
+    
 @app.post("/api/config/tmdb")
 def save_and_test_tmdb_config_api(tmdb_config: TmdbConfig):
     try:

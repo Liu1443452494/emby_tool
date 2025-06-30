@@ -1,4 +1,3 @@
-# backend/genre_logic.py (修改后)
 
 import logging
 import threading
@@ -11,7 +10,6 @@ from log_manager import ui_logger
 from models import AppConfig
 from task_manager import TaskManager
 
-# NFO 生成逻辑保持不变
 def create_nfo_from_details(details: dict) -> str:
     from xml.sax.saxutils import escape
     item_type = details.get("Type", "Movie")
@@ -64,6 +62,7 @@ class GenreLogic:
         self.params = {"api_key": self.api_key}
 
     def get_all_genres(self) -> List[Dict[str, str]]:
+        # 这个函数是同步的，且是获取基础数据，日志可以不那么详细
         url = f"{self.base_url}/Genres"
         params = {**self.params, "UserId": self.user_id}
         response = requests.get(url, params=params, timeout=15)
@@ -72,6 +71,7 @@ class GenreLogic:
         return [{"id": g["Id"], "name": g["Name"]} for g in genres if "Id" in g and "Name" in g]
 
     def _get_items_to_scan(self, mode: str, media_type: str = None, library_ids: List[str] = None, blacklist: str = None, cancellation_event: threading.Event = None) -> List[Dict[str, str]]:
+        task_cat = f"类型替换-扫描({mode})" # --- 定义任务类别 ---
         all_items = []
         if mode == 'byType':
             if not media_type: return []
@@ -79,7 +79,9 @@ class GenreLogic:
             params = {**self.params, "Recursive": "true", "IncludeItemTypes": media_type, "Fields": "Id,Name"}
             start_index = 0
             while True:
-                if cancellation_event and cancellation_event.is_set(): logging.info("任务在获取列表阶段被取消。"); return []
+                if cancellation_event and cancellation_event.is_set(): 
+                    ui_logger.info("任务在获取列表阶段被取消。", task_category=task_cat)
+                    return []
                 params["StartIndex"] = start_index
                 response = requests.get(url, params=params, timeout=60)
                 response.raise_for_status()
@@ -90,12 +92,16 @@ class GenreLogic:
         elif mode == 'byLibrary':
             if not library_ids: return []
             for lib_id in library_ids:
-                if cancellation_event and cancellation_event.is_set(): logging.info("任务在获取列表阶段被取消。"); return []
+                if cancellation_event and cancellation_event.is_set(): 
+                    ui_logger.info("任务在获取列表阶段被取消。", task_category=task_cat)
+                    return []
                 url = f"{self.base_url}/Items"
                 params = {**self.params, "ParentId": lib_id, "Recursive": "true", "IncludeItemTypes": "Movie,Series", "Fields": "Id,Name"}
                 start_index = 0
                 while True:
-                    if cancellation_event and cancellation_event.is_set(): logging.info("任务在获取列表阶段被取消。"); return []
+                    if cancellation_event and cancellation_event.is_set(): 
+                        ui_logger.info("任务在获取列表阶段被取消。", task_category=task_cat)
+                        return []
                     params["StartIndex"] = start_index
                     response = requests.get(url, params=params, timeout=60)
                     response.raise_for_status()
@@ -108,7 +114,9 @@ class GenreLogic:
             params = {**self.params, "Recursive": "true", "IncludeItemTypes": "Movie,Series", "Fields": "Id,Name,ParentId"}
             start_index = 0
             while True:
-                if cancellation_event and cancellation_event.is_set(): logging.info("任务在获取列表阶段被取消。"); return []
+                if cancellation_event and cancellation_event.is_set(): 
+                    ui_logger.info("任务在获取列表阶段被取消。", task_category=task_cat)
+                    return []
                 params["StartIndex"] = start_index
                 response = requests.get(url, params=params, timeout=60)
                 response.raise_for_status()
