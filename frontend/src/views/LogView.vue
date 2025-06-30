@@ -11,14 +11,24 @@
       <div class="left-controls">
         <el-radio-group v-model="logLevelProxy" @change="handleLevelChange">
           <el-radio-button label="INFO">重要</el-radio-button>
-          <!-- 核心修改 1: 移除 "调试" 按钮 -->
-          <!-- <el-radio-button label="DEBUG">调试</el-radio-button> -->
           <el-radio-button label="WARNING">警告</el-radio-button>
           <el-radio-button label="ERROR">错误</el-radio-button>
           <el-radio-button label="ALL">全部</el-radio-button>
         </el-radio-group>
       </div>
       <div class="right-controls">
+        <!-- --- 核心修改 1: 增加每页条数选择器 --- -->
+        <el-select 
+          v-model="pageSizeProxy" 
+          @change="handlePageSizeChange" 
+          placeholder="每页条数" 
+          style="width: 120px; margin-right: 15px;"
+        >
+          <el-option :value="500" label="500 条/页" />
+          <el-option :value="1000" label="1000 条/页" />
+          <el-option :value="2000" label="2000 条/页" />
+          <el-option :value="5000" label="5000 条/页" />
+        </el-select>
         <el-button type="danger" @click="logStore.clearLogs" :disabled="logStore.totalLogs === 0">清空日志</el-button>
       </div>
     </div>
@@ -42,7 +52,7 @@
     <div class="pagination-footer">
        <el-pagination
         v-model:current-page="logStore.currentPage"
-        :page-size="100"
+        :page-size="logStore.pageSize"
         :total="logStore.totalLogs"
         layout="total, prev, pager, next, jumper"
         background
@@ -61,7 +71,13 @@ const logStore = useLogStore();
 
 const logLevelProxy = computed({
   get: () => logStore.logLevel,
-  set: (val) => {} // 只读代理
+  set: (val) => {}
+});
+
+// --- 核心修改 2: 增加 pageSize 的计算属性代理 ---
+const pageSizeProxy = computed({
+  get: () => logStore.pageSize,
+  set: (val) => {}
 });
 
 onMounted(() => {
@@ -81,8 +97,14 @@ const handleLevelChange = (newLevel) => {
   logStore.setLogLevelAndFetch(newLevel);
 };
 
+// --- 核心修改 3: 增加处理页面大小变化的函数 ---
+const handlePageSizeChange = (newPageSize) => {
+  logStore.setPageSizeAndFetch(newPageSize);
+};
+
 const getLineNumber = (index) => {
-  return logStore.totalLogs - ((logStore.currentPage - 1) * 100) - index;
+  // --- 核心修改 4: 行号计算使用动态的 pageSize ---
+  return (logStore.currentPage - 1) * logStore.pageSize + index + 1;
 };
 </script>
 
@@ -110,6 +132,13 @@ const getLineNumber = (index) => {
   flex-shrink: 0;
 }
 
+/* --- 核心修改 5: 增加 right-controls 样式 --- */
+.left-controls, .right-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
 .log-container {
   flex-grow: 1;
   background-color: #292A2D; 
@@ -120,7 +149,6 @@ const getLineNumber = (index) => {
 }
 
 .log-content {
-  /* 使用等宽字体是实现对齐的关键 */
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
   font-size: 14px;
   color: #bdc1c6;
@@ -131,7 +159,7 @@ const getLineNumber = (index) => {
   align-items: baseline;
   line-height: 1.6;
   padding: 2px 10px;
-  white-space: pre; /* 保证空格被保留，对于对齐至关重要 */
+  white-space: pre;
 }
 .log-line:hover {
   background-color: rgba(255, 255, 255, 0.05);
@@ -148,7 +176,7 @@ const getLineNumber = (index) => {
 
 .log-level {
   font-weight: bold;
-  width: 80px; /* 固定宽度以对齐 */
+  width: 65px;
   flex-shrink: 0;
 }
 
@@ -164,9 +192,8 @@ const getLineNumber = (index) => {
 }
 
 .log-category {
-  /* --- 核心修改 2: 加大任务类别列的宽度 --- */
-  width: 230px; /* 原为 140px */
-  color: #8ab4f8; /* 任务类别颜色 */
+  width: 230px;
+  color: #8ab4f8;
   flex-shrink: 0;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -3,8 +3,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { API_BASE_URL, WS_BASE_URL } from '@/config/apiConfig';
-
-const PAGE_SIZE = 100;
+import { useStorage } from '@vueuse/core'; // 导入 useStorage
 
 export const useLogStore = defineStore('log', () => {
   const logs = ref([])
@@ -12,22 +11,25 @@ export const useLogStore = defineStore('log', () => {
   const currentPage = ref(1)
   const isConnected = ref(false)
   const logLevel = ref('INFO')
+  // --- 核心修改 1: 使用 useStorage 来持久化用户选择的页面大小 ---
+  const pageSize = useStorage('log-page-size', 1000); 
   let ws = null
   let reconnectTimer = null
 
-  const totalPages = computed(() => Math.ceil(totalLogs.value / PAGE_SIZE))
+  const totalPages = computed(() => Math.ceil(totalLogs.value / pageSize.value))
 
   const showMessage = (type, message) => {
     ElMessage({ message, type, showClose: true, duration: 3000 })
   }
 
+  // --- 核心修改 2: 修改 fetchHistoricalLogs 以使用动态的 pageSize ---
   async function fetchHistoricalLogs(page = 1) {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/logs?page=${page}&page_size=${PAGE_SIZE}&level=${logLevel.value}`)
+      // 在请求中使用 store 中存储的 pageSize
+      const response = await fetch(`${API_BASE_URL}/api/logs?page=${page}&page_size=${pageSize.value}&level=${logLevel.value}`)
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || '获取历史日志失败')
       
-      // 后端现在直接返回结构化数据
       logs.value = data.logs
       totalLogs.value = data.total
       currentPage.value = page
@@ -39,6 +41,13 @@ export const useLogStore = defineStore('log', () => {
   async function setLogLevelAndFetch(newLevel) {
     logLevel.value = newLevel;
     await fetchHistoricalLogs(1);
+  }
+
+  // --- 核心修改 3: 新增一个方法来更新 pageSize 并重新获取数据 ---
+  async function setPageSizeAndFetch(newPageSize) {
+    pageSize.value = newPageSize;
+    // 当页面大小改变时，通常回到第一页是最佳实践
+    await fetchHistoricalLogs(1); 
   }
 
     function connect() {
@@ -55,17 +64,15 @@ export const useLogStore = defineStore('log', () => {
       const currentLevel = logLevel.value.toUpperCase();
       const logItemLevel = logData.level.toUpperCase();
       
-      // 判断日志是否应该在当前筛选级别下可见
       const isVisibleAtCurrentLevel = currentLevel === 'ALL' || logItemLevel === currentLevel;
       
       if (isVisibleAtCurrentLevel) {
-        // 如果日志可见，总数总是要增加的
         totalLogs.value++;
 
-        // 如果用户正在查看第一页，则将新日志添加到视图中
         if (currentPage.value === 1) {
           logs.value.unshift(logData);
-          if (logs.value.length > PAGE_SIZE) {
+          // --- 核心修改 4: WebSocket 推送逻辑也使用动态的 pageSize ---
+          if (logs.value.length > pageSize.value) {
             logs.value.pop();
           }
         }
@@ -108,7 +115,8 @@ export const useLogStore = defineStore('log', () => {
   }
 
   return { 
-    logs, totalLogs, currentPage, totalPages, isConnected, logLevel,
-    fetchHistoricalLogs, connect, disconnect, clearLogs, setLogLevelAndFetch
+    logs, totalLogs, currentPage, totalPages, isConnected, logLevel, pageSize, // 导出 pageSize
+    fetchHistoricalLogs, connect, disconnect, clearLogs, setLogLevelAndFetch,
+    setPageSizeAndFetch // 导出新方法
   }
 })

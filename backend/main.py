@@ -613,7 +613,7 @@ def force_refresh_douban_data_api():
 LOG_FILE = os.path.join('/app/data', "app.log")
 
 @app.get("/api/logs")
-def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1), level: str = Query("INFO")):
+def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1), level: str = Query("INFO")):
     if not os.path.exists(LOG_FILE):
         return {"total": 0, "logs": []}
     
@@ -621,8 +621,6 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1), 
         with open(LOG_FILE, "r", encoding="utf-8") as f:
             all_lines = f.readlines()
         
-        # 正则表达式用于解析新的日志格式
-        # 格式: LEVEL:      TIMESTAMP          - CATEGORY      → MESSAGE
         log_pattern = re.compile(
             r"^(?P<level>\w+):\s+"
             r"(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+-\s+"
@@ -641,6 +639,7 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1), 
                 filtered_lines.append(match.groupdict())
         
         total_logs = len(filtered_lines)
+        # --- 核心修改：这里的 page_size 会自动使用 Query 中定义的值，所以逻辑不用变 ---
         start_index = total_logs - ((page - 1) * page_size) - 1
         end_index = start_index - page_size
         
