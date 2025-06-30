@@ -7,6 +7,7 @@ import os
 import json
 from datetime import datetime
 
+from log_manager import ui_logger
 from models import AppConfig, WebhookConfig
 from task_manager import TaskManager
 import config as app_config
