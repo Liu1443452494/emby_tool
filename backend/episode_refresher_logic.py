@@ -1,3 +1,4 @@
+# backend/episode_refresher_logic.py (最终修复版)
 
 import logging
 import threading
@@ -13,28 +14,76 @@ class EpisodeRefresherLogic:
     def __init__(self, app_config: AppConfig):
         self.app_config = app_config
         self.server_config = app_config.server_config
+        # 保持原始的 base_url 构建方式
         self.base_url = self.server_config.server
         self.api_key = self.server_config.api_key
         self.user_id = self.server_config.user_id
         self.params = {"api_key": self.api_key}
         self.session = requests.Session()
 
-    def _refresh_single_episode(self, episode_id: str, config: EpisodeRefresherConfig) -> bool:
+    def _unlock_item(self, item_id: str, task_cat: str) -> bool:
+        """解锁媒体项的所有元数据字段"""
+        try:
+            # 1. 获取当前项目详情
+            details_url = f"{self.base_url}/Users/{self.user_id}/Items/{item_id}"
+            details_resp = self.session.get(details_url, params=self.params, timeout=15)
+            details_resp.raise_for_status()
+            item_details = details_resp.json()
+
+            # 2. 如果 LockedFields 存在且不为空，则清空它
+            if item_details.get("LockedFields") and len(item_details["LockedFields"]) > 0:
+                ui_logger.debug(f"     - 检测到锁定的字段: {item_details['LockedFields']}，正在解锁...", task_category=task_cat)
+                item_details["LockedFields"] = []
+                
+                # 3. 发送更新请求
+                update_url = f"{self.base_url}/Items/{item_id}"
+                headers = {'Content-Type': 'application/json'}
+                update_resp = self.session.post(update_url, params=self.params, json=item_details, headers=headers, timeout=20)
+                update_resp.raise_for_status()
+                ui_logger.debug(f"     - 媒体项 (ID: {item_id}) 已成功解锁。", task_category=task_cat)
+            else:
+                ui_logger.debug(f"     - 媒体项 (ID: {item_id}) 无需解锁。", task_category=task_cat)
+            
+            return True
+        except requests.RequestException as e:
+            ui_logger.error(f"     - 解锁媒体项 (ID: {item_id}) 时发生网络错误: {e}", task_category=task_cat)
+            return False
+        except Exception as e:
+            ui_logger.error(f"     - 解锁媒体项 (ID: {item_id}) 时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+            return False
+
+    def _refresh_single_episode(self, episode_id: str, config: EpisodeRefresherConfig, task_cat: str) -> bool:
         """对单个剧集分集发送刷新请求"""
         try:
+            # --- 核心修复：在刷新前先执行解锁操作 ---
+            if not self._unlock_item(episode_id, task_cat):
+                ui_logger.warning(f"     - 解锁媒体项 (ID: {episode_id}) 失败，刷新可能不会生效。", task_category=task_cat)
+                # 即使解锁失败，我们仍然尝试刷新
+            
             url = f"{self.base_url}/Items/{episode_id}/Refresh"
             params = {
                 **self.params,
+                "Recursive": "true",
                 "MetadataRefreshMode": "FullRefresh",
                 "ImageRefreshMode": "FullRefresh",
                 "ReplaceAllMetadata": str(config.overwrite_metadata).lower(),
                 "ReplaceAllImages": "true"
             }
-            response = self.session.post(url, params=params, timeout=20)
+            ui_logger.debug(f"     - 发送刷新请求到: {url}", task_category=task_cat)
+            ui_logger.debug(f"     - 请求参数: {params}", task_category=task_cat)
+            
+            response = self.session.post(url, params=params, timeout=30)
             response.raise_for_status()
-            return True
+            
+            if response.status_code == 204:
+                ui_logger.debug(f"     - Emby 服务器已成功接收刷新请求 (ID: {episode_id})。", task_category=task_cat)
+                return True
+            else:
+                ui_logger.warning(f"     - Emby 服务器返回异常状态码 {response.status_code} (ID: {episode_id})。", task_category=task_cat)
+                return False
+
         except requests.RequestException as e:
-            logging.error(f"【剧集刷新】刷新分集 (ID: {episode_id}) 失败: {e}")
+            ui_logger.error(f"     - 刷新分集 (ID: {episode_id}) 时发生网络错误: {e}", task_category=task_cat)
             return False
 
     def run_refresh_for_episodes(
@@ -46,7 +95,6 @@ class EpisodeRefresherLogic:
         task_manager: Optional[TaskManager] = None,
         task_category: str = "剧集刷新"
     ):
-        """为指定的剧集分集ID列表执行刷新，包含智能跳过和详细日志功能"""
         episode_ids_list = list(episode_ids)
         total_episodes = len(episode_ids_list)
         
@@ -100,13 +148,14 @@ class EpisodeRefresherLogic:
             
             ui_logger.info(f"进度 {index + 1}/{total_episodes}: 正在刷新: {log_message}", task_category=task_category)
 
-            if self._refresh_single_episode(episode_id, config):
+            if self._refresh_single_episode(episode_id, config, task_category):
                 refreshed_count += 1
             
             if task_manager and task_id:
                 task_manager.update_task_progress(task_id, index + 1, total_episodes)
             
-            time.sleep(0.2)
+            time.sleep(0.5)
 
-        ui_logger.info(f"任务执行完毕，共刷新 {refreshed_count} 个分集，跳过 {skipped_count} 个。", task_category=task_category)
+        ui_logger.info(f"任务执行完毕。共向 Emby 提交了 {refreshed_count} 个刷新请求，跳过了 {skipped_count} 个分集。", task_category=task_category)
+        ui_logger.warning("请注意：Emby 的刷新是在后台进行的，实际元数据更新可能会有延迟。请稍后在 Emby 中查看结果。", task_category=task_category)
         return {"refreshed_count": refreshed_count, "skipped_count": skipped_count}
