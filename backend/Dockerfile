@@ -1,5 +1,3 @@
-# 文件: backend/Dockerfile
-
 # 使用官方的 Python 3.11 slim 镜像作为基础
 FROM python:3.11-slim
 
@@ -11,13 +9,13 @@ ENV PYTHONDONTWRITEBYTECODE 1
 # 确保 Python 输出是无缓冲的，日志可以实时看到
 ENV PYTHONUNBUFFERED 1
 
-# --- 核心修改：安装 Node.js 和 ffmpeg ---
-# 更新包列表并安装 nodejs, npm 和 ffmpeg
+# --- 核心修改：安装 Node.js ---
+# 更新包列表并安装 nodejs 和 npm
 # -y 选项表示自动确认安装
 # --no-install-recommends 减少不必要的包安装，保持镜像大小
 # 最后清理 apt 缓存以减小镜像体积
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends nodejs npm ffmpeg && \
+    apt-get install -y --no-install-recommends nodejs npm && \
     rm -rf /var/lib/apt/lists/*
 
 # 更新 pip 并使用清华大学镜像源安装依赖
