@@ -327,20 +327,17 @@
       :context="galleryStore.tmdbSingleActorCandidate"
       @confirm="handleActorIdConfirm"
       @reject="handleSingleActorReject"
-      @close="handleTmdbFlowTermination"
     />
     <ActorListDialog
       v-model:visible="isActorListDialogVisible"
       :candidates="galleryStore.tmdbActorCandidates"
       @confirm="handleActorIdConfirm"
       @reject="handleActorListReject"
-      @close="handleTmdbFlowTermination"
     />
     <ActorManualMatchDialog
       v-model:visible="isActorManualMatchDialogVisible"
       :candidates="galleryStore.tmdbActorCandidates"
       @confirm="handleActorIdConfirm"
-      @close="handleTmdbFlowTermination"
     />
     <ImageSelectionDialog
       v-model:visible="isActorImageSelectionDialogVisible"

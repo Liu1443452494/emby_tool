@@ -49,6 +49,7 @@ from actor_gallery_router import router as actor_gallery_router
 from douban_fixer_logic import DoubanFixerLogic
 from douban_fixer_router import router as douban_fixer_router
 from webhook_logic import WebhookLogic
+from proxy_manager import ProxyManager
 
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
@@ -410,19 +411,30 @@ def save_server_config_api(server_config: ServerConfig):
     try:
         logging.info("正在测试并保存 Emby 服务器配置...")
         current_app_config = app_config.load_app_config()
-        proxies = {}
-        if current_app_config.proxy_config.enabled and current_app_config.proxy_config.url:
-            proxy_url = current_app_config.proxy_config.url
-            proxies = {'http': proxy_url, 'https': proxy_url}
-            logging.info(f"【连接测试】将通过代理 {proxy_url} 连接 Emby 服务器。")
+        
+        # --- 核心修改：使用新的 ProxyManager ---
         test_url = f"{server_config.server}/Users/{server_config.user_id}"
+        proxy_manager = ProxyManager(current_app_config)
+        proxies = proxy_manager.get_proxies(test_url)
+        
+        if proxies:
+            logging.info(f"【连接测试】将通过代理 {proxies.get('http')} 连接 Emby 服务器。")
+        else:
+            logging.info("【连接测试】将直接连接 Emby 服务器。")
+        # --- 结束修改 ---
+
         params = {"api_key": server_config.api_key}
         response = requests.get(test_url, params=params, timeout=15, proxies=proxies)
         response.raise_for_status()
         user_data = response.json()
         if not user_data.get("Name"): raise ValueError("服务器响应异常，未找到有效的用户信息。")
+        
         system_info_url = f"{server_config.server}/System/Info"
-        response_system = requests.get(system_info_url, params=params, timeout=15, proxies=proxies)
+        # --- 核心修改：为第二个请求也应用代理逻辑 ---
+        proxies_system = proxy_manager.get_proxies(system_info_url)
+        response_system = requests.get(system_info_url, params=params, timeout=15, proxies=proxies_system)
+        # --- 结束修改 ---
+        
         response_system.raise_for_status()
         system_info = response_system.json()
         current_app_config.server_config = server_config
@@ -665,10 +677,12 @@ def get_libraries_api():
     try:
         logging.info(f"正在从 {server_conf.server} 获取媒体库列表...")
         url = f"{server_conf.server}/Users/{server_conf.user_id}/Views"
-        proxies = {}
-        if config.proxy_config.enabled and config.proxy_config.url:
-            proxy_url = config.proxy_config.url
-            proxies = {'http': proxy_url, 'https': proxy_url}
+        
+        # --- 核心修改：使用新的 ProxyManager ---
+        proxy_manager = ProxyManager(config)
+        proxies = proxy_manager.get_proxies(url)
+        # --- 结束修改 ---
+
         response = requests.get(url, params={"api_key": server_conf.api_key}, timeout=15, proxies=proxies)
         response.raise_for_status()
         views = response.json().get("Items", [])
@@ -687,10 +701,11 @@ def search_media_api(query: MediaSearchQuery):
     url = f"{server_conf.server}/Users/{server_conf.user_id}/Items"
     params = {"api_key": server_conf.api_key, "Recursive": "true", "IncludeItemTypes": "Movie,Series", "SearchTerm": query.query, "Fields": "ProviderIds,ProductionYear,Genres"}
     try:
-        proxies = {}
-        if config.proxy_config.enabled and config.proxy_config.url:
-            proxy_url = config.proxy_config.url
-            proxies = {'http': proxy_url, 'https': proxy_url}
+        # --- 核心修改：使用新的 ProxyManager ---
+        proxy_manager = ProxyManager(config)
+        proxies = proxy_manager.get_proxies(url)
+        # --- 结束修改 ---
+
         response = requests.get(url, params=params, timeout=20, proxies=proxies)
         response.raise_for_status()
         items = response.json().get("Items", [])
@@ -698,7 +713,12 @@ def search_media_api(query: MediaSearchQuery):
             try:
                 item_url = f"{server_conf.server}/Users/{server_conf.user_id}/Items/{query.query}"
                 item_params = { "api_key": server_conf.api_key, "Fields": "ProviderIds,ProductionYear,Genres" }
-                item_resp = requests.get(item_url, params=item_params, timeout=10, proxies=proxies)
+                
+                # --- 核心修改：为第二个请求也应用代理逻辑 ---
+                proxies_item = proxy_manager.get_proxies(item_url)
+                item_resp = requests.get(item_url, params=item_params, timeout=10, proxies=proxies_item)
+                # --- 结束修改 ---
+
                 if item_resp.ok: items = [item_resp.json()]
             except Exception: pass
         logging.info(f"搜索到 {len(items)} 个结果。")
@@ -716,10 +736,11 @@ def debug_get_item_details(item_id: str):
     url = f"{server_conf.server}/Users/{server_conf.user_id}/Items/{item_id}"
     params = {"api_key": server_conf.api_key}
     try:
-        proxies = {}
-        if config.proxy_config.enabled and config.proxy_config.url:
-            proxy_url = config.proxy_config.url
-            proxies = {'http': proxy_url, 'https': proxy_url}
+        # --- 核心修改：使用新的 ProxyManager ---
+        proxy_manager = ProxyManager(config)
+        proxies = proxy_manager.get_proxies(url)
+        # --- 结束修改 ---
+
         response = requests.get(url, params=params, timeout=20, proxies=proxies)
         response.raise_for_status()
         data = response.json()
@@ -731,6 +752,7 @@ def debug_get_item_details(item_id: str):
     except Exception as e:
         logging.error(f"【调试】获取 Item ID: {item_id} 数据时发生未知错误: {e}")
         raise HTTPException(status_code=500, detail=f"发生未知错误: {e}")
+
 @app.post("/api/media/download-item")
 def download_single_item_api(req: DownloadRequest):
     config = app_config.load_app_config()

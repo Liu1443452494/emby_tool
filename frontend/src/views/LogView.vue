@@ -11,7 +11,8 @@
       <div class="left-controls">
         <el-radio-group v-model="logLevelProxy" @change="handleLevelChange">
           <el-radio-button label="INFO">重要</el-radio-button>
-          <el-radio-button label="DEBUG">调试</el-radio-button>
+          <!-- 核心修改 1: 移除 "调试" 按钮 -->
+          <!-- <el-radio-button label="DEBUG">调试</el-radio-button> -->
           <el-radio-button label="WARNING">警告</el-radio-button>
           <el-radio-button label="ERROR">错误</el-radio-button>
           <el-radio-button label="ALL">全部</el-radio-button>
@@ -163,7 +164,8 @@ const getLineNumber = (index) => {
 }
 
 .log-category {
-  width: 140px; /* 固定宽度以对齐 */
+  /* --- 核心修改 2: 加大任务类别列的宽度 --- */
+  width: 230px; /* 原为 140px */
   color: #8ab4f8; /* 任务类别颜色 */
   flex-shrink: 0;
   overflow: hidden;

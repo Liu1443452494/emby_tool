@@ -23,8 +23,8 @@ class CustomLogFormatter(logging.Formatter):
         
         # 从记录中获取任务类别，如果没有则默认为'系统日志'
         task_category = getattr(record, 'task_category', '系统日志')
-        # 将任务类别填充到15个字符宽度，以适应较长的任务名
-        category_str = task_category.ljust(15)
+        # 将任务类别填充到固定的宽度，以保证对齐
+        category_str = task_category.ljust(25)
 
         message = record.getMessage()
         
