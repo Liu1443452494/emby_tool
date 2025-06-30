@@ -128,13 +128,19 @@ class DoubanPosterUpdaterConfig(BaseModel):
 
 class EpisodeRefresherConfig(BaseModel):
     """剧集元数据刷新器功能的配置"""
-    # --- 核心修改：新增刷新模式字段 ---
     refresh_mode: Literal['emby', 'toolbox'] = Field(
         default='emby', 
         description="刷新模式: 'emby' - 通知Emby刷新, 'toolbox' - 工具箱代理刷新"
     )
     overwrite_metadata: bool = Field(default=True, description="刷新时是否覆盖现有元数据")
     skip_if_complete: bool = Field(default=True, description="如果分集已有标题、简介和图片，则跳过刷新")
+    
+    # --- FFmpeg 截图相关配置 ---
+    ffmpeg_screenshot_enabled: bool = Field(default=False, description="是否启用FFmpeg截图功能")
+    ffmpeg_path: str = Field(default="ffmpeg", description="FFmpeg可执行文件路径")
+    ffprobe_path: str = Field(default="ffprobe", description="FFprobe可执行文件路径")
+    screenshot_percentage: int = Field(default=10, ge=1, le=99, description="截图位置百分比")
+    screenshot_fixed_time: int = Field(default=150, ge=1, description="备用固定截图时间（秒）")
 
 class ScheduledTaskItem(BaseModel):
     """单个定时任务的配置"""
