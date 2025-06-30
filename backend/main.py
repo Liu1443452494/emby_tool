@@ -1027,7 +1027,6 @@ def save_webhook_config_api(config: WebhookConfig):
         logging.error(f"保存 Webhook 设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
 
-# --- 新增：保存剧集刷新器配置的 API 端点 ---
 @app.post("/api/config/episode-refresher")
 def save_episode_refresher_config_api(config: EpisodeRefresherConfig):
     try:

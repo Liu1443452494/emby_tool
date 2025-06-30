@@ -206,27 +206,38 @@
       </template>
     </el-dialog>
 
-    <!-- --- 新增：剧集刷新器设置对话框 --- -->
     <el-dialog
       v-model="isRefresherDialogVisible"
       title="剧集元数据刷新 - 独立配置"
-      width="500px"
+      width="600px"
       :close-on-click-modal="false"
     >
       <div v-if="localRefresherConfig" class="independent-task-config">
         <el-form :model="localRefresherConfig" label-position="top">
+          
+          <!-- --- 核心修改：新增刷新模式选择 --- -->
           <el-form-item label="刷新模式">
+            <el-radio-group v-model="localRefresherConfig.refresh_mode">
+              <el-radio value="emby">通知 Emby 刷新 (默认)</el-radio>
+              <el-radio value="toolbox">工具箱代理刷新</el-radio>
+            </el-radio-group>
+            <div class="form-item-description">
+              <b>通知 Emby 刷新：</b>由本工具向 Emby 发送刷新指令，Emby 服务器自行连接 TMDB 获取数据。如果您的 Emby 服务器无法访问 TMDB，此模式会失败。<br>
+              <b>工具箱代理刷新：</b>由本工具直接访问 TMDB 获取元数据，然后写入 Emby。此模式可以利用工具箱的代理设置，解决 Emby 无法联网的问题。
+            </div>
+          </el-form-item>
+          <!-- --- 结束新增 --- -->
+
+          <el-form-item label="元数据写入方式">
             <el-radio-group v-model="localRefresherConfig.overwrite_metadata">
-              <el-radio :value="false">搜索缺少的元数据</el-radio>
+              <el-radio :value="false">仅补充缺失的元数据</el-radio>
               <el-radio :value="true">覆盖所有元数据</el-radio>
             </el-radio-group>
             <div class="form-item-description">
-              “搜索缺少”模式仅补充空缺的字段。“覆盖所有”模式则会用刮削源的数据替换所有字段。
+              “仅补充”模式仅填写空缺的字段。“覆盖所有”模式则会用刮削源的数据替换所有字段。
             </div>
           </el-form-item>
-          <!-- --- 结束修改 --- -->
 
-          <!-- --- 新增：智能跳过开关 --- -->
           <el-form-item label="智能跳过">
             <el-switch v-model="localRefresherConfig.skip_if_complete" active-text="开启智能跳过" />
             <div class="form-item-description">
@@ -239,8 +250,6 @@
         <el-button @click="isRefresherDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
-    <!-- --- 结束新增 --- -->
-
   </div>
 </template>
 

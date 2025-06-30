@@ -125,12 +125,16 @@ class DoubanPosterUpdaterConfig(BaseModel):
     overwrite_existing: bool = Field(default=False, description="是否覆盖已有海报")
     skip_mainland_china: bool = Field(default=False, description="是否跳过中国大陆地区的影视")
 
-# --- 新增：剧集元数据刷新器配置模型 ---
+
 class EpisodeRefresherConfig(BaseModel):
     """剧集元数据刷新器功能的配置"""
+    # --- 核心修改：新增刷新模式字段 ---
+    refresh_mode: Literal['emby', 'toolbox'] = Field(
+        default='emby', 
+        description="刷新模式: 'emby' - 通知Emby刷新, 'toolbox' - 工具箱代理刷新"
+    )
     overwrite_metadata: bool = Field(default=True, description="刷新时是否覆盖现有元数据")
     skip_if_complete: bool = Field(default=True, description="如果分集已有标题、简介和图片，则跳过刷新")
-# --- 结束新增 ---
 
 class ScheduledTaskItem(BaseModel):
     """单个定时任务的配置"""

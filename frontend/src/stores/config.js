@@ -43,8 +43,8 @@ export const useConfigStore = defineStore('config', () => {
       initial_wait_time: 30,
       plugin_wait_time: 60
     },
-    // --- 新增：为 appConfig 添加新任务的默认结构 ---
     episode_refresher_config: {
+      refresh_mode: 'emby',
       overwrite_metadata: true,
       skip_if_complete: true
     }
@@ -94,13 +94,17 @@ export const useConfigStore = defineStore('config', () => {
         if (!fullConfig.webhook_config) {
           fullConfig.webhook_config = { enabled: false, initial_wait_time: 30, plugin_wait_time: 60 };
         }
-        // --- 新增：添加新配置的兼容性加载 ---
         if (!fullConfig.episode_refresher_config) {
-          fullConfig.episode_refresher_config = { overwrite_metadata: true, skip_if_complete: true };
-        } else if (typeof fullConfig.episode_refresher_config.skip_if_complete === 'undefined') {
-          fullConfig.episode_refresher_config.skip_if_complete = true;
+          fullConfig.episode_refresher_config = { refresh_mode: 'emby', overwrite_metadata: true, skip_if_complete: true };
+        } else {
+          if (typeof fullConfig.episode_refresher_config.refresh_mode === 'undefined') {
+            fullConfig.episode_refresher_config.refresh_mode = 'emby';
+          }
+          if (typeof fullConfig.episode_refresher_config.skip_if_complete === 'undefined') {
+            fullConfig.episode_refresher_config.skip_if_complete = true;
+          }
         }
-        // --- 结束新增 ---
+        
         appConfig.value = fullConfig
       } else {
         console.error('获取配置失败，服务器返回状态:', response.status)

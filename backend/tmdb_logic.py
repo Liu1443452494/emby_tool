@@ -316,3 +316,37 @@ class TmdbLogic:
         
         ui_logger.info("步骤C: 降级为全局搜索。", task_category=task_cat)
         return self._search_person_globally(req.emby_person_name)
+    
+    def get_episode_details(self, series_tmdb_id: int, season_number: int, episode_number: int) -> Optional[Dict]:
+        """
+        获取单个分集的TMDB详细信息。
+        """
+        try:
+            endpoint = f"tv/{series_tmdb_id}/season/{season_number}/episode/{episode_number}"
+            details = self._tmdb_request(endpoint)
+            return details
+        except requests.HTTPError as e:
+            if e.response.status_code == 404:
+                logging.warning(f"【TMDB】未找到分集: TV ID {series_tmdb_id}, S{season_number}E{episode_number}")
+                return None
+            raise e
+        except Exception as e:
+            logging.error(f"【TMDB】获取分集详情时出错: {e}")
+            return None
+        
+    def get_season_details(self, series_tmdb_id: int, season_number: int) -> Optional[Dict]:
+        """
+        获取整季的TMDB详细信息，包含所有分集列表。
+        """
+        try:
+            endpoint = f"tv/{series_tmdb_id}/season/{season_number}"
+            details = self._tmdb_request(endpoint)
+            return details
+        except requests.HTTPError as e:
+            if e.response.status_code == 404:
+                logging.warning(f"【TMDB】未找到剧季: TV ID {series_tmdb_id}, Season {season_number}")
+                return None
+            raise e
+        except Exception as e:
+            logging.error(f"【TMDB】获取剧季详情时出错: {e}")
+            return None
