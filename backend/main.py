@@ -23,10 +23,8 @@ from task_manager import TaskManager, task_manager
 from media_selector import MediaSelector
 from models import ScheduledTasksConfig
 from douban_poster_updater_logic import DoubanPosterUpdaterLogic
-# --- 新增：导入新模型和逻辑 ---
 from models import DoubanPosterUpdaterConfig, EpisodeRefresherConfig
 from episode_refresher_logic import EpisodeRefresherLogic
-# --- 结束新增 ---
 from local_extractor import extract_local_media_task
 from models import LocalExtractRequest
 from models import (
@@ -58,6 +56,7 @@ webhook_queue = asyncio.Queue()
 webhook_processing_set = set()
 
 async def webhook_worker():
+    # Webhook 日志已在 webhook_logic.py 中处理，此处保留底层日志
     logging.info("【Webhook工作者】已启动，等待处理任务...")
     while True:
         try:
@@ -86,43 +85,40 @@ async def webhook_worker():
 def _webhook_task_runner(item_id: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
     current_config = app_config.load_app_config()
     logic = WebhookLogic(current_config)
-    # 只传递需要的参数
     logic.process_new_media_task(item_id, cancellation_event)
 
 
 def trigger_douban_refresh():
-    logging.info("【调度任务】开始执行豆瓣数据强制刷新...")
+    task_cat = "定时任务-豆瓣数据"
+    ui_logger.info("开始执行豆瓣数据强制刷新...", task_category=task_cat)
     config = app_config.load_app_config()
     douban_conf = config.douban_config
     if douban_conf.directory and os.path.isdir(douban_conf.directory):
         task_manager.register_task(scan_douban_directory_task, "定时刷新豆瓣数据", douban_conf.directory, douban_conf.extra_fields)
     else:
-        logging.warning("【调度任务】未配置有效的豆瓣目录，跳过定时刷新。")
+        ui_logger.warning("未配置有效的豆瓣目录，跳过定时刷新。", task_category=task_cat)
 
 def trigger_douban_fixer_scan():
-    logging.info("【调度任务】开始执行豆瓣ID修复器全量扫描...")
+    task_cat = "定时任务-豆瓣修复"
+    ui_logger.info("开始执行豆瓣ID修复器全量扫描...", task_category=task_cat)
     config = app_config.load_app_config()
     for task in task_manager.get_all_tasks():
         if task['name'].startswith("豆瓣ID修复"):
-            logging.warning("【调度任务】检测到已有豆瓣ID修复任务正在运行，本次调度跳过。")
+            ui_logger.warning("检测到已有豆瓣ID修复任务正在运行，本次调度跳过。", task_category=task_cat)
             return
     logic = DoubanFixerLogic(config)
     task_manager.register_task(logic.scan_and_match_task, "豆瓣ID修复-all", "all", None, None)
 
 def trigger_actor_localizer_apply():
-    logging.info("【调度任务】开始执行演员中文化自动应用任务...")
+    task_cat = "定时任务-演员中文化"
+    ui_logger.info("开始执行演员中文化自动应用任务...", task_category=task_cat)
     config = app_config.load_app_config()
     for task in task_manager.get_all_tasks():
         if task['name'].startswith("演员中文化"):
-            logging.warning("【调度任务】检测到已有演员中文化任务正在运行，本次调度跳过。")
+            ui_logger.warning("检测到已有演员中文化任务正在运行，本次调度跳过。", task_category=task_cat)
             return
     logic = ActorLocalizerLogic(config)
     task_manager.register_task(logic.apply_actor_changes_directly_task, "演员中文化-定时自动应用", config.actor_localizer_config)
-
-# 在 main.py 的顶部，确保 ui_logger 已导入
-from log_manager import ui_logger
-
-# ... 其他代码 ...
 
 def _episode_refresher_task_runner(
     series_ids: List[str], 
@@ -130,12 +126,8 @@ def _episode_refresher_task_runner(
     cancellation_event: threading.Event, 
     task_id: str, 
     task_manager: TaskManager,
-    task_name: str # 新增 task_name 参数
+    task_name: str 
 ):
-    """
-    这个函数在后台线程中运行，负责获取分集并调用刷新逻辑。
-    """
-    # --- 核心修改：使用 task_name 作为任务类别 ---
     task_cat = task_name
     ui_logger.info(f"开始从 {len(series_ids)} 个剧集(Series)中获取所有分集(Episode)...", task_category=task_cat)
     task_manager.update_task_progress(task_id, 0, len(series_ids))
@@ -174,10 +166,8 @@ def _episode_refresher_task_runner(
         cancellation_event,
         task_id,
         task_manager,
-        task_cat # 将任务类别传递给下一层
+        task_cat
     )
-
-# backend/main.py (修改 trigger_scheduled_task 函数)
 
 def trigger_scheduled_task(task_id: str):
     task_name_map = {
@@ -187,7 +177,8 @@ def trigger_scheduled_task(task_id: str):
         "episode_refresher": "剧集元数据刷新"
     }
     task_display_name = task_name_map.get(task_id, task_id)
-    ui_logger.info(f"开始执行定时任务: {task_display_name}", task_category="定时任务")
+    task_cat = f"定时任务-{task_display_name}"
+    ui_logger.info(f"开始执行定时任务...", task_category=task_cat)
     
     config = app_config.load_app_config()
     scope = config.scheduled_tasks_config.target_scope
@@ -200,7 +191,7 @@ def trigger_scheduled_task(task_id: str):
     item_ids = selector.get_item_ids(scope, target_collection_type=target_collection_type)
 
     if not item_ids:
-        ui_logger.info(f"未根据范围找到任何媒体项，任务结束。", task_category=f"定时任务-{task_display_name}")
+        ui_logger.info(f"未根据范围找到任何媒体项，任务结束。", task_category=task_cat)
         return
 
     if task_id == "actor_localizer":
@@ -211,7 +202,7 @@ def trigger_scheduled_task(task_id: str):
             task_name, 
             item_ids, 
             config.actor_localizer_config,
-            task_category=task_name  # 传递 task_category
+            task_category=task_name
         )
     elif task_id == "douban_fixer":
         logic = DoubanFixerLogic(config)
@@ -219,7 +210,8 @@ def trigger_scheduled_task(task_id: str):
         task_manager.register_task(
             logic.run_fixer_for_items,
             task_name,
-            item_ids
+            item_ids,
+            task_category=task_name
         )
     elif task_id == "douban_poster_updater":
         logic = DoubanPosterUpdaterLogic(config)
@@ -240,11 +232,12 @@ def trigger_scheduled_task(task_id: str):
             task_name=task_name
         )
     else:
-        logging.warning(f"【调度任务】未知的任务ID: {task_id}")
+        ui_logger.warning(f"未知的任务ID: {task_id}", task_category=task_cat)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    ui_logger.info("应用启动...")
+    task_cat = "系统启动"
+    ui_logger.info("应用启动...", task_category=task_cat)
     task_manager_consumer = asyncio.create_task(task_manager.broadcast_consumer())
     webhook_worker_task = asyncio.create_task(webhook_worker())
 
@@ -253,7 +246,7 @@ async def lifespan(app: FastAPI):
     douban_conf = config.douban_config
     if douban_conf.directory and os.path.isdir(douban_conf.directory):
         if not os.path.exists(DOUBAN_CACHE_FILE):
-            ui_logger.info("【启动检查】未发现豆瓣缓存文件，将自动执行首次扫描。")
+            ui_logger.info("【启动检查】未发现豆瓣缓存文件，将自动执行首次扫描。", task_category=task_cat)
             task_manager.register_task(scan_douban_directory_task, "首次启动豆瓣扫描", douban_conf.directory, douban_conf.extra_fields)
         else:
             logging.info(f"【启动检查】已找到豆瓣缓存文件: {DOUBAN_CACHE_FILE}，跳过自动扫描。")
@@ -263,27 +256,27 @@ async def lifespan(app: FastAPI):
     if douban_conf.refresh_cron:
         try:
             scheduler.add_job(trigger_douban_refresh, CronTrigger.from_crontab(douban_conf.refresh_cron), id="douban_refresh_job", replace_existing=True)
-            ui_logger.info(f"【调度任务】已成功设置豆瓣数据定时刷新任务，CRON表达式: '{douban_conf.refresh_cron}'")
+            ui_logger.info(f"【调度任务】已成功设置豆瓣数据定时刷新任务，CRON表达式: '{douban_conf.refresh_cron}'", task_category=task_cat)
         except Exception as e:
-            logging.error(f"【调度任务】设置定时刷新任务失败，CRON表达式可能无效: {e}")
+            ui_logger.error(f"【调度任务】设置定时刷新任务失败，CRON表达式可能无效: {e}", task_category=task_cat)
 
     fixer_conf = config.douban_fixer_config
     if fixer_conf.scan_cron:
         try:
             scheduler.add_job(trigger_douban_fixer_scan, CronTrigger.from_crontab(fixer_conf.scan_cron), id="douban_fixer_scan_job", replace_existing=True)
-            logging.info(f"【调度任务】已成功设置豆瓣ID修复器定时扫描任务，CRON表达式: '{fixer_conf.scan_cron}'")
+            ui_logger.info(f"【调度任务】已成功设置豆瓣ID修复器定时扫描任务，CRON表达式: '{fixer_conf.scan_cron}'", task_category=task_cat)
         except Exception as e:
-            logging.error(f"【调度任务】设置豆瓣ID修复器定时扫描任务失败，CRON表达式可能无效: {e}")
+            ui_logger.error(f"【调度任务】设置豆瓣ID修复器定时扫描任务失败，CRON表达式可能无效: {e}", task_category=task_cat)
 
     actor_conf = config.actor_localizer_config
     if actor_conf.apply_cron:
         try:
             scheduler.add_job(trigger_actor_localizer_apply, CronTrigger.from_crontab(actor_conf.apply_cron), id="actor_localizer_apply_job", replace_existing=True)
-            logging.info(f"【调度任务】已成功设置演员中文化自动应用任务，CRON表达式: '{actor_conf.apply_cron}'")
+            ui_logger.info(f"【调度任务】已成功设置演员中文化自动应用任务，CRON表达式: '{actor_conf.apply_cron}'", task_category=task_cat)
         except Exception as e:
-            logging.error(f"【调度任务】设置演员中文化自动应用任务失败，CRON表达式可能无效: {e}")
+            ui_logger.error(f"【调度任务】设置演员中文化自动应用任务失败，CRON表达式可能无效: {e}", task_category=task_cat)
     
-    logging.info("【调度任务】开始设置通用定时任务...")
+    ui_logger.info("【调度任务】开始设置通用定时任务...", task_category=task_cat)
     scheduled_conf = config.scheduled_tasks_config
     for task in scheduled_conf.tasks:
         if task.enabled and task.cron:
@@ -295,9 +288,9 @@ async def lifespan(app: FastAPI):
                     replace_existing=True,
                     args=[task.id]
                 )
-                logging.info(f"  - 已成功设置定时任务 '{task.name}'，CRON表达式: '{task.cron}'")
+                ui_logger.info(f"  - 已成功设置定时任务 '{task.name}'，CRON表达式: '{task.cron}'", task_category=task_cat)
             except Exception as e:
-                logging.error(f"  - 设置定时任务 '{task.name}' 失败，CRON表达式可能无效: {e}")
+                ui_logger.error(f"  - 设置定时任务 '{task.name}' 失败，CRON表达式可能无效: {e}", task_category=task_cat)
 
     if not scheduler.running:
         scheduler.start()
@@ -980,7 +973,8 @@ def save_scheduled_tasks_config_api(config: ScheduledTasksConfig):
     
 @app.post("/api/scheduled-tasks/{task_id}/trigger")
 def trigger_scheduled_task_once_api(task_id: str):
-    logging.info(f"【API接口】收到立即执行任务的请求: {task_id}")
+    task_cat = "API-定时任务"
+    ui_logger.info(f"收到立即执行任务的请求: {task_id}", task_category=task_cat)
     config = app_config.load_app_config()
     defined_tasks = {task.id for task in config.scheduled_tasks_config.tasks}
     if task_id not in defined_tasks:
@@ -998,9 +992,9 @@ def trigger_scheduled_task_once_api(task_id: str):
 
     try:
         trigger_scheduled_task(task_id)
-        return {"success": True, "message": f"任务 '{task_id}' 已成功触发，请在“运行任务”页面查看进度。"}
+        return {"success": True, "message": f"任务 '{task_display_name or task_id}' 已成功触发，请在“运行任务”页面查看进度。"}
     except Exception as e:
-        logging.error(f"手动触发定时任务 '{task_id}' 时失败: {e}", exc_info=True)
+        ui_logger.error(f"手动触发定时任务 '{task_id}' 时失败: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=500, detail=f"触发任务时发生内部错误: {e}")
 
 @app.post("/api/config/douban-poster-updater")

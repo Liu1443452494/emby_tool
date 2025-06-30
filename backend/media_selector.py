@@ -1,10 +1,11 @@
-# backend/media_selector.py (新文件)
 
 import logging
 import requests
 from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 
+# --- 核心修改：导入 ui_logger ---
+from log_manager import ui_logger
 from models import AppConfig, ScheduledTasksTargetScope
 
 class MediaSelector:
@@ -31,27 +32,26 @@ class MediaSelector:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
+            # 底层错误，保留 logging
             logging.error(f"【媒体选择器】获取最新项目失败: {e}")
             return []
-
-  # backend/media_selector.py (修改 get_item_ids 方法)
 
     def get_item_ids(self, scope: ScheduledTasksTargetScope, target_collection_type: Optional[str] = None) -> List[str]:
         """
         根据范围配置获取媒体ID列表
         - 新增 target_collection_type 参数用于预过滤媒体库类型
         """
-        logging.info(f"【媒体选择器】开始根据范围 '{scope.mode}' 获取媒体ID...")
+        task_cat = "媒体选择器"
+        ui_logger.info(f"开始根据范围 '{scope.mode}' 获取媒体ID...", task_category=task_cat)
         if target_collection_type:
-            logging.info(f"  - 任务目标类型: {target_collection_type}")
+            ui_logger.info(f"  - 任务目标类型: {target_collection_type}", task_category=task_cat)
 
         if scope.mode == 'latest':
-            # 'latest' 模式不受影响，因为它直接查询最新的项目，不区分库
-            logging.info(f"  - 模式: 最新入库 (最近 {scope.days} 天, 最多 {scope.limit} 条)")
+            ui_logger.info(f"  - 模式: 最新入库 (最近 {scope.days} 天, 最多 {scope.limit} 条)", task_category=task_cat)
             item_types_to_fetch = "Movie,Series,Episode" 
-            logging.info(f"  - 正在请求的媒体类型: {item_types_to_fetch}")
+            ui_logger.info(f"  - 正在请求的媒体类型: {item_types_to_fetch}", task_category=task_cat)
             all_latest = self._get_latest_items(item_types_to_fetch, 500)
-            logging.info(f"  - 从 Emby API 获取到 {len(all_latest)} 个原始最新项目。")
+            ui_logger.info(f"  - 从 Emby API 获取到 {len(all_latest)} 个原始最新项目。", task_category=task_cat)
 
             filtered_items = []
             now = datetime.now(timezone.utc)
@@ -69,10 +69,10 @@ class MediaSelector:
                 except ValueError:
                     continue
             
-            logging.info(f"  - 按日期过滤后，剩下 {len(filtered_items)} 个项目。")
+            ui_logger.info(f"  - 按日期过滤后，剩下 {len(filtered_items)} 个项目。", task_category=task_cat)
             final_items = filtered_items[:scope.limit]
             item_ids = [item['Id'] for item in final_items]
-            logging.info(f"【媒体选择器】成功获取 {len(item_ids)} 个最新入库的媒体ID。")
+            ui_logger.info(f"成功获取 {len(item_ids)} 个最新入库的媒体ID。", task_category=task_cat)
             return item_ids
 
         item_types_to_scan = "Movie,Series"
@@ -84,43 +84,41 @@ class MediaSelector:
             views_resp = self.session.get(views_url, params=self.params)
             all_views = views_resp.json().get("Items", [])
         except requests.RequestException as e:
-            logging.error(f"【媒体选择器】获取媒体库列表时出错: {e}")
+            ui_logger.error(f"获取媒体库列表时出错: {e}", task_category=task_cat)
             return []
 
         if scope.mode == 'by_type':
-            logging.info(f"  - 模式: 按媒体类型 ({scope.media_type})")
+            ui_logger.info(f"  - 模式: 按媒体类型 ({scope.media_type})", task_category=task_cat)
             if not scope.media_type: return []
 
-            # --- 核心修改：增加任务目标与范围的兼容性检查 ---
             if target_collection_type == 'tvshows' and scope.media_type == 'Movie':
-                logging.warning(f"【媒体选择器】任务目标是电视剧库 (tvshows)，但范围选择了仅电影 (Movie)，范围不匹配，返回空列表。")
+                ui_logger.warning(f"任务目标是电视剧库 (tvshows)，但范围选择了仅电影 (Movie)，范围不匹配，返回空列表。", task_category=task_cat)
                 return []
             if target_collection_type == 'movies' and scope.media_type == 'Series':
-                logging.warning(f"【媒体选择器】任务目标是电影库 (movies)，但范围选择了仅剧集 (Series)，范围不匹配，返回空列表。")
+                ui_logger.warning(f"任务目标是电影库 (movies)，但范围选择了仅剧集 (Series)，范围不匹配，返回空列表。", task_category=task_cat)
                 return []
-            # --- 结束修改 ---
 
             item_types_to_scan = scope.media_type
-            library_ids_to_scan.append(None) # 代表扫描所有库
+            library_ids_to_scan.append(None)
         
         elif scope.mode == 'by_library':
-            logging.info(f"  - 模式: 按媒体库 (IDs: {scope.library_ids})")
+            ui_logger.info(f"  - 模式: 按媒体库 (IDs: {scope.library_ids})", task_category=task_cat)
             if not scope.library_ids: return []
             selected_views = [v for v in all_views if v['Id'] in scope.library_ids]
             if target_collection_type:
                 selected_views = [v for v in selected_views if v.get("CollectionType") == target_collection_type]
-                logging.info(f"  - 已过滤，仅保留类型为 '{target_collection_type}' 的媒体库。")
+                ui_logger.info(f"  - 已过滤，仅保留类型为 '{target_collection_type}' 的媒体库。", task_category=task_cat)
             library_ids_to_scan.extend([v['Id'] for v in selected_views])
 
         elif scope.mode == 'all':
-            logging.info("  - 模式: 所有媒体库")
+            ui_logger.info("  - 模式: 所有媒体库", task_category=task_cat)
             if scope.library_blacklist:
                 blacklist_names = {name.strip() for name in scope.library_blacklist.split(',') if name.strip()}
                 all_views = [v for v in all_views if v['Name'] not in blacklist_names]
-                logging.info(f"  - 已应用黑名单，排除: {blacklist_names}")
+                ui_logger.info(f"  - 已应用黑名单，排除: {blacklist_names}", task_category=task_cat)
             if target_collection_type:
                 all_views = [v for v in all_views if v.get("CollectionType") == target_collection_type]
-                logging.info(f"  - 已应用目标类型过滤，仅保留类型为 '{target_collection_type}' 的媒体库。")
+                ui_logger.info(f"  - 已应用目标类型过滤，仅保留类型为 '{target_collection_type}' 的媒体库。", task_category=task_cat)
             library_ids_to_scan.extend([v['Id'] for v in all_views])
 
         all_items = []
@@ -141,9 +139,9 @@ class MediaSelector:
                     all_items.extend(page_items)
                     start_index += len(page_items)
                 except requests.RequestException as e:
-                    logging.error(f"【媒体选择器】获取媒体列表时出错: {e}")
+                    ui_logger.error(f"获取媒体列表时出错: {e}", task_category=task_cat)
                     break
 
         item_ids = [item['Id'] for item in all_items]
-        logging.info(f"【媒体选择器】成功获取 {len(item_ids)} 个媒体ID。")
+        ui_logger.info(f"成功获取 {len(item_ids)} 个媒体ID。", task_category=task_cat)
         return item_ids
