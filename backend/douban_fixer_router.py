@@ -7,6 +7,8 @@ from typing import List, Dict
 from bs4 import BeautifulSoup
 import re
 
+# --- 核心修改：导入 ui_logger ---
+from log_manager import ui_logger
 from models import AppConfig
 from douban_fixer_logic import DoubanFixerLogic
 from task_manager import task_manager
@@ -20,11 +22,13 @@ def get_logic(temp_config: AppConfig = None) -> DoubanFixerLogic:
     if not all([config_to_use.server_config.server, config_to_use.server_config.api_key, config_to_use.server_config.user_id]):
         raise HTTPException(status_code=400, detail="Emby 服务器未配置，请先在配置页面完成设置。")
     if not config_to_use.douban_fixer_config.cookie:
+        # 底层配置警告，保留 logging
         logging.warning("【豆瓣修复器】豆瓣 Cookie 未配置，功能可能受限。")
     return DoubanFixerLogic(config_to_use)
 
 @router.post("/test-cookie")
 def test_douban_cookie(payload: Dict):
+    task_cat = "API-豆瓣修复器"
     cookie = payload.get("cookie")
     if not cookie:
         raise HTTPException(status_code=400, detail="Cookie 不能为空")
@@ -45,7 +49,7 @@ def test_douban_cookie(payload: Dict):
             if user_menu_link and ('的帐号' in user_menu_link.text or '帐号管理' in user_menu_link.get('title', '')):
                 user_name_match = re.search(r'(.+?)的帐号', user_menu_link.text)
                 user_name = user_name_match.group(1).strip() if user_name_match else "未知用户"
-                logging.info(f"【豆瓣Cookie测试】【策略1】成功，识别到用户: {user_name}。Cookie有效。")
+                ui_logger.info(f"【Cookie测试】【策略1】成功，识别到用户: {user_name}。Cookie有效。", task_category=task_cat)
                 return {"status": "success", "message": f"Cookie 有效，识别到用户: {user_name}"}
 
             all_links = soup.find_all('a', href=re.compile(r"https://www.douban.com/people/.+/"))
@@ -55,17 +59,17 @@ def test_douban_cookie(payload: Dict):
                 
                 user_name = link.get_text(strip=True)
                 if user_name:
-                    logging.info(f"【豆瓣Cookie测试】【策略2】成功，识别到用户: {user_name}。Cookie有效。")
+                    ui_logger.info(f"【Cookie测试】【策略2】成功，识别到用户: {user_name}。Cookie有效。", task_category=task_cat)
                     return {"status": "success", "message": f"Cookie 有效，识别到用户: {user_name}"}
 
-            logging.warning(f"【豆瓣Cookie测试】访问成功但所有策略均未找到有效的用户信息，可能Cookie已失效。")
+            ui_logger.warning(f"【Cookie测试】访问成功但所有策略均未找到有效的用户信息，可能Cookie已失效。", task_category=task_cat)
             raise HTTPException(status_code=401, detail="Cookie 无效或已过期，无法识别用户信息。")
         else:
-            logging.warning(f"【豆瓣Cookie测试】访问豆瓣个人页面失败，状态码: {response.status_code}。")
+            ui_logger.warning(f"【Cookie测试】访问豆瓣个人页面失败，状态码: {response.status_code}。", task_category=task_cat)
             raise HTTPException(status_code=response.status_code, detail=f"访问豆瓣失败，状态码: {response.status_code}")
 
     except requests.RequestException as e:
-        logging.error(f"【豆瓣Cookie测试】请求豆瓣时发生网络错误: {e}")
+        ui_logger.error(f"【Cookie测试】请求豆瓣时发生网络错误: {e}", task_category=task_cat)
         raise HTTPException(status_code=500, detail=f"连接豆瓣失败，请检查网络或代理设置。错误: {e}")
 
 
@@ -98,21 +102,22 @@ def clear_failed_cache():
 
 @router.post("/manual-search")
 def manual_search_douban(payload: Dict):
+    task_cat = "API-豆瓣修复器"
     item_name = payload.get("name")
     if not item_name:
         raise HTTPException(status_code=400, detail="缺少搜索名称 'name'")
     
     logic = get_logic()
-    search_results = logic._search_douban(item_name)
+    search_results = logic._search_douban(item_name, task_cat)
     
     if search_results is None:
         raise HTTPException(status_code=503, detail="搜索豆瓣失败，请检查网络或Cookie配置。")
     
-    # --- 关键修改：直接返回解析好的结果 ---
     return search_results
 
 @router.post("/manual-update")
 def manual_update_douban_id(payload: Dict):
+    task_cat = "API-豆瓣修复器"
     emby_item_id = payload.get("emby_item_id")
     douban_id = payload.get("douban_id")
     
@@ -120,10 +125,10 @@ def manual_update_douban_id(payload: Dict):
         raise HTTPException(status_code=400, detail="请求必须包含 'emby_item_id' 和 'douban_id'")
         
     logic = get_logic()
-    success = logic._update_emby_item_douban_id(emby_item_id, douban_id)
+    success = logic._update_emby_item_douban_id(emby_item_id, douban_id, task_cat)
     
     if success:
-        logic.remove_from_cache(emby_item_id)
+        logic.remove_from_cache(emby_item_id, task_cat)
         return {"status": "success", "message": "豆瓣ID更新成功，并已从缓存移除。"}
     else:
         raise HTTPException(status_code=500, detail="更新Emby媒体项失败，请检查后端日志。")
