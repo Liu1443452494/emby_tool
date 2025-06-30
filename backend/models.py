@@ -136,6 +136,17 @@ class EpisodeRefresherConfig(BaseModel):
     overwrite_metadata: bool = Field(default=True, description="刷新时是否覆盖现有元数据")
     skip_if_complete: bool = Field(default=True, description="如果分集已有标题、简介和图片，则跳过刷新")
 
+    enable_emby_screenshot: bool = Field(
+        default=False, 
+        description="是否启用Emby内置截图作为备用图片来源"
+    )
+    screenshot_time_percent: int = Field(
+        default=10, 
+        description="截图时间点在视频总时长的百分比位置",
+        ge=1,
+        le=99
+    )
+
 class ScheduledTaskItem(BaseModel):
     """单个定时任务的配置"""
     id: str
