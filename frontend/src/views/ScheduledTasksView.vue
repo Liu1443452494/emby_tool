@@ -332,6 +332,16 @@
                 临时开启此项，任务将无视已存在的截图，强制重新生成。用于在调整截图参数后更新不满意的图片。建议用完后关闭。
               </div>
             </el-form-item>
+            <el-form-item label="截图质量模式">
+          <el-switch 
+            v-model="localRefresherConfig.use_smart_screenshot" 
+            active-text="高质量(消耗CPU)"
+            inactive-text="快速(单帧)"
+          />
+          <div class="form-item-description">
+            高质量模式会分析1秒内的多帧图像，选择最清晰的一张，效果接近Emby原生截图，但会增加CPU负担。
+          </div>
+        </el-form-item>
           </div>
         </el-form>
       </div>

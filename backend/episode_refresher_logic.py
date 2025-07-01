@@ -1,4 +1,4 @@
-# backend/episode_refresher_logic.py (完整代码)
+# backend/episode_refresher_logic.py (提供完整文件)
 
 import logging
 import threading
@@ -12,6 +12,17 @@ import os
 import shutil
 from typing import List, Iterable, Optional, Dict
 from collections import defaultdict
+from io import BytesIO
+
+# --- 新增导入 ---
+try:
+    import cv2
+    import numpy as np
+    from PIL import Image
+    OPENCV_AVAILABLE = True
+except ImportError:
+    OPENCV_AVAILABLE = False
+    logging.warning("【剧集刷新】OpenCV 或 NumPy 未安装，高质量截图功能将不可用。请运行 'pip install opencv-python-headless numpy Pillow'")
 
 from log_manager import ui_logger
 from models import AppConfig, EpisodeRefresherConfig
@@ -32,12 +43,12 @@ class EpisodeRefresherLogic:
 
     @staticmethod
     def _is_generic_episode_title(text: str) -> bool:
-        """判断标题是否为“第X集”这种通用格式"""
         if not text: return True
         pattern = re.compile(r'^(第\s*\d+\s*集|Episode\s*\d+)$', re.IGNORECASE)
         return bool(pattern.match(text.strip()))
 
     def _unlock_item(self, item_id: str, task_category: str) -> bool:
+        # ... (此函数无变化) ...
         try:
             details_url = f"{self.base_url}/Users/{self.user_id}/Items/{item_id}"
             details_resp = self.session.get(details_url, params=self.params, timeout=15)
@@ -61,24 +72,20 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - 解锁媒体项 (ID: {item_id}) 时发生未知错误: {e}", task_category=task_category, exc_info=True)
             return False
 
-
     def _refresh_single_episode_by_emby(self, episode_id: str, config: EpisodeRefresherConfig, task_category: str) -> bool:
+        # ... (此函数无变化) ...
         try:
             if not self._unlock_item(episode_id, task_category):
                 ui_logger.warning(f"     - 解锁媒体项 (ID: {episode_id}) 失败，刷新可能不会生效。", task_category=task_category)
             
             url = f"{self.base_url}/Items/{episode_id}/Refresh"
-            
-            # --- 核心修改：调整图片刷新模式 ---
-            # 将 ImageRefreshMode 从 FullRefresh 改为 Default
-            # 这将使 Emby 只下载缺失的图片，而不会删除已有的图片（比如我们的截图）
             params = {
                 **self.params,
                 "Recursive": "true",
                 "MetadataRefreshMode": "FullRefresh",
-                "ImageRefreshMode": "Default", # <--- 修改点
+                "ImageRefreshMode": "Default",
                 "ReplaceAllMetadata": str(config.overwrite_metadata).lower(),
-                "ReplaceAllImages": "false" # <--- 修改点：配合 Default 模式，设置为 false
+                "ReplaceAllImages": "false"
             }
             ui_logger.debug(f"     - [Emby模式] 发送刷新请求到: {url} (图片模式: Default)", task_category=task_category)
             
@@ -97,6 +104,7 @@ class EpisodeRefresherLogic:
             return False
 
     def _upload_image_from_url(self, item_id: str, image_url: str, task_category: str) -> bool:
+        # ... (此函数无变化) ...
         try:
             ui_logger.debug(f"     - 正在从URL下载图片: {image_url}", task_category=task_category)
             proxies = self.tmdb_logic.proxy_manager.get_proxies(image_url)
@@ -110,7 +118,7 @@ class EpisodeRefresherLogic:
             return False
 
     def _upload_image_bytes(self, item_id: str, image_data: bytes, content_type: str, task_category: str) -> bool:
-        """通用上传二进制图片数据的方法"""
+        # ... (此函数无变化) ...
         try:
             upload_url = f"{self.base_url}/Items/{item_id}/Images/Primary"
             
@@ -137,7 +145,7 @@ class EpisodeRefresherLogic:
             return False
 
     def _get_video_url_from_item(self, episode_id: str, task_category: str) -> Optional[str]:
-        """从 Emby 获取媒体项的流媒体 URL，兼容 DirectStreamUrl 和 MediaSources[].Path"""
+        # ... (此函数无变化) ...
         try:
             details_url = f"{self.base_url}/Users/{self.user_id}/Items/{episode_id}"
             details_params = {**self.params, "Fields": "MediaSources"}
@@ -169,7 +177,7 @@ class EpisodeRefresherLogic:
             return None
 
     def _get_video_duration(self, video_url: str, task_category: str) -> Optional[float]:
-        """使用 ffprobe 获取视频时长"""
+        # ... (此函数无变化) ...
         try:
             command = [
                 'ffprobe',
@@ -193,130 +201,123 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - [截图] ffprobe 获取时长失败: {e}", task_category=task_category)
             return None
 
-    # backend/episode_refresher_logic.py (修改 _capture_screenshot 函数)
+    # --- 核心修改：重构截图相关函数 ---
+    
+    def _split_image_stream(self, stream: bytes) -> List[bytes]:
+        """将 ffmpeg image2pipe 输出的二进制流分割成独立的图片列表"""
+        images = []
+        start_marker = b'\xff\xd8' # JPEG start
+        end_marker = b'\xff\xd9'   # JPEG end
+        
+        start = 0
+        while True:
+            start_pos = stream.find(start_marker, start)
+            if start_pos == -1:
+                break
+            end_pos = stream.find(end_marker, start_pos)
+            if end_pos == -1:
+                break
+            
+            images.append(stream[start_pos:end_pos+2])
+            start = end_pos + 2
+        return images
+
+    def _get_best_image_by_variance(self, images: List[bytes], task_category: str) -> Optional[bytes]:
+        """通过拉普拉斯方差计算，从图片列表中选择最清晰的一张"""
+        if not images:
+            return None
+        if not OPENCV_AVAILABLE:
+            ui_logger.warning("     - [截图-智能模式] OpenCV 未加载，将随机选择一张图片。", task_category=task_category)
+            return images[len(images) // 2] # 返回中间一张
+
+        max_variance = -1
+        best_image = None
+
+        for img_bytes in images:
+            try:
+                pil_img = Image.open(BytesIO(img_bytes))
+                cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+                variance = cv2.Laplacian(cv_img, cv2.CV_64F).var()
+                if variance > max_variance:
+                    max_variance = variance
+                    best_image = img_bytes
+            except Exception as e:
+                ui_logger.debug(f"     - [截图-智能模式] 分析单张图片时出错: {e}", task_category=task_category)
+                continue
+        
+        ui_logger.info(f"     - [截图-智能模式] 分析了 {len(images)} 帧，选择了清晰度得分最高的一张 (方差: {max_variance:.2f})。", task_category=task_category)
+        return best_image
 
     def _capture_screenshot(self, video_url: str, seek_time: float, config: EpisodeRefresherConfig, task_category: str) -> Optional[bytes]:
-        """
-        使用 ffmpeg 从视频流截图。
-        优先在目标时间点附近1秒的窗口内寻找一张清晰的I帧(关键帧)。
-        如果失败，则回退到直接截取目标时间点的那一帧。
-        同时根据配置处理黑边和比例。
-        """
+        """使用 ffmpeg 从视频流截图，并根据配置处理黑边和比例"""
         try:
-            start_seek = max(0, seek_time - 0.5)
-            window_duration = 1.5
-            
-            smart_capture_cmd = [
-                'ffmpeg', '-ss', str(start_seek),
-                '-i', video_url, '-t', str(window_duration),
-                '-vf', "select='eq(pict_type,I)'",
-                '-vframes', '1', '-q:v', '2',
-                '-f', 'image2pipe', '-'
-            ]
-            
-            ui_logger.debug(f"     - [截图-智能模式] 尝试在 {start_seek:.2f}s 附近寻找I帧...", task_category=task_category)
-            
+            # 步骤 1: 对原始视频流进行黑边检测
+            crop_filter = ""
             try:
-                smart_result = subprocess.run(smart_capture_cmd, capture_output=True, check=True, timeout=60)
-                if smart_result.stdout:
-                    ui_logger.info("     - [截图-智能模式] 成功捕获到一张I帧，将基于此帧进行裁剪处理。", task_category=task_category)
-                    
-                    crop_detect_cmd = [
-                        'ffmpeg', '-i', 'pipe:0', '-vf', 'cropdetect',
-                        '-f', 'null', '-'
-                    ]
-                    
-                    # --- 核心修复 1：调用黑边检测时，不使用 text=True，因为输入是 bytes ---
-                    detect_result = subprocess.run(crop_detect_cmd, input=smart_result.stdout, capture_output=True, timeout=30)
-                    
-                    # --- 核心修复 2：手动将 stderr 解码为字符串 ---
-                    stderr_str = detect_result.stderr.decode('utf-8', errors='ignore')
-                    
-                    crop_filter = ""
-                    crop_match = re.search(r'crop=(\d+:\d+:\d+:\d+)', stderr_str)
-                    if crop_match:
-                        detected_crop_params = crop_match.group(1)
-                        w, h, x, y = map(int, detected_crop_params.split(':'))
-                        ui_logger.debug(f"     - [截图-检测] 检测到有效画面区域: {detected_crop_params}", task_category=task_category)
+                detect_seek_time = max(0, seek_time - 3)
+                detect_cmd = [
+                    'ffmpeg', '-ss', str(detect_seek_time),
+                    '-i', video_url, '-t', '2', '-vf', 'cropdetect',
+                    '-f', 'null', '-'
+                ]
+                ui_logger.debug(f"     - [截图-检测] 执行 cropdetect 命令...", task_category=task_category)
+                detect_result = subprocess.run(detect_cmd, capture_output=True, text=True, timeout=60)
+                
+                crop_match = re.search(r'crop=(\d+:\d+:\d+:\d+)', detect_result.stderr)
+                if crop_match:
+                    detected_crop_params = crop_match.group(1)
+                    w, h, x, y = map(int, detected_crop_params.split(':'))
+                    ui_logger.debug(f"     - [截图-检测] 检测到有效画面区域: {detected_crop_params}", task_category=task_category)
 
-                        final_crop_params = detected_crop_params
-                        if config.crop_widescreen_to_16_9 and w / h > 1.8:
-                            target_w = round(h * 16 / 9)
-                            if target_w < w:
-                                offset_x = round((w - target_w) / 2)
-                                final_crop_params = f"crop={detected_crop_params},crop={target_w}:{h}:{offset_x}:0"
-                                ui_logger.info(f"     - [截图-裁剪] 已将宽屏截图从 {w}x{h} 裁剪为 16:9 ({target_w}x{h})", task_category=task_category)
-                        
-                        final_capture_cmd = [
-                            'ffmpeg', '-i', 'pipe:0', '-vf', final_crop_params,
-                            '-vframes', '1', '-q:v', '2',
-                            '-f', 'image2pipe', '-'
-                        ]
-                        final_result = subprocess.run(final_capture_cmd, input=smart_result.stdout, capture_output=True, check=True, timeout=30)
-                        return final_result.stdout
-                    else:
-                        ui_logger.warning("     - [截图-检测] 未能检测到黑边信息，返回原始I帧。", task_category=task_category)
-                        return smart_result.stdout
+                    crop_filter = f"crop={detected_crop_params}"
+                    if config.crop_widescreen_to_16_9 and w / h > 1.8:
+                        target_w = round(h * 16 / 9)
+                        if target_w < w:
+                            offset_x = round((w - target_w) / 2)
+                            crop_filter += f",crop={target_w}:{h}:{offset_x}:0"
+                            ui_logger.info(f"     - [截图-裁剪] 将应用宽屏裁剪，最终滤镜: {crop_filter}", task_category=task_category)
                 else:
-                    raise ValueError("智能截图模式未返回任何数据")
+                    ui_logger.warning("     - [截图-检测] 未能检测到黑边信息，将不进行裁剪。", task_category=task_category)
+            except Exception as e:
+                ui_logger.warning(f"     - [截图-检测] 黑边检测失败，将不进行裁剪。原因: {e}", task_category=task_category)
 
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as e:
-                ui_logger.warning(f"     - [截图-回退] 智能I帧选择失败，将回退到传统模式。原因: {e}", task_category=task_category)
-                return self._capture_screenshot_fallback(video_url, seek_time, config, task_category)
+            # 步骤 2: 根据配置选择截图模式
+            if config.use_smart_screenshot:
+                # 智能模式：获取1秒内的所有帧
+                ui_logger.info("     - [截图-智能模式] 启动，将获取1秒内多帧进行筛选...", task_category=task_category)
+                capture_cmd = [
+                    'ffmpeg', '-ss', str(seek_time),
+                    '-i', video_url, '-t', '1',
+                    '-q:v', '2', '-f', 'image2pipe', '-'
+                ]
+                if crop_filter:
+                    capture_cmd.insert(7, '-vf')
+                    capture_cmd.insert(8, crop_filter)
+                
+                capture_result = subprocess.run(capture_cmd, capture_output=True, check=True, timeout=60)
+                all_frames = self._split_image_stream(capture_result.stdout)
+                return self._get_best_image_by_variance(all_frames, task_category)
+            else:
+                # 传统模式：只获取1帧
+                ui_logger.info("     - [截图-传统模式] 启动，将截取单帧图片...", task_category=task_category)
+                capture_cmd = [
+                    'ffmpeg', '-ss', str(seek_time),
+                    '-i', video_url, '-vframes', '1',
+                    '-q:v', '2', '-f', 'image2pipe', '-'
+                ]
+                if crop_filter:
+                    capture_cmd.insert(5, '-vf')
+                    capture_cmd.insert(6, crop_filter)
+                
+                capture_result = subprocess.run(capture_cmd, capture_output=True, check=True, timeout=60)
+                return capture_result.stdout
 
         except Exception as e:
             ui_logger.error(f"     - [截图] 截图过程中发生未知错误: {e}", task_category=task_category, exc_info=True)
             return None
 
-    def _capture_screenshot_fallback(self, video_url: str, seek_time: float, config: EpisodeRefresherConfig, task_category: str) -> Optional[bytes]:
-        """传统的截图方法，作为回退机制。"""
-        try:
-            crop_detect_cmd = [
-                'ffmpeg', '-ss', str(seek_time - 3 if seek_time > 5 else 1),
-                '-i', video_url, '-t', '2', '-vf', 'cropdetect',
-                '-f', 'null', '-'
-            ]
-            ui_logger.debug(f"     - [截图-传统模式] 执行 cropdetect 命令...", task_category=task_category)
-            
-            # --- 核心修复 3：在回退模式中也应用正确的调用方式 ---
-            result = subprocess.run(crop_detect_cmd, capture_output=True, text=True, timeout=60)
-            stderr_str = result.stderr
-            
-            crop_filter = ""
-            crop_match = re.search(r'crop=(\d+:\d+:\d+:\d+)', stderr_str)
-            if crop_match:
-                detected_crop_params = crop_match.group(1)
-                w, h, x, y = map(int, detected_crop_params.split(':'))
-                ui_logger.debug(f"     - [截图-检测] 检测到有效画面区域: {detected_crop_params}", task_category=task_category)
-
-                crop_filter = detected_crop_params
-                if config.crop_widescreen_to_16_9 and w / h > 1.8:
-                    target_w = round(h * 16 / 9)
-                    if target_w < w:
-                        offset_x = round((w - target_w) / 2)
-                        crop_filter = f"crop={detected_crop_params},crop={target_w}:{h}:{offset_x}:0"
-                        ui_logger.info(f"     - [截图-裁剪] 已将宽屏截图从 {w}x{h} 裁剪为 16:9 ({target_w}x{h})", task_category=task_category)
-            else:
-                ui_logger.warning("     - [截图-检测] 未能检测到黑边信息，将不进行裁剪。", task_category=task_category)
-
-            capture_cmd = [
-                'ffmpeg', '-ss', str(seek_time),
-                '-i', video_url, '-vframes', '1',
-                '-q:v', '2', '-f', 'image2pipe', '-'
-            ]
-            if crop_filter:
-                capture_cmd.insert(5, '-vf')
-                capture_cmd.insert(6, crop_filter)
-
-            ui_logger.debug(f"     - [截图-执行] 执行 ffmpeg 命令: {' '.join(capture_cmd)}", task_category=task_category)
-            capture_result = subprocess.run(capture_cmd, capture_output=True, check=True, timeout=60)
-            return capture_result.stdout
-        except Exception as e:
-            ui_logger.error(f"     - [截图-传统模式] 传统截图模式最终失败: {e}", task_category=task_category)
-            return None
-
     def _handle_screenshot_flow(self, episode_id: str, episode_details: Dict, config: EpisodeRefresherConfig, task_category: str) -> bool:
-        """完整的截图流程"""
+        # ... (此函数无变化) ...
         if not self.ffmpeg_available:
             ui_logger.warning("     - [截图] ffmpeg 或 ffprobe 未安装，跳过截图功能。", task_category=task_category)
             return False
@@ -355,7 +356,7 @@ class EpisodeRefresherLogic:
         return False
 
     def _set_image_source_tag(self, item_id: str, source: str, task_category: str):
-        """为媒体项写入图片来源标签"""
+        # ... (此函数无变化) ...
         try:
             item_details = self.tmdb_logic._get_emby_item_details(item_id, fields="ProviderIds")
             if not item_details: return
@@ -370,7 +371,7 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - 写入图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
 
     def _clear_image_source_tag(self, item_id: str, task_category: str):
-        """清理媒体项的图片来源标签"""
+        # ... (此函数无变化) ...
         try:
             item_details = self.tmdb_logic._get_emby_item_details(item_id, fields="ProviderIds")
             if not item_details: return
@@ -385,9 +386,8 @@ class EpisodeRefresherLogic:
         except Exception as e:
             ui_logger.error(f"     - 移除图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
 
-    # backend/episode_refresher_logic.py (修改 _refresh_season_by_toolbox 函数)
-
     def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str) -> int:
+        # ... (此函数无变化) ...
         updated_count = 0
         try:
             series_name_for_log = emby_episodes[0].get("SeriesName", f"剧集 {series_tmdb_id}")
@@ -489,12 +489,9 @@ class EpisodeRefresherLogic:
                         headers = {'Content-Type': 'application/json'}
                         try:
                             self.session.post(update_url, params=self.params, json=update_payload, headers=headers, timeout=20).raise_for_status()
-                            
-                            # --- 核心修改：将英文字段名映射为中文 ---
                             field_map = {"Name": "标题", "Overview": "简介", "PremiereDate": "首播日期"}
                             for key in metadata_to_update.keys():
-                                final_changes_log.append(field_map.get(key, key)) # 如果没找到映射，则保留原样
-                                
+                                final_changes_log.append(field_map.get(key, key))
                         except Exception as e:
                             ui_logger.error(f"{log_prefix} 应用元数据更新时失败: {e}", task_category=task_category)
                     else:
@@ -505,14 +502,13 @@ class EpisodeRefresherLogic:
                     if img_source == "tmdb":
                         image_url = f"https://image.tmdb.org/t/p/original{img_data}"
                         if self._upload_image_from_url(emby_episode["Id"], image_url, task_category):
-                            final_changes_log.append("图片(来自TMDB)")
+                            final_changes_log.append("图片(TMDB)")
                             if current_image_source == "screenshot":
                                 self._clear_image_source_tag(emby_episode["Id"], task_category)
                     elif img_source == "screenshot":
                         if self._handle_screenshot_flow(emby_episode["Id"], emby_episode, config, task_category):
-                            final_changes_log.append("图片(来自工具截图)")
+                            final_changes_log.append("图片(截图)")
                             self._set_image_source_tag(emby_episode["Id"], "screenshot", task_category)
-
                             if config.screenshot_cooldown > 0:
                                 ui_logger.debug(f"     - [截图-冷却] 等待 {config.screenshot_cooldown} 秒...", task_category=task_category)
                                 time.sleep(config.screenshot_cooldown)
@@ -523,22 +519,13 @@ class EpisodeRefresherLogic:
                 else:
                     ui_logger.warning(f"{log_prefix} 检测到需要更新，但所有更新操作均失败。", task_category=task_category)
 
-                time.sleep(0.2)
-
         except Exception as e:
             ui_logger.error(f"     - 处理 S{season_number:02d} 时发生错误: {e}", task_category=task_category, exc_info=True)
         
         return updated_count
 
-    def run_refresh_for_episodes(
-        self, 
-        episode_ids: Iterable[str], 
-        config: EpisodeRefresherConfig, 
-        cancellation_event: threading.Event, 
-        task_id: Optional[str] = None, 
-        task_manager: Optional[TaskManager] = None,
-        task_category: str = "剧集刷新"
-    ):
+    def run_refresh_for_episodes(self, episode_ids: Iterable[str], config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: Optional[str] = None, task_manager: Optional[TaskManager] = None, task_category: str = "剧集刷新"):
+        # ... (此函数无变化) ...
         episode_ids_list = list(episode_ids)
         total_episodes = len(episode_ids_list)
         
@@ -548,6 +535,8 @@ class EpisodeRefresherLogic:
             ui_logger.info(f"  - 元数据写入方式: {'覆盖所有元数据' if config.overwrite_metadata else '仅补充缺失'}", task_category=task_category)
         else:
             ui_logger.info(f"  - 截图功能: {'开启' if config.screenshot_enabled else '关闭'}", task_category=task_category)
+            if config.screenshot_enabled:
+                ui_logger.info(f"  - 智能截图: {'开启' if config.use_smart_screenshot else '关闭'}", task_category=task_category)
         ui_logger.info(f"  - 智能跳过: {'开启' if config.skip_if_complete else '关闭'}", task_category=task_category)
         
         if task_manager and task_id:

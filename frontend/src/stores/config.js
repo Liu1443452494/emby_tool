@@ -53,7 +53,8 @@ export const useConfigStore = defineStore('config', () => {
       screenshot_fallback_seconds: 150,
       crop_widescreen_to_16_9: true,
       force_overwrite_screenshots: false,
-      screenshot_cooldown: 2.0
+      screenshot_cooldown: 2.0,
+      use_smart_screenshot: true
     }
     // --- 结束新增 ---
   })
@@ -142,6 +143,9 @@ export const useConfigStore = defineStore('config', () => {
           }
           if (typeof fullConfig.episode_refresher_config.screenshot_cooldown === 'undefined') {
             fullConfig.episode_refresher_config.screenshot_cooldown = 2.0;
+          }
+          if (typeof fullConfig.episode_refresher_config.use_smart_screenshot === 'undefined') {
+            fullConfig.episode_refresher_config.use_smart_screenshot = true;
           }
         }
         

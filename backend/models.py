@@ -167,6 +167,10 @@ class EpisodeRefresherConfig(BaseModel):
         description="每次截图操作之间的等待时间(秒)，用于保护视频源服务器",
         ge=0
     )
+    use_smart_screenshot: bool = Field(
+        default=True,
+        description="是否启用智能截图(分析1秒内多帧选择最清晰的一张)，会增加CPU消耗"
+    )
     
 
 class ScheduledTaskItem(BaseModel):
