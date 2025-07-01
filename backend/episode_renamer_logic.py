@@ -1,4 +1,3 @@
-# backend/episode_renamer_logic.py (提供完整文件)
 
 import logging
 import os
@@ -30,6 +29,27 @@ class EpisodeRenamerLogic:
         # from proxy_manager import ProxyManager
         # self.proxy_manager = ProxyManager(app_config)
 
+    def _trigger_emby_scan(self, series_id: str, task_cat: str):
+        """触发 Emby 扫描指定剧集的文件，但不更新元数据"""
+        import requests
+        ui_logger.info(f"     - 正在为剧集(ID: {series_id})触发文件扫描...", task_category=task_cat)
+        try:
+            url = f"{self.base_url}/Items/{series_id}/Refresh"
+            # 这些参数确保只扫描文件，不修改元数据或图片
+            params = {
+                **self.params,
+                "Recursive": "true",
+                "MetadataRefreshMode": "None",
+                "ImageRefreshMode": "None",
+                "ReplaceAllMetadata": "false",
+                "ReplaceAllImages": "false"
+            }
+            response = requests.post(url, params=params, timeout=30)
+            response.raise_for_status()
+            ui_logger.info(f"     - 已成功向 Emby 发送扫描请求。", task_category=task_cat)
+        except requests.RequestException as e:
+            ui_logger.error(f"     - 触发 Emby 扫描失败: {e}", task_category=task_cat)
+
     @staticmethod
     def _is_generic_episode_title(text: str) -> bool:
         """判断是否为通用、无意义的标题，如 'Episode 5', '第 5 集'"""
@@ -59,12 +79,19 @@ class EpisodeRenamerLogic:
             return None
 
     def _extract_title_from_filename(self, filename: str) -> Optional[str]:
-        """从文件名中提取标题部分"""
+        """
+        从文件名中提取标题部分。
+        仅匹配 SXXEXX 和 -XXX 后缀之间的部分。
+        如果文件名格式为 SXXEXX-XXX，则返回 None。
+        """
         # 正则表达式匹配 SXXEXX - [标题] - [后缀] 的格式
         # 它会捕获 SXXEXX 和 -ADWeb (或任何后缀) 之间的所有内容
         match = re.search(r'S\d{2}E\d{2}\s*-\s*(.*?)\s*-\s*\w+$', filename, re.IGNORECASE)
         if match:
-            return match.group(1).strip()
+            # 确保捕获组不是空的或只包含空格
+            title = match.group(1).strip()
+            if title:
+                return title
         return None
 
     def _rename_associated_files(self, old_base_path: str, new_base_path: str, task_cat: str) -> bool:
@@ -128,70 +155,114 @@ class EpisodeRenamerLogic:
 
     def run_rename_for_episodes(self, episode_ids: Iterable[str], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager, task_category: str):
         """(定时任务)为指定的剧集分集ID列表执行本地文件重命名，并记录到日志。"""
+        from collections import defaultdict
+        import requests
+
         episode_ids_list = list(episode_ids)
-        total_episodes = len(episode_ids_list)
+        total_episodes_to_fetch = len(episode_ids_list)
         
-        ui_logger.info(f"【本地重命名任务】启动，共需处理 {total_episodes} 个剧集分集。", task_category=task_category)
+        ui_logger.info(f"【本地重命名任务】启动，开始获取 {total_episodes_to_fetch} 个分集的详细信息...", task_category=task_category)
         
         if task_manager and task_id:
-            task_manager.update_task_progress(task_id, 0, total_episodes)
+            task_manager.update_task_progress(task_id, 0, total_episodes_to_fetch)
 
-        if total_episodes == 0:
-            ui_logger.info("没有需要处理的剧集分集，任务结束。", task_category=task_category)
-            return {"renamed_count": 0}
-
-        renamed_count = 0
+        # 按剧集ID对分集进行分组
+        series_map = defaultdict(list)
         for index, episode_id in enumerate(episode_ids_list):
+            if cancellation_event.is_set():
+                ui_logger.warning("任务在获取分集信息阶段被取消。", task_category=task_category)
+                return
+            
+            details = self._get_episode_details(episode_id, fields="Path,Name,SeriesId,SeriesName")
+            if details and details.get("SeriesId"):
+                series_map[details["SeriesId"]].append(details)
+            
+            if task_manager and task_id:
+                task_manager.update_task_progress(task_id, index + 1, total_episodes_to_fetch)
+
+        ui_logger.info(f"信息获取完毕，共涉及 {len(series_map)} 个剧集。开始逐一处理...", task_category=task_category)
+        
+        total_renamed_count = 0
+        total_skipped_count = 0
+
+        for series_id, episodes in series_map.items():
             if cancellation_event.is_set():
                 ui_logger.warning("任务被用户取消。", task_category=task_category)
                 break
+
+            series_name = episodes[0].get("SeriesName", f"剧集ID {series_id}")
+            ui_logger.info(f"--- 正在处理剧集: 【{series_name}】 ---", task_category=task_category)
             
-            if task_manager and task_id:
-                task_manager.update_task_progress(task_id, index + 1, total_episodes)
+            series_renamed_count = 0
+            series_skipped_reasons = defaultdict(int)
 
-            details = self._get_episode_details(episode_id)
-            if not details:
-                continue
+            for episode in episodes:
+                emby_path = episode.get("Path")
+                emby_title = episode.get("Name")
 
-            emby_path = details.get("Path")
-            emby_title = details.get("Name")
+                if not emby_path or not emby_title:
+                    ui_logger.debug(f"  -> 跳过分集 {episode['Id']}，缺少路径或标题信息。", task_category=task_category)
+                    series_skipped_reasons['缺少必要信息'] += 1
+                    continue
 
-            if not emby_path or not emby_title:
-                ui_logger.debug(f"  -> 跳过分集 {episode_id}，缺少路径或标题信息。", task_category=task_category)
-                continue
+                if self._is_generic_episode_title(emby_title):
+                    ui_logger.debug(f"  -> 跳过分集 {episode['Id']}，Emby 标题 '{emby_title}' 是通用标题。", task_category=task_category)
+                    series_skipped_reasons['通用标题'] += 1
+                    continue
 
-            if self._is_generic_episode_title(emby_title):
-                ui_logger.debug(f"  -> 跳过分集 {episode_id}，Emby 标题 '{emby_title}' 是通用标题。", task_category=task_category)
-                continue
+                dir_name = os.path.dirname(emby_path)
+                base_filename, ext = os.path.splitext(os.path.basename(emby_path))
+                
+                new_title_for_filename = self._sanitize_filename(emby_title)
+                new_base_filename = None
 
-            dir_name = os.path.dirname(emby_path)
-            base_filename, ext = os.path.splitext(os.path.basename(emby_path))
-            
-            old_title_in_filename = self._extract_title_from_filename(base_filename)
-            if old_title_in_filename is None:
-                ui_logger.debug(f"  -> 跳过文件 '{base_filename}'，无法从中解析出标题部分。", task_category=task_category)
-                continue
+                old_title_in_filename = self._extract_title_from_filename(base_filename)
+                
+                if old_title_in_filename:
+                    # 模式一：文件名中包含旧标题，执行替换
+                    if old_title_in_filename.lower() == new_title_for_filename.lower():
+                        ui_logger.debug(f"  -> 跳过文件 '{base_filename}'，文件名中的标题已是最新。", task_category=task_category)
+                        series_skipped_reasons['标题已是最新'] += 1
+                        continue
+                    new_base_filename = base_filename.replace(old_title_in_filename, new_title_for_filename)
+                    ui_logger.info(f"  -> 计划重命名 (替换): {base_filename}", task_category=task_category)
+                    ui_logger.info(f"     - 旧标题: '{old_title_in_filename}' -> 新标题: '{new_title_for_filename}'", task_category=task_category)
+                else:
+                    # 模式二：文件名中无标题，尝试插入
+                    no_title_match = re.search(r'(S\d{2}E\d{2})\s*-\s*(\w+)$', base_filename, re.IGNORECASE)
+                    if no_title_match:
+                        sxxexx_part = no_title_match.group(1)
+                        suffix_part = no_title_match.group(2)
+                        new_base_filename = f"{sxxexx_part} - {new_title_for_filename} - {suffix_part}"
+                        ui_logger.info(f"  -> 计划重命名 (插入): {base_filename}", task_category=task_category)
+                        ui_logger.info(f"     - 将插入标题: '{new_title_for_filename}'", task_category=task_category)
+                    else:
+                        ui_logger.debug(f"  -> 跳过文件 '{base_filename}'，无法解析文件名结构。", task_category=task_category)
+                        series_skipped_reasons['无法解析文件名'] += 1
+                        continue
 
-            new_title_for_filename = self._sanitize_filename(emby_title)
+                if new_base_filename:
+                    old_base_path = os.path.join(dir_name, base_filename)
+                    new_base_path = os.path.join(dir_name, new_base_filename)
 
-            if old_title_in_filename.lower() == new_title_for_filename.lower():
-                ui_logger.debug(f"  -> 跳过文件 '{base_filename}'，文件名中的标题已是最新。", task_category=task_category)
-                continue
+                    if self._rename_associated_files(old_base_path, new_base_path, task_category):
+                        series_renamed_count += 1
+                        self._log_rename_operation(episode['Id'], old_base_path, new_base_path, task_category)
 
-            ui_logger.info(f"  -> 检测到需要重命名的本地文件: {base_filename}", task_category=task_category)
-            ui_logger.info(f"     - 旧标题: '{old_title_in_filename}' -> 新标题: '{new_title_for_filename}'", task_category=task_category)
+            # 单个剧集处理完毕，打印总结并触发扫描
+            skipped_count = sum(series_skipped_reasons.values())
+            total_skipped_count += skipped_count
+            total_renamed_count += series_renamed_count
 
-            new_base_filename = base_filename.replace(old_title_in_filename, new_title_for_filename)
-            
-            old_base_path = os.path.join(dir_name, base_filename)
-            new_base_path = os.path.join(dir_name, new_base_filename)
+            reasons_str = ", ".join([f"{reason}: {count}" for reason, count in series_skipped_reasons.items()]) if series_skipped_reasons else "无"
+            ui_logger.info(f"【{series_name}】处理完毕：成功重命名 {series_renamed_count} 组文件，跳过 {skipped_count} 组文件 (原因: {reasons_str})。", task_category=task_category)
 
-            if self._rename_associated_files(old_base_path, new_base_path, task_category):
-                renamed_count += 1
-                self._log_rename_operation(episode_id, old_base_path, new_base_path, task_category)
+            if series_renamed_count > 0:
+                self._trigger_emby_scan(series_id, task_category)
 
-        ui_logger.info(f"【本地重命名任务】执行完毕。共成功重命名了 {renamed_count} 组本地文件，并已写入日志。", task_category=task_category)
-        return {"renamed_count": renamed_count}
+        ui_logger.info(f"---", task_category=task_category)
+        ui_logger.info(f"【本地重命名任务】全部执行完毕。共成功重命名了 {total_renamed_count} 组文件，总共跳过了 {total_skipped_count} 组文件。", task_category=task_category)
+        return {"renamed_count": total_renamed_count, "skipped_count": total_skipped_count}
 
     def _get_clouddrive_video_path(self, episode_id: str, old_base_path: str, task_cat: str) -> Optional[Tuple[str, str]]:
         """通过 MediaSources 获取网盘视频的真实路径和文件名"""
@@ -293,6 +364,9 @@ class EpisodeRenamerLogic:
                 ui_logger.error(f"     - 重命名网盘文件失败: {e}", task_category=task_cat)
                 log_entry['error'] = str(e)
                 failed_logs.append(log_entry)
+                
+            if self.renamer_config.clouddrive_rename_cooldown > 0:
+                ui_logger.debug(f"     - [网盘重命名-冷却] 等待 {self.renamer_config.clouddrive_rename_cooldown} 秒...", task_category=task_cat)
             
             time.sleep(self.renamer_config.clouddrive_rename_cooldown)
 
