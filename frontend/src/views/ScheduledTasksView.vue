@@ -193,9 +193,7 @@
           </el-form-item>
           <el-form-item label="覆盖模式">
             <el-switch v-model="localPosterConfig.overwrite_existing" active-text="强制覆盖所有海报" inactive-text="智能判断，不覆盖已是豆瓣海报的媒体" />
-            <div class="form-item-description">
-              关闭时，工具会记录已更新的海报，避免重复工作。开启后，将无差别覆盖范围内的所有媒体项海报。
-            </div>
+            <div class="form-item-description">关闭时，工具会记录已更新的海报，避免重复工作。开启后，将无差别覆盖范围内的所有媒体项海报。</div>
           </el-form-item>
           <el-form-item label="地区过滤">
             <el-switch v-model="localPosterConfig.skip_mainland_china" active-text="跳过中国大陆影视" />
@@ -217,6 +215,7 @@
       <div v-if="localRefresherConfig" class="independent-task-config">
         <el-form :model="localRefresherConfig" label-position="top">
           
+          <!-- --- 核心修改：新增刷新模式选择 --- -->
           <el-form-item label="刷新模式">
             <el-radio-group v-model="localRefresherConfig.refresh_mode">
               <el-radio value="emby">通知 Emby 刷新 (默认)</el-radio>
@@ -227,6 +226,7 @@
               <b>工具箱代理刷新：</b>由本工具直接访问 TMDB 获取元数据，然后写入 Emby。此模式可以利用工具箱的代理设置，解决 Emby 无法联网的问题。
             </div>
           </el-form-item>
+          <!-- --- 结束新增 --- -->
 
           <el-form-item label="元数据写入方式">
             <el-radio-group v-model="localRefresherConfig.overwrite_metadata">
@@ -245,44 +245,28 @@
             </div>
           </el-form-item>
 
-          <el-divider />
-          
-          <h4>FFmpeg 截图设置 (仅在“工具箱代理刷新”模式下生效)</h4>
-          <el-form-item label="启用截图功能">
-            <el-switch v-model="localRefresherConfig.ffmpeg_screenshot_enabled" />
+           <el-divider />
+          <el-form-item label="视频截图 (仅在“工具箱代理刷新”模式下生效)">
+            <el-switch v-model="localRefresherConfig.screenshot_enabled" active-text="启用视频截图" />
             <div class="form-item-description">
-              当 TMDB 和 Emby 都没有分集图片时，尝试使用 FFmpeg 对视频流进行截图。
-              <b>需要 Docker 环境或宿主机已安装 FFmpeg。</b>
+              当 TMDB 和 Emby 都没有分集图片时，尝试从视频文件（仅支持.strm）直接截图。需要 Docker 容器内已安装 ffmpeg。
             </div>
           </el-form-item>
-
-          <template v-if="localRefresherConfig.ffmpeg_screenshot_enabled">
-            <el-form-item label="截图时间点 (百分比)">
+          
+          <div v-if="localRefresherConfig.screenshot_enabled" class="sub-options" style="margin-left: 0; padding-left: 10px;">
+            <el-form-item label="截图位置百分比">
               <el-slider v-model="localRefresherConfig.screenshot_percentage" :min="1" :max="99" show-input />
               <div class="form-item-description">
-                优先按视频总时长的百分比进行截图。
+                在视频总时长的哪个位置进行截图。例如，10% 表示在视频开头十分之一处。
               </div>
             </el-form-item>
-            <el-form-item label="备用截图时间 (秒)">
-              <el-input-number v-model="localRefresherConfig.screenshot_fixed_time" :min="1" />
+            <el-form-item label="保底截图秒数">
+              <el-input-number v-model="localRefresherConfig.screenshot_fallback_seconds" :min="1" />
               <div class="form-item-description">
-                当无法获取视频总时长时，使用这个固定的秒数进行截图。
+                如果无法获取到视频总时长（例如网络问题），则直接在视频的这个秒数进行截图。
               </div>
             </el-form-item>
-            <el-form-item label="FFmpeg 路径">
-              <el-input v-model="localRefresherConfig.ffmpeg_path" placeholder="默认: ffmpeg" />
-              <div class="form-item-description">
-                如果您的 ffmpeg 不在系统 PATH 中，请指定其完整路径。
-              </div>
-            </el-form-item>
-            <el-form-item label="FFprobe 路径">
-              <el-input v-model="localRefresherConfig.ffprobe_path" placeholder="默认: ffprobe" />
-              <div class="form-item-description">
-                如果您的 ffprobe 不在系统 PATH 中，请指定其完整路径。
-              </div>
-            </el-form-item>
-          </template>
-
+          </div>
         </el-form>
       </div>
       <template #footer>
@@ -304,23 +288,29 @@ import cronstrue from 'cronstrue/i18n';
 const configStore = useConfigStore();
 const mediaStore = useMediaStore();
 
+// --- 修改：在任务定义中添加新任务 ---
 const definedTasks = ref([
   { id: 'actor_localizer', name: '演员中文化', hasSettings: false },
   { id: 'douban_fixer', name: '豆瓣ID修复器', hasSettings: false },
   { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
   { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true }
 ]);
+// --- 结束修改 ---
 
 const localScope = ref({});
 const localTaskStates = reactive({});
 const localPosterConfig = ref(null);
 const localWebhookConfig = ref(null);
+// --- 新增：为新配置创建 ref ---
 const localRefresherConfig = ref(null);
+// --- 结束新增 ---
 const isSaving = ref(false);
 const isTriggering = reactive({});
 const isPosterDialogVisible = ref(false);
 const isWebhookDialogVisible = ref(false);
+// --- 新增：为新对话框创建 ref ---
 const isRefresherDialogVisible = ref(false);
+// --- 结束新增 ---
 
 definedTasks.value.forEach(taskDef => {
   localTaskStates[taskDef.id] = {
@@ -343,6 +333,7 @@ onMounted(() => {
   }, { immediate: true });
 });
 
+// --- 修改：更新状态函数，增加对新配置的处理 ---
 function updateStateFromConfig() {
   localScope.value = _.cloneDeep(configStore.appConfig.scheduled_tasks_config.target_scope);
   localPosterConfig.value = _.cloneDeep(configStore.appConfig.douban_poster_updater_config);
@@ -372,7 +363,9 @@ function updateStateFromConfig() {
     }
   });
 }
+// --- 结束修改 ---
 
+// --- 修改：保存函数，增加对新配置的保存调用 ---
 const handleSave = async () => {
   isSaving.value = true;
   
@@ -397,6 +390,7 @@ const handleSave = async () => {
   }
   isSaving.value = false;
 };
+// --- 结束修改 ---
 
 const handleTriggerOnce = async (taskId) => {
   try {
@@ -424,6 +418,7 @@ const handleTriggerOnce = async (taskId) => {
   }
 };
 
+// --- 修改：打开设置对话框函数，增加对新任务的处理 ---
 const openSettingsDialog = (taskId) => {
   if (taskId === 'douban_poster_updater') {
     isPosterDialogVisible.value = true;
@@ -431,6 +426,7 @@ const openSettingsDialog = (taskId) => {
     isRefresherDialogVisible.value = true;
   }
 };
+// --- 结束修改 ---
 
 const parseCron = (task) => {
   if (!task || !task.cron || task.cron.trim() === '') {
@@ -464,23 +460,25 @@ const copyWebhookUrl = async () => {
   --custom-theme-color-active: #4a8a7f;
 }
 
+/* --- 核心修改：Flexbox 布局 --- */
 .scheduled-tasks-page {
   padding: 0 20px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: hidden; /* 防止外层出现滚动条 */
 }
 
 .page-header, .common-scope-area, .save-button-container {
-  flex-shrink: 0;
+  flex-shrink: 0; /* 固定区域，不允许收缩 */
 }
 
 .tasks-area {
-  flex-grow: 1;
-  overflow-y: auto;
-  padding-bottom: 20px;
+  flex-grow: 1; /* 伸缩区域，占据剩余空间 */
+  overflow-y: auto; /* 内容超出时，自身出现滚动条 */
+  padding-bottom: 20px; /* 给滚动到底部留出一些空间 */
 }
+/* --- 结束核心修改 --- */
 
 .page-header {
   padding: 20px 0;
@@ -493,9 +491,11 @@ const copyWebhookUrl = async () => {
   margin-top: 20px;
   border: 1px solid var(--el-border-color-lighter);
 }
+/* --- 新增：为通用范围卡片添加一个 class --- */
 .common-scope-area {
   margin-top: 20px;
 }
+/* --- 结束新增 --- */
 
 .card-header {
   display: flex;
@@ -674,16 +674,8 @@ const copyWebhookUrl = async () => {
   height: 40px;
 }
 
+/* --- 新增：为独立配置对话框添加通用样式 --- */
 .independent-task-config {
   padding-top: 10px;
-}
-
-.independent-task-config h4 {
-  margin-top: 25px;
-  margin-bottom: 15px;
-  font-size: 1rem;
-  color: var(--el-text-color-primary);
-  border-left: 3px solid var(--custom-theme-color);
-  padding-left: 10px;
 }
 </style>

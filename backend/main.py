@@ -235,30 +235,14 @@ def trigger_scheduled_task(task_id: str):
     else:
         ui_logger.warning(f"未知的任务ID: {task_id}", task_category=task_cat)
 
-def check_command_exists(command: str) -> bool:
-    """检查指定的命令是否存在于系统PATH中"""
-    return shutil.which(command) is not None
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task_cat = "系统启动"
     ui_logger.info("应用启动...", task_category=task_cat)
-
-    ui_logger.info("【启动检查】开始检查核心依赖环境...", task_category=task_cat)
-    
-    # 检查 FFmpeg
-    if check_command_exists("ffmpeg"):
-        ui_logger.info("【启动检查】FFmpeg 环境... [正常]", task_category=task_cat)
-    else:
-        ui_logger.warning("【启动检查】FFmpeg 环境... [未找到!] - 剧集元数据刷新中的截图功能将不可用。", task_category=task_cat)
-        
-    # 检查 FFprobe
-    if check_command_exists("ffprobe"):
-        ui_logger.info("【启动检查】FFprobe 环境... [正常]", task_category=task_cat)
-    else:
-        ui_logger.warning("【启动检查】FFprobe 环境... [未找到!] - 剧集元数据刷新中的截图功能将不可用。", task_category=task_cat)
-    
-    ui_logger.info("【启动检查】核心依赖环境检查完成。", task_category=task_cat)
+    required_tools = ['ffmpeg', 'ffprobe']
+    for tool in required_tools:
+        if not shutil.which(tool):
+            ui_logger.warning(f"【启动检查】未找到 '{tool}' 命令，视频截图功能将不可用。请确保已在 Docker 环境或主机上安装 ffmpeg。", task_category=task_cat)
     task_manager_consumer = asyncio.create_task(task_manager.broadcast_consumer())
     webhook_worker_task = asyncio.create_task(webhook_worker())
 

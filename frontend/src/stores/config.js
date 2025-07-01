@@ -1,5 +1,3 @@
-// frontend/src/stores/config.js (修改后)
-
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { API_BASE_URL } from '@/config/apiConfig';
@@ -45,20 +43,19 @@ export const useConfigStore = defineStore('config', () => {
       initial_wait_time: 30,
       plugin_wait_time: 60
     },
-    // --- 新增：为新配置提供默认值 ---
     episode_refresher_config: {
       refresh_mode: 'emby',
       overwrite_metadata: true,
       skip_if_complete: true,
-      ffmpeg_screenshot_enabled: false,
-      ffmpeg_path: 'ffmpeg',
-      ffprobe_path: 'ffprobe',
+      screenshot_enabled: false,
       screenshot_percentage: 10,
-      screenshot_fixed_time: 150
+      screenshot_fallback_seconds: 150
     }
     // --- 结束新增 ---
   })
   const isConnected = ref(false)
+
+  // frontend/src/stores/config.js (提供 fetchConfig 函数的完整代码块)
 
   async function fetchConfig() {
     if (isLoaded.value) {
@@ -103,32 +100,34 @@ export const useConfigStore = defineStore('config', () => {
           fullConfig.webhook_config = { enabled: false, initial_wait_time: 30, plugin_wait_time: 60 };
         }
         
-        // --- 新增：处理新配置的兼容性加载 ---
+        // --- 核心修改：增加对新字段的兼容性加载 ---
         if (!fullConfig.episode_refresher_config) {
           fullConfig.episode_refresher_config = { 
             refresh_mode: 'emby', 
             overwrite_metadata: true, 
             skip_if_complete: true,
-            ffmpeg_screenshot_enabled: false,
-            ffmpeg_path: 'ffmpeg',
-            ffprobe_path: 'ffprobe',
+            screenshot_enabled: false,
             screenshot_percentage: 10,
-            screenshot_fixed_time: 150
+            screenshot_fallback_seconds: 150
           };
         } else {
-          const defaultConfig = {
-            refresh_mode: 'emby',
-            overwrite_metadata: true,
-            skip_if_complete: true,
-            ffmpeg_screenshot_enabled: false,
-            ffmpeg_path: 'ffmpeg',
-            ffprobe_path: 'ffprobe',
-            screenshot_percentage: 10,
-            screenshot_fixed_time: 150
-          };
-          fullConfig.episode_refresher_config = { ...defaultConfig, ...fullConfig.episode_refresher_config };
+          if (typeof fullConfig.episode_refresher_config.refresh_mode === 'undefined') {
+            fullConfig.episode_refresher_config.refresh_mode = 'emby';
+          }
+          if (typeof fullConfig.episode_refresher_config.skip_if_complete === 'undefined') {
+            fullConfig.episode_refresher_config.skip_if_complete = true;
+          }
+          if (typeof fullConfig.episode_refresher_config.screenshot_enabled === 'undefined') {
+            fullConfig.episode_refresher_config.screenshot_enabled = false;
+          }
+          if (typeof fullConfig.episode_refresher_config.screenshot_percentage === 'undefined') {
+            fullConfig.episode_refresher_config.screenshot_percentage = 10;
+          }
+          if (typeof fullConfig.episode_refresher_config.screenshot_fallback_seconds === 'undefined') {
+            fullConfig.episode_refresher_config.screenshot_fallback_seconds = 150;
+          }
         }
-        // --- 结束新增 ---
+        // --- 结束修改 ---
         
         appConfig.value = fullConfig
       } else {
@@ -327,6 +326,7 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
   
+  // --- 新增：保存剧集刷新器配置的 action ---
   async function saveEpisodeRefresherConfig(newConfig) {
     try {
       const response = await fetch(`${API_BASE_URL}/api/config/episode-refresher`, {
@@ -343,6 +343,7 @@ export const useConfigStore = defineStore('config', () => {
       return { success: false, message: error.message };
     }
   }
+  // --- 结束新增 ---
 
   return { 
     appConfig, 
@@ -360,6 +361,7 @@ export const useConfigStore = defineStore('config', () => {
     triggerScheduledTaskOnce,
     saveDoubanPosterUpdaterConfig,
     saveWebhookConfig,
+    // --- 新增：导出新方法 ---
     saveEpisodeRefresherConfig
   }
 })
