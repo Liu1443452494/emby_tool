@@ -153,6 +153,7 @@ class EpisodeRenamerLogic:
         except Exception as e:
             ui_logger.error(f"     - 写入重命名日志时发生错误: {e}", task_category=task_cat)
 
+
     def run_rename_for_episodes(self, episode_ids: Iterable[str], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager, task_category: str):
         """(定时任务)为指定的剧集分集ID列表执行本地文件重命名，并记录到日志。"""
         from collections import defaultdict
@@ -231,9 +232,18 @@ class EpisodeRenamerLogic:
                     # 模式二：文件名中无标题，尝试插入
                     no_title_match = re.search(r'(S\d{2}E\d{2})\s*-\s*(\w+)$', base_filename, re.IGNORECASE)
                     if no_title_match:
+                        # --- 核心修正开始 ---
+                        # 获取匹配部分之前的所有内容
+                        prefix_part = base_filename[:no_title_match.start()]
+                        # 获取 SXXEXX 部分
                         sxxexx_part = no_title_match.group(1)
+                        # 获取后缀部分
                         suffix_part = no_title_match.group(2)
-                        new_base_filename = f"{sxxexx_part} - {new_title_for_filename} - {suffix_part}"
+                        
+                        # 重新组装，确保前缀被保留
+                        new_base_filename = f"{prefix_part}{sxxexx_part} - {new_title_for_filename} - {suffix_part}"
+                        # --- 核心修正结束 ---
+
                         ui_logger.info(f"  -> 计划重命名 (插入): {base_filename}", task_category=task_category)
                         ui_logger.info(f"     - 将插入标题: '{new_title_for_filename}'", task_category=task_category)
                     else:
@@ -364,7 +374,7 @@ class EpisodeRenamerLogic:
                 ui_logger.error(f"     - 重命名网盘文件失败: {e}", task_category=task_cat)
                 log_entry['error'] = str(e)
                 failed_logs.append(log_entry)
-                
+
             if self.renamer_config.clouddrive_rename_cooldown > 0:
                 ui_logger.debug(f"     - [网盘重命名-冷却] 等待 {self.renamer_config.clouddrive_rename_cooldown} 秒...", task_category=task_cat)
             
