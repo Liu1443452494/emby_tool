@@ -51,11 +51,17 @@ from webhook_logic import WebhookLogic
 from proxy_manager import ProxyManager
 from episode_renamer_logic import EpisodeRenamerLogic
 
+
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
 webhook_queue = asyncio.Queue()
 webhook_processing_set = set()
+
+class ScanPlanRequest(BaseModel):
+    series_id: str
+    path_from: str
+    path_to: str
 
 async def webhook_worker():
     # Webhook 日志已在 webhook_logic.py 中处理，此处保留底层日志
@@ -1176,3 +1182,19 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     
     logging.info(f"【Webhook】事件 '{payload.Event}' 或类型 '{target_item_type}' 无需处理，已跳过。")
     return {"status": "skipped", "message": "Event not applicable"}
+
+
+@app.post("/api/renamer/scan-plan")
+def create_rename_plan_api(req: ScanPlanRequest):
+    config = app_config.load_app_config()
+    logic = EpisodeRenamerLogic(config)
+    task_name = f"扫描网盘生成重命名计划 (SeriesID: {req.series_id})"
+    task_id = task_manager.register_task(
+        logic.scan_series_for_rename_plan,
+        task_name,
+        req.series_id,
+        req.path_from,
+        req.path_to,
+        task_category="网盘扫描"
+    )
+    return {"status": "success", "message": "扫描任务已启动", "task_id": task_id}

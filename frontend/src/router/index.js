@@ -41,6 +41,11 @@ const router = createRouter({
       component: () => import('../views/DoubanFixerView.vue')
     },
     // --- 结束新增 ---
+    {
+      path: '/file-sync',
+      name: 'file-sync',
+      component: () => import('../views/FileSyncView.vue')
+    },
 
     {
       path: '/scheduled-tasks',
