@@ -203,10 +203,6 @@ class EpisodeRefresherLogic:
         同时根据配置处理黑边和比例。
         """
         try:
-            # --- 核心修改：智能I帧选择逻辑 ---
-            
-            # 1. 优先尝试在 seek_time 附近的窗口内寻找最佳I帧
-            # 我们从 seek_time 稍早一点的位置开始，搜索1.5秒，确保覆盖目标时间点
             start_seek = max(0, seek_time - 0.5)
             window_duration = 1.5
             
@@ -221,41 +217,36 @@ class EpisodeRefresherLogic:
             ui_logger.debug(f"     - [截图-智能模式] 尝试在 {start_seek:.2f}s 附近寻找I帧...", task_category=task_category)
             
             try:
-                # 首先尝试不带裁剪的智能截图，获取原始I帧
                 smart_result = subprocess.run(smart_capture_cmd, capture_output=True, check=True, timeout=60)
                 if smart_result.stdout:
                     ui_logger.info("     - [截图-智能模式] 成功捕获到一张I帧，将基于此帧进行裁剪处理。", task_category=task_category)
                     
-                    # 将捕获到的I帧作为输入，进行黑边检测和裁剪
-                    # 这样可以避免对整个视频流进行两次IO操作
                     crop_detect_cmd = [
                         'ffmpeg', '-i', 'pipe:0', '-vf', 'cropdetect',
                         '-f', 'null', '-'
                     ]
-                    detect_result = subprocess.run(crop_detect_cmd, input=smart_result.stdout, capture_output=True, text=True, timeout=30)
+                    
+                    # --- 核心修复 1：调用黑边检测时，不使用 text=True，因为输入是 bytes ---
+                    detect_result = subprocess.run(crop_detect_cmd, input=smart_result.stdout, capture_output=True, timeout=30)
+                    
+                    # --- 核心修复 2：手动将 stderr 解码为字符串 ---
+                    stderr_str = detect_result.stderr.decode('utf-8', errors='ignore')
                     
                     crop_filter = ""
-                    crop_match = re.search(r'crop=(\d+:\d+:\d+:\d+)', detect_result.stderr)
+                    crop_match = re.search(r'crop=(\d+:\d+:\d+:\d+)', stderr_str)
                     if crop_match:
                         detected_crop_params = crop_match.group(1)
                         w, h, x, y = map(int, detected_crop_params.split(':'))
                         ui_logger.debug(f"     - [截图-检测] 检测到有效画面区域: {detected_crop_params}", task_category=task_category)
 
+                        final_crop_params = detected_crop_params
                         if config.crop_widescreen_to_16_9 and w / h > 1.8:
                             target_w = round(h * 16 / 9)
                             if target_w < w:
                                 offset_x = round((w - target_w) / 2)
-                                crop_filter = f"crop={target_w}:{h}:{offset_x}:0"
+                                final_crop_params = f"crop={detected_crop_params},crop={target_w}:{h}:{offset_x}:0"
                                 ui_logger.info(f"     - [截图-裁剪] 已将宽屏截图从 {w}x{h} 裁剪为 16:9 ({target_w}x{h})", task_category=task_category)
-                        else:
-                            # 如果不是宽屏，或者不开启裁剪，则不进行二次裁剪
-                            pass 
                         
-                        # 无论是否二次裁剪，都先应用去黑边的裁剪
-                        final_crop_params = f"crop={detected_crop_params}"
-                        if crop_filter: # 如果有二次裁剪，则链式添加
-                            final_crop_params += f",{crop_filter}"
-
                         final_capture_cmd = [
                             'ffmpeg', '-i', 'pipe:0', '-vf', final_crop_params,
                             '-vframes', '1', '-q:v', '2',
@@ -264,16 +255,13 @@ class EpisodeRefresherLogic:
                         final_result = subprocess.run(final_capture_cmd, input=smart_result.stdout, capture_output=True, check=True, timeout=30)
                         return final_result.stdout
                     else:
-                        # 如果黑边检测失败，直接返回原始I帧
                         ui_logger.warning("     - [截图-检测] 未能检测到黑边信息，返回原始I帧。", task_category=task_category)
                         return smart_result.stdout
                 else:
-                    # 如果智能模式没有输出，则会触发 CalledProcessError，进入 except 块
                     raise ValueError("智能截图模式未返回任何数据")
 
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as e:
                 ui_logger.warning(f"     - [截图-回退] 智能I帧选择失败，将回退到传统模式。原因: {e}", task_category=task_category)
-                # 2. 回退到传统模式：直接截取指定时间点
                 return self._capture_screenshot_fallback(video_url, seek_time, config, task_category)
 
         except Exception as e:
@@ -283,32 +271,31 @@ class EpisodeRefresherLogic:
     def _capture_screenshot_fallback(self, video_url: str, seek_time: float, config: EpisodeRefresherConfig, task_category: str) -> Optional[bytes]:
         """传统的截图方法，作为回退机制。"""
         try:
-            # 直接对原始视频流进行黑边检测
             crop_detect_cmd = [
                 'ffmpeg', '-ss', str(seek_time - 3 if seek_time > 5 else 1),
                 '-i', video_url, '-t', '2', '-vf', 'cropdetect',
                 '-f', 'null', '-'
             ]
             ui_logger.debug(f"     - [截图-传统模式] 执行 cropdetect 命令...", task_category=task_category)
+            
+            # --- 核心修复 3：在回退模式中也应用正确的调用方式 ---
             result = subprocess.run(crop_detect_cmd, capture_output=True, text=True, timeout=60)
+            stderr_str = result.stderr
             
             crop_filter = ""
-            crop_match = re.search(r'crop=(\d+:\d+:\d+:\d+)', result.stderr)
+            crop_match = re.search(r'crop=(\d+:\d+:\d+:\d+)', stderr_str)
             if crop_match:
                 detected_crop_params = crop_match.group(1)
                 w, h, x, y = map(int, detected_crop_params.split(':'))
                 ui_logger.debug(f"     - [截图-检测] 检测到有效画面区域: {detected_crop_params}", task_category=task_category)
 
+                crop_filter = detected_crop_params
                 if config.crop_widescreen_to_16_9 and w / h > 1.8:
                     target_w = round(h * 16 / 9)
                     if target_w < w:
                         offset_x = round((w - target_w) / 2)
                         crop_filter = f"crop={detected_crop_params},crop={target_w}:{h}:{offset_x}:0"
                         ui_logger.info(f"     - [截图-裁剪] 已将宽屏截图从 {w}x{h} 裁剪为 16:9 ({target_w}x{h})", task_category=task_category)
-                    else:
-                        crop_filter = f"crop={detected_crop_params}"
-                else:
-                    crop_filter = f"crop={detected_crop_params}"
             else:
                 ui_logger.warning("     - [截图-检测] 未能检测到黑边信息，将不进行裁剪。", task_category=task_category)
 
