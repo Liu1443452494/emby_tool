@@ -212,7 +212,7 @@ class WebhookLogic:
         else:
             ui_logger.info(f"【豆瓣ID修复】媒体【{item_name}】缺少豆瓣ID，开始执行ID修复...", task_category=task_cat)
             fixer_logic = DoubanFixerLogic(self.config)
-            if fixer_logic._process_single_item_for_fixing(item_id):
+            if fixer_logic._process_single_item_for_fixing(item_id, task_cat):
                 refreshed_details = self._get_emby_item_details(item_id)
                 douban_id = next((v for k, v in refreshed_details.get("ProviderIds", {}).items() if k.lower() == 'douban'), None)
                 if douban_id:
