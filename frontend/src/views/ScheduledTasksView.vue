@@ -16,9 +16,11 @@
       <el-form :model="localScope" label-position="top" class="scope-form">
         <el-radio-group v-model="localScope.mode" class="scope-radio-group">
           <el-radio value="latest">最新入库</el-radio>
+          <el-radio value="favorites">仅收藏</el-radio>
           <el-radio value="all">所有媒体库</el-radio>
           <el-radio value="by_type">按媒体类型</el-radio>
           <el-radio value="by_library">按媒体库</el-radio>
+          <el-radio value="by_search">按搜索/ID</el-radio>
         </el-radio-group>
 
         <div class="sub-options">
@@ -45,6 +47,12 @@
           </div>
           <div v-if="localScope.mode === 'all'">
             <el-input v-model="localScope.library_blacklist" type="textarea" :rows="2" placeholder="输入要排除的媒体库名称，用英文逗号(,)隔开" />
+          </div>
+          <div v-if="localScope.mode === 'by_search'">
+            <el-button @click="isSearchDialogVisible = true">
+              选择媒体项...
+            </el-button>
+            <span class="selection-count-text">已选择 {{ localScope.item_ids.length }} 个项目</span>
           </div>
         </div>
       </el-form>
@@ -141,7 +149,43 @@
       <el-button type="primary" @click="handleSave" :loading="isSaving">保存所有设置</el-button>
     </div>
 
-    <!-- 所有对话框 (Dialogs) -->
+    <!-- 按搜索选择媒体对话框 -->
+    <el-dialog
+      v-model="isSearchDialogVisible"
+      title="选择媒体项"
+      width="60%"
+      top="5vh"
+    >
+      <div class="search-dialog-content">
+        <el-form @submit.prevent="handleSearch" class="search-form">
+          <el-input v-model="searchQuery" placeholder="输入标题或ItemID..." clearable />
+          <el-button type="primary" native-type="submit" :loading="mediaStore.isLoading">搜索</el-button>
+        </el-form>
+        <div class="search-results-table" v-loading="mediaStore.isLoading">
+          <el-table
+            ref="searchDialogTableRef"
+            :data="mediaStore.searchResults"
+            height="100%"
+            @selection-change="handleDialogSelectionChange"
+            empty-text="请输入关键词搜索"
+          >
+            <el-table-column type="selection" width="45" />
+            <el-table-column prop="Name" label="标题" show-overflow-tooltip />
+            <el-table-column prop="ProductionYear" label="年份" width="70" />
+          </el-table>
+        </div>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="isSearchDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="confirmSearchSelection">
+            确认选择 ({{ dialogSelection.length }} 项)
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- Webhook 对话框 -->
     <el-dialog
       v-model="isWebhookDialogVisible"
       title="Webhook 实时处理 - 详细配置"
@@ -179,6 +223,7 @@
       </template>
     </el-dialog>
 
+    <!-- 豆瓣海报更新对话框 -->
     <el-dialog
       v-model="isPosterDialogVisible"
       title="豆瓣海报更新 - 独立配置"
@@ -193,11 +238,15 @@
           </el-form-item>
           <el-form-item label="覆盖模式">
             <el-switch v-model="localPosterConfig.overwrite_existing" active-text="强制覆盖所有海报" inactive-text="智能判断，不覆盖已是豆瓣海报的媒体" />
-            <div class="form-item-description">关闭时，工具会记录已更新的海报，避免重复工作。开启后，将无差别覆盖范围内的所有媒体项海报。</div>
+            <div class="form-item-description">
+              关闭时，工具会记录已更新的海报，避免重复工作。开启后，将无差别覆盖范围内的所有媒体项海报。
+            </div>
           </el-form-item>
           <el-form-item label="地区过滤">
             <el-switch v-model="localPosterConfig.skip_mainland_china" active-text="跳过中国大陆影视" />
-            <div class="form-item-description">开启后，若媒体的制片国家/地区包含“中国”，则任务会自动跳过该媒体项。此功能依赖于Emby中正确的“制片国家/地区”信息。</div>
+            <div class="form-item-description">
+              开启后，若媒体的制片国家/地区包含“中国”，则任务会自动跳过该媒体项。此功能依赖于Emby中正确的“制片国家/地区”信息。
+            </div>
           </el-form-item>
         </el-form>
       </div>
@@ -206,6 +255,7 @@
       </template>
     </el-dialog>
 
+    <!-- 剧集元数据刷新对话框 -->
     <el-dialog
       v-model="isRefresherDialogVisible"
       title="剧集元数据刷新 - 独立配置"
@@ -215,7 +265,6 @@
       <div v-if="localRefresherConfig" class="independent-task-config">
         <el-form :model="localRefresherConfig" label-position="top">
           
-          <!-- --- 核心修改：新增刷新模式选择 --- -->
           <el-form-item label="刷新模式">
             <el-radio-group v-model="localRefresherConfig.refresh_mode">
               <el-radio value="emby">通知 Emby 刷新 (默认)</el-radio>
@@ -226,7 +275,6 @@
               <b>工具箱代理刷新：</b>由本工具直接访问 TMDB 获取元数据，然后写入 Emby。此模式可以利用工具箱的代理设置，解决 Emby 无法联网的问题。
             </div>
           </el-form-item>
-          <!-- --- 结束新增 --- -->
 
           <el-form-item label="元数据写入方式">
             <el-radio-group v-model="localRefresherConfig.overwrite_metadata">
@@ -266,6 +314,24 @@
                 如果无法获取到视频总时长（例如网络问题），则直接在视频的这个秒数进行截图。
               </div>
             </el-form-item>
+            <el-form-item label="截图操作冷却时间 (秒)">
+              <el-input-number v-model="localRefresherConfig.screenshot_cooldown" :min="0" :step="0.5" :precision="1" />
+              <div class="form-item-description">
+                每次截图（调用ffmpeg）之间的等待时间，用于保护视频源服务器（如网盘）。设为0则不等待。
+              </div>
+            </el-form-item>
+            <el-form-item label="宽屏截图处理">
+              <el-switch v-model="localRefresherConfig.crop_widescreen_to_16_9" active-text="裁剪为 16:9" />
+              <div class="form-item-description">
+                开启后，会将超宽屏（如 21:9）的截图从两侧裁剪，使其变为 16:9，以优化在 Emby 中的显示效果。
+              </div>
+            </el-form-item>
+            <el-form-item label="强制覆盖截图">
+              <el-switch v-model="localRefresherConfig.force_overwrite_screenshots" active-text="开启强制覆盖" />
+              <div class="form-item-description">
+                临时开启此项，任务将无视已存在的截图，强制重新生成。用于在调整截图参数后更新不满意的图片。建议用完后关闭。
+              </div>
+            </el-form-item>
           </div>
         </el-form>
       </div>
@@ -277,7 +343,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch, reactive, computed } from 'vue';
+import { ref, onMounted, watch, reactive, nextTick } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -288,29 +354,27 @@ import cronstrue from 'cronstrue/i18n';
 const configStore = useConfigStore();
 const mediaStore = useMediaStore();
 
-// --- 修改：在任务定义中添加新任务 ---
 const definedTasks = ref([
   { id: 'actor_localizer', name: '演员中文化', hasSettings: false },
   { id: 'douban_fixer', name: '豆瓣ID修复器', hasSettings: false },
   { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
   { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true }
 ]);
-// --- 结束修改 ---
 
 const localScope = ref({});
 const localTaskStates = reactive({});
 const localPosterConfig = ref(null);
 const localWebhookConfig = ref(null);
-// --- 新增：为新配置创建 ref ---
 const localRefresherConfig = ref(null);
-// --- 结束新增 ---
 const isSaving = ref(false);
 const isTriggering = reactive({});
 const isPosterDialogVisible = ref(false);
 const isWebhookDialogVisible = ref(false);
-// --- 新增：为新对话框创建 ref ---
 const isRefresherDialogVisible = ref(false);
-// --- 结束新增 ---
+const isSearchDialogVisible = ref(false);
+const searchQuery = ref('');
+const searchDialogTableRef = ref(null);
+const dialogSelection = ref([]);
 
 definedTasks.value.forEach(taskDef => {
   localTaskStates[taskDef.id] = {
@@ -333,7 +397,20 @@ onMounted(() => {
   }, { immediate: true });
 });
 
-// --- 修改：更新状态函数，增加对新配置的处理 ---
+watch(isSearchDialogVisible, (visible) => {
+  if (visible) {
+    nextTick(() => {
+      // 当对话框可见时，根据已有的 item_ids 恢复表格的勾选状态
+      const selectedIds = new Set(localScope.value.item_ids);
+      mediaStore.searchResults.forEach(row => {
+        if (selectedIds.has(row.Id)) {
+          searchDialogTableRef.value?.toggleRowSelection(row, true);
+        }
+      });
+    });
+  }
+});
+
 function updateStateFromConfig() {
   localScope.value = _.cloneDeep(configStore.appConfig.scheduled_tasks_config.target_scope);
   localPosterConfig.value = _.cloneDeep(configStore.appConfig.douban_poster_updater_config);
@@ -363,9 +440,7 @@ function updateStateFromConfig() {
     }
   });
 }
-// --- 结束修改 ---
 
-// --- 修改：保存函数，增加对新配置的保存调用 ---
 const handleSave = async () => {
   isSaving.value = true;
   
@@ -374,8 +449,13 @@ const handleSave = async () => {
     return rest;
   });
   
+  const scopeToSave = { ...localScope.value };
+  if (!scopeToSave.item_ids) {
+    scopeToSave.item_ids = [];
+  }
+  
   const scheduledConfig = {
-    target_scope: localScope.value,
+    target_scope: scopeToSave,
     tasks: tasksToSave
   };
   const result1 = await configStore.saveScheduledTasksConfig(scheduledConfig);
@@ -390,10 +470,13 @@ const handleSave = async () => {
   }
   isSaving.value = false;
 };
-// --- 结束修改 ---
 
 const handleTriggerOnce = async (taskId) => {
   try {
+    if (localScope.value.mode === 'by_search' && localScope.value.item_ids.length === 0) {
+      ElMessage.warning('在“按搜索/ID”模式下，请先搜索并勾选至少一个媒体项。');
+      return;
+    }
     await ElMessageBox.confirm(
       '即将使用当前已保存的通用目标范围配置立即执行一次此任务。确定吗？',
       '确认操作',
@@ -418,7 +501,6 @@ const handleTriggerOnce = async (taskId) => {
   }
 };
 
-// --- 修改：打开设置对话框函数，增加对新任务的处理 ---
 const openSettingsDialog = (taskId) => {
   if (taskId === 'douban_poster_updater') {
     isPosterDialogVisible.value = true;
@@ -426,7 +508,6 @@ const openSettingsDialog = (taskId) => {
     isRefresherDialogVisible.value = true;
   }
 };
-// --- 结束修改 ---
 
 const parseCron = (task) => {
   if (!task || !task.cron || task.cron.trim() === '') {
@@ -451,6 +532,19 @@ const copyWebhookUrl = async () => {
     ElMessage.error('复制失败，您的浏览器可能不支持此功能。');
   }
 };
+
+const handleSearch = () => {
+  mediaStore.searchMedia(searchQuery.value);
+};
+
+const handleDialogSelectionChange = (selection) => {
+  dialogSelection.value = selection;
+};
+
+const confirmSearchSelection = () => {
+  localScope.value.item_ids = dialogSelection.value.map(item => item.Id);
+  isSearchDialogVisible.value = false;
+};
 </script>
 
 <style scoped>
@@ -460,25 +554,23 @@ const copyWebhookUrl = async () => {
   --custom-theme-color-active: #4a8a7f;
 }
 
-/* --- 核心修改：Flexbox 布局 --- */
 .scheduled-tasks-page {
   padding: 0 20px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* 防止外层出现滚动条 */
+  overflow: hidden;
 }
 
 .page-header, .common-scope-area, .save-button-container {
-  flex-shrink: 0; /* 固定区域，不允许收缩 */
+  flex-shrink: 0;
 }
 
 .tasks-area {
-  flex-grow: 1; /* 伸缩区域，占据剩余空间 */
-  overflow-y: auto; /* 内容超出时，自身出现滚动条 */
-  padding-bottom: 20px; /* 给滚动到底部留出一些空间 */
+  flex-grow: 1;
+  overflow-y: auto;
+  padding-bottom: 20px;
 }
-/* --- 结束核心修改 --- */
 
 .page-header {
   padding: 20px 0;
@@ -491,11 +583,9 @@ const copyWebhookUrl = async () => {
   margin-top: 20px;
   border: 1px solid var(--el-border-color-lighter);
 }
-/* --- 新增：为通用范围卡片添加一个 class --- */
 .common-scope-area {
   margin-top: 20px;
 }
-/* --- 结束新增 --- */
 
 .card-header {
   display: flex;
@@ -508,6 +598,9 @@ const copyWebhookUrl = async () => {
 }
 .scope-radio-group {
   margin-bottom: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
 }
 .sub-options {
   padding-left: 10px;
@@ -674,8 +767,30 @@ const copyWebhookUrl = async () => {
   height: 40px;
 }
 
-/* --- 新增：为独立配置对话框添加通用样式 --- */
 .independent-task-config {
   padding-top: 10px;
+}
+
+.search-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  height: 65vh;
+}
+.search-form {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.search-results-table {
+  flex-grow: 1;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.selection-count-text {
+  margin-left: 15px;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
 }
 </style>

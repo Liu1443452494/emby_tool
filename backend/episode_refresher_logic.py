@@ -1,4 +1,4 @@
-# backend/episode_refresher_logic.py (最终修复版)
+# backend/episode_refresher_logic.py (完整代码)
 
 import logging
 import threading
@@ -61,21 +61,26 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - 解锁媒体项 (ID: {item_id}) 时发生未知错误: {e}", task_category=task_category, exc_info=True)
             return False
 
+
     def _refresh_single_episode_by_emby(self, episode_id: str, config: EpisodeRefresherConfig, task_category: str) -> bool:
         try:
             if not self._unlock_item(episode_id, task_category):
                 ui_logger.warning(f"     - 解锁媒体项 (ID: {episode_id}) 失败，刷新可能不会生效。", task_category=task_category)
             
             url = f"{self.base_url}/Items/{episode_id}/Refresh"
+            
+            # --- 核心修改：调整图片刷新模式 ---
+            # 将 ImageRefreshMode 从 FullRefresh 改为 Default
+            # 这将使 Emby 只下载缺失的图片，而不会删除已有的图片（比如我们的截图）
             params = {
                 **self.params,
                 "Recursive": "true",
                 "MetadataRefreshMode": "FullRefresh",
-                "ImageRefreshMode": "FullRefresh",
+                "ImageRefreshMode": "Default", # <--- 修改点
                 "ReplaceAllMetadata": str(config.overwrite_metadata).lower(),
-                "ReplaceAllImages": "true"
+                "ReplaceAllImages": "false" # <--- 修改点：配合 Default 模式，设置为 false
             }
-            ui_logger.debug(f"     - [Emby模式] 发送刷新请求到: {url}", task_category=task_category)
+            ui_logger.debug(f"     - [Emby模式] 发送刷新请求到: {url} (图片模式: Default)", task_category=task_category)
             
             response = self.session.post(url, params=params, timeout=30)
             response.raise_for_status()
@@ -190,26 +195,68 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - [截图] ffprobe 获取时长失败: {e}", task_category=task_category)
             return None
 
-    def _capture_screenshot(self, video_url: str, seek_time: float, task_category: str) -> Optional[bytes]:
-        """使用 ffmpeg 从视频流截图"""
+    def _capture_screenshot(self, video_url: str, seek_time: float, config: EpisodeRefresherConfig, task_category: str) -> Optional[bytes]:
+        """使用 ffmpeg 从视频流截图，并根据配置处理黑边和比例"""
         try:
-            command = [
-                'ffmpeg',
-                '-ss', str(seek_time),
-                '-i', video_url,
-                '-vframes', '1',
-                '-q:v', '2',
-                '-f', 'image2pipe',
-                '-'
+            crop_detect_cmd = [
+                'ffmpeg', '-ss', str(seek_time - 3 if seek_time > 5 else 1),
+                '-i', video_url, '-t', '2', '-vf', 'cropdetect',
+                '-f', 'null', '-'
             ]
-            ui_logger.debug(f"     - [截图] 执行 ffmpeg 命令截图，时间点: {seek_time:.2f}s", task_category=task_category)
-            result = subprocess.run(command, capture_output=True, check=True, timeout=60)
-            return result.stdout
+            ui_logger.debug(f"     - [截图-检测] 执行 cropdetect 命令...", task_category=task_category)
+            result = subprocess.run(crop_detect_cmd, capture_output=True, text=True, timeout=60)
+            
+            crop_filter = ""
+            crop_match = re.search(r'crop=(\d+:\d+:\d+:\d+)', result.stderr)
+            if crop_match:
+                detected_crop_params = crop_match.group(1)
+                w, h, x, y = map(int, detected_crop_params.split(':'))
+                ui_logger.debug(f"     - [截图-检测] 检测到有效画面区域: {detected_crop_params}", task_category=task_category)
+
+                if config.crop_widescreen_to_16_9 and w / h > 1.8:
+                    target_w = round(h * 16 / 9)
+                    if target_w < w:
+                        offset_x = round((w - target_w) / 2)
+                        crop_filter = f"crop={detected_crop_params},crop={target_w}:{h}:{offset_x}:0"
+                        ui_logger.info(f"     - [截图-裁剪] 已将宽屏截图从 {w}x{h} 裁剪为 16:9 ({target_w}x{h})", task_category=task_category)
+                    else:
+                        crop_filter = f"crop={detected_crop_params}"
+                else:
+                    crop_filter = f"crop={detected_crop_params}"
+            else:
+                ui_logger.warning("     - [截图-检测] 未能检测到黑边信息，将不进行裁剪。", task_category=task_category)
+
+            capture_cmd = [
+                'ffmpeg', '-ss', str(seek_time),
+                '-i', video_url, '-vframes', '1',
+                '-q:v', '2', '-f', 'image2pipe', '-'
+            ]
+            if crop_filter:
+                capture_cmd.insert(5, '-vf')
+                capture_cmd.insert(6, crop_filter)
+
+            ui_logger.debug(f"     - [截图-执行] 执行 ffmpeg 命令: {' '.join(capture_cmd)}", task_category=task_category)
+            capture_result = subprocess.run(capture_cmd, capture_output=True, check=True, timeout=60)
+            return capture_result.stdout
+
         except subprocess.TimeoutExpired:
-            ui_logger.error("     - [截图] ffmpeg 截图超时。", task_category=task_category)
+            ui_logger.error("     - [截图] ffmpeg 截图或检测超时。", task_category=task_category)
             return None
         except subprocess.CalledProcessError as e:
-            ui_logger.error(f"     - [截图] ffmpeg 截图失败: {e.stderr.decode(errors='ignore')}", task_category=task_category)
+            if 'cropdetect' in ' '.join(e.cmd):
+                 ui_logger.warning(f"     - [截图-回退] 黑边检测失败，尝试不裁剪直接截图。错误: {e.stderr}", task_category=task_category)
+                 try:
+                    fallback_cmd = ['ffmpeg', '-ss', str(seek_time), '-i', video_url, '-vframes', '1', '-q:v', '2', '-f', 'image2pipe', '-']
+                    fallback_result = subprocess.run(fallback_cmd, capture_output=True, check=True, timeout=60)
+                    return fallback_result.stdout
+                 except Exception as fallback_e:
+                    ui_logger.error(f"     - [截图-回退] 无裁剪截图也失败: {fallback_e}", task_category=task_category)
+                    return None
+            else:
+                ui_logger.error(f"     - [截图] ffmpeg 截图失败: {e.stderr}", task_category=task_category)
+                return None
+        except Exception as e:
+            ui_logger.error(f"     - [截图] 截图过程中发生未知错误: {e}", task_category=task_category, exc_info=True)
             return None
 
     def _handle_screenshot_flow(self, episode_id: str, episode_details: Dict, config: EpisodeRefresherConfig, task_category: str) -> bool:
@@ -245,11 +292,44 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - [截图] 最终未能获取到视频流 URL，无法截图。", task_category=task_category)
             return False
 
-        image_bytes = self._capture_screenshot(video_url, seek_time, task_category)
+        image_bytes = self._capture_screenshot(video_url, seek_time, config, task_category)
         if image_bytes:
             return self._upload_image_bytes(episode_id, image_bytes, 'image/jpeg', task_category)
         
         return False
+
+    def _set_image_source_tag(self, item_id: str, source: str, task_category: str):
+        """为媒体项写入图片来源标签"""
+        try:
+            item_details = self.tmdb_logic._get_emby_item_details(item_id, fields="ProviderIds")
+            if not item_details: return
+
+            item_details.setdefault("ProviderIds", {})['ToolboxImageSource'] = source
+            
+            update_url = f"{self.base_url}/Items/{item_id}"
+            headers = {'Content-Type': 'application/json'}
+            self.session.post(update_url, params=self.params, json=item_details, headers=headers, timeout=20).raise_for_status()
+            ui_logger.debug(f"     - 成功将图片来源标记 '{source}' 写入 Emby (ID: {item_id})。", task_category=task_category)
+        except Exception as e:
+            ui_logger.error(f"     - 写入图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
+
+    def _clear_image_source_tag(self, item_id: str, task_category: str):
+        """清理媒体项的图片来源标签"""
+        try:
+            item_details = self.tmdb_logic._get_emby_item_details(item_id, fields="ProviderIds")
+            if not item_details: return
+
+            provider_ids = item_details.get("ProviderIds", {})
+            if 'ToolboxImageSource' in provider_ids:
+                del provider_ids['ToolboxImageSource']
+                update_url = f"{self.base_url}/Items/{item_id}"
+                headers = {'Content-Type': 'application/json'}
+                self.session.post(update_url, params=self.params, json=item_details, headers=headers, timeout=20).raise_for_status()
+                ui_logger.debug(f"     - 成功从 Emby (ID: {item_id}) 移除图片来源标记。", task_category=task_category)
+        except Exception as e:
+            ui_logger.error(f"     - 移除图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
+
+    # backend/episode_refresher_logic.py (修改 _refresh_season_by_toolbox 函数)
 
     def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str) -> int:
         updated_count = 0
@@ -276,74 +356,116 @@ class EpisodeRefresherLogic:
                     ui_logger.debug(f"{log_prefix} 在TMDB返回的列表中未找到对应分集。", task_category=task_category)
                     continue
 
-                update_payload = emby_episode
-                all_changes_log = []
-                missing_log = []
+                potential_changes = {}
+                reasons_to_skip = []
 
+                # --- 核心修改：增加详细的日志理由 ---
+
+                # 1. 检查元数据
+                emby_name = emby_episode.get("Name", "")
                 tmdb_name = tmdb_episode.get("name")
-                if tmdb_name and not self._is_generic_episode_title(tmdb_name) and tmdb_name != update_payload.get("Name"):
-                    update_payload["Name"] = tmdb_name
-                    all_changes_log.append("标题")
-                elif not tmdb_name:
-                    missing_log.append("标题")
+                if tmdb_name and not self._is_generic_episode_title(tmdb_name) and tmdb_name != emby_name:
+                    potential_changes["Name"] = tmdb_name
+                else:
+                    if not tmdb_name:
+                        reasons_to_skip.append("标题(TMDB源为空)")
+                    elif self._is_generic_episode_title(tmdb_name):
+                        reasons_to_skip.append(f"标题(TMDB源为通用标题'{tmdb_name}')")
+                    elif tmdb_name == emby_name:
+                        reasons_to_skip.append("标题(与Emby相同)")
 
+                emby_overview = emby_episode.get("Overview", "")
                 tmdb_overview = tmdb_episode.get("overview")
-                if tmdb_overview and tmdb_overview != update_payload.get("Overview"):
-                    update_payload["Overview"] = tmdb_overview
-                    all_changes_log.append("简介")
-                elif not tmdb_overview:
-                    missing_log.append("简介")
+                if tmdb_overview and tmdb_overview != emby_overview:
+                    potential_changes["Overview"] = tmdb_overview
+                else:
+                    if not tmdb_overview:
+                        reasons_to_skip.append("简介(TMDB源为空)")
+                    elif tmdb_overview == emby_overview:
+                        reasons_to_skip.append("简介(与Emby相同)")
 
+                emby_premiere_date = emby_episode.get("PremiereDate", "")
                 tmdb_air_date = tmdb_episode.get("air_date")
                 if tmdb_air_date:
-                    emby_premiere_date = update_payload.get("PremiereDate", "")
                     if not emby_premiere_date or tmdb_air_date != emby_premiere_date[:10]:
-                        update_payload["PremiereDate"] = tmdb_air_date + "T00:00:00.000Z"
-                        all_changes_log.append("首播日期")
-                elif not tmdb_air_date:
-                    missing_log.append("首播日期")
-                
+                        potential_changes["PremiereDate"] = tmdb_air_date + "T00:00:00.000Z"
+                    else:
+                        reasons_to_skip.append("首播日期(与Emby相同)")
+                else:
+                    reasons_to_skip.append("首播日期(TMDB源为空)")
+
+                # 2. 检查图片
+                current_image_source = emby_episode.get("ProviderIds", {}).get("ToolboxImageSource")
                 emby_has_image = bool(emby_episode.get("ImageTags", {}).get("Primary"))
                 tmdb_still_path = tmdb_episode.get("still_path")
-                
-                if not tmdb_still_path:
-                    missing_log.append("图片")
 
-                if not emby_has_image:
-                    if tmdb_still_path:
-                        ui_logger.info(f"{log_prefix} Emby缺少图片，尝试从TMDB更新...", task_category=task_category)
-                        image_url = f"https://image.tmdb.org/t/p/original{tmdb_still_path}"
-                        if self._upload_image_from_url(emby_episode["Id"], image_url, task_category):
-                            all_changes_log.append("图片(TMDB)")
-                        else:
-                            ui_logger.error(f"{log_prefix} 图片更新失败。", task_category=task_category)
-                    elif config.screenshot_enabled:
-                        ui_logger.info(f"{log_prefix} Emby和TMDB均无图片，尝试从视频文件截图...", task_category=task_category)
-                        if self._handle_screenshot_flow(emby_episode["Id"], emby_episode, config, task_category):
-                            all_changes_log.append("图片(截图)")
-                        else:
-                            ui_logger.error(f"{log_prefix} 截图失败。", task_category=task_category)
-
-                if not all_changes_log:
-                    if missing_log:
-                        ui_logger.info(f"{log_prefix} 无需更新 (TMDB源缺少: {', '.join(missing_log)})", task_category=task_category)
+                if tmdb_still_path:
+                    # 即使 TMDB 有图，如果 Emby 的图来源不是截图，我们也不主动更新（遵循非激进策略）
+                    # 只有当 Emby 无图，或者 Emby 的图是截图时，才认为需要用 TMDB 的图更新
+                    if not emby_has_image or current_image_source == "screenshot":
+                        potential_changes["Image"] = ("tmdb", tmdb_still_path)
                     else:
-                        ui_logger.info(f"{log_prefix} 元数据和图片均无需更新。", task_category=task_category)
+                        reasons_to_skip.append("图片(Emby已有非截图主图)")
+                elif config.screenshot_enabled:
+                    should_screenshot = False
+                    if not emby_has_image:
+                        should_screenshot = True
+                    elif config.force_overwrite_screenshots and current_image_source == "screenshot":
+                        should_screenshot = True
+                    
+                    if should_screenshot:
+                        potential_changes["Image"] = ("screenshot", None)
+                    else:
+                        if emby_has_image:
+                            reasons_to_skip.append("图片(已有图且未强制覆盖截图)")
+                        else: # 逻辑上不会到这里，但作为兜底
+                            reasons_to_skip.append("图片(截图条件不满足)")
+                else:
+                    reasons_to_skip.append("图片(TMDB无图且未开启截图)")
+
+                # 3. 根据检查结果执行操作或打印详细日志
+                if not potential_changes:
+                    # 将理由列表组合成一个字符串
+                    reason_str = ", ".join(reasons_to_skip) if reasons_to_skip else "未知原因"
+                    ui_logger.info(f"{log_prefix} 无需更新 ({reason_str})", task_category=task_category)
                     continue
+
+                # 4. 应用变更 (此部分逻辑不变)
+                final_changes_log = []
                 
-                if any(not item.startswith("图片") for item in all_changes_log):
+                metadata_to_update = {k: v for k, v in potential_changes.items() if k != "Image"}
+                if metadata_to_update:
                     if self._unlock_item(emby_episode["Id"], task_category):
+                        update_payload = emby_episode.copy()
+                        update_payload.update(metadata_to_update)
                         update_url = f"{self.base_url}/Items/{emby_episode['Id']}"
                         headers = {'Content-Type': 'application/json'}
-                        update_resp = self.session.post(update_url, params=self.params, json=update_payload, headers=headers, timeout=20)
-                        update_resp.raise_for_status()
+                        try:
+                            self.session.post(update_url, params=self.params, json=update_payload, headers=headers, timeout=20).raise_for_status()
+                            final_changes_log.extend(metadata_to_update.keys())
+                        except Exception as e:
+                            ui_logger.error(f"{log_prefix} 应用元数据更新时失败: {e}", task_category=task_category)
                     else:
                         ui_logger.error(f"{log_prefix} 解锁失败，跳过元数据更新。", task_category=task_category)
-                        all_changes_log = [item for item in all_changes_log if item.startswith("图片")]
-                
-                if all_changes_log:
-                    ui_logger.info(f"{log_prefix} 成功更新到Emby，内容: [{', '.join(all_changes_log)}]", task_category=task_category)
+
+                if "Image" in potential_changes:
+                    img_source, img_data = potential_changes["Image"]
+                    if img_source == "tmdb":
+                        image_url = f"https://image.tmdb.org/t/p/original{img_data}"
+                        if self._upload_image_from_url(emby_episode["Id"], image_url, task_category):
+                            final_changes_log.append("图片(TMDB)")
+                            if current_image_source == "screenshot":
+                                self._clear_image_source_tag(emby_episode["Id"], task_category)
+                    elif img_source == "screenshot":
+                        if self._handle_screenshot_flow(emby_episode["Id"], emby_episode, config, task_category):
+                            final_changes_log.append("图片(截图)")
+                            self._set_image_source_tag(emby_episode["Id"], "screenshot", task_category)
+
+                if final_changes_log:
+                    ui_logger.info(f"{log_prefix} 成功更新到Emby，内容: [{', '.join(final_changes_log)}]", task_category=task_category)
                     updated_count += 1
+                else:
+                    ui_logger.warning(f"{log_prefix} 检测到需要更新，但所有更新操作均失败。", task_category=task_category)
 
                 time.sleep(0.2)
 
@@ -405,7 +527,10 @@ class EpisodeRefresherLogic:
             for ep in all_episode_details:
                 is_title_ok = bool(ep.get("Name")) and not self._is_generic_episode_title(ep.get("Name"))
                 is_overview_ok = bool(ep.get("Overview"))
-                is_image_ok = bool(ep.get("ImageTags", {}).get("Primary"))
+                
+                has_primary_image = bool(ep.get("ImageTags", {}).get("Primary"))
+                image_source = ep.get("ProviderIds", {}).get("ToolboxImageSource")
+                is_image_ok = has_primary_image and image_source != "screenshot"
                 
                 if not (is_title_ok and is_overview_ok and is_image_ok):
                     episodes_to_process.append(ep)

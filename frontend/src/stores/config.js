@@ -29,7 +29,8 @@ export const useConfigStore = defineStore('config', () => {
         limit: 100,
         media_type: 'Movie',
         library_ids: [],
-        library_blacklist: ''
+        library_blacklist: '',
+        item_ids: []
       },
       tasks: []
     },
@@ -49,13 +50,15 @@ export const useConfigStore = defineStore('config', () => {
       skip_if_complete: true,
       screenshot_enabled: false,
       screenshot_percentage: 10,
-      screenshot_fallback_seconds: 150
+      screenshot_fallback_seconds: 150,
+      crop_widescreen_to_16_9: true,
+      force_overwrite_screenshots: false,
+      screenshot_cooldown: 2.0
     }
     // --- 结束新增 ---
   })
   const isConnected = ref(false)
 
-  // frontend/src/stores/config.js (提供 fetchConfig 函数的完整代码块)
 
   async function fetchConfig() {
     if (isLoaded.value) {
@@ -83,11 +86,14 @@ export const useConfigStore = defineStore('config', () => {
         }
         if (!fullConfig.scheduled_tasks_config) {
           fullConfig.scheduled_tasks_config = {
-            target_scope: { mode: 'latest', days: 7, limit: 100, media_type: 'Movie', library_ids: [], library_blacklist: '' },
+            target_scope: { mode: 'latest', days: 7, limit: 100, media_type: 'Movie', library_ids: [], library_blacklist: '', item_ids: [] },
             tasks: []
           };
         } else if (!fullConfig.scheduled_tasks_config.target_scope) {
-           fullConfig.scheduled_tasks_config.target_scope = { mode: 'latest', days: 7, limit: 100, media_type: 'Movie', library_ids: [], library_blacklist: '' };
+           fullConfig.scheduled_tasks_config.target_scope = { mode: 'latest', days: 7, limit: 100, media_type: 'Movie', library_ids: [], library_blacklist: '', item_ids: [] };
+        }
+        if (typeof fullConfig.scheduled_tasks_config.target_scope.item_ids === 'undefined') {
+          fullConfig.scheduled_tasks_config.target_scope.item_ids = [];
         }
         
         if (!fullConfig.douban_poster_updater_config) {
@@ -100,7 +106,6 @@ export const useConfigStore = defineStore('config', () => {
           fullConfig.webhook_config = { enabled: false, initial_wait_time: 30, plugin_wait_time: 60 };
         }
         
-        // --- 核心修改：增加对新字段的兼容性加载 ---
         if (!fullConfig.episode_refresher_config) {
           fullConfig.episode_refresher_config = { 
             refresh_mode: 'emby', 
@@ -108,7 +113,10 @@ export const useConfigStore = defineStore('config', () => {
             skip_if_complete: true,
             screenshot_enabled: false,
             screenshot_percentage: 10,
-            screenshot_fallback_seconds: 150
+            screenshot_fallback_seconds: 150,
+            crop_widescreen_to_16_9: true,
+            force_overwrite_screenshots: false,
+            screenshot_cooldown: 2.0
           };
         } else {
           if (typeof fullConfig.episode_refresher_config.refresh_mode === 'undefined') {
@@ -126,8 +134,16 @@ export const useConfigStore = defineStore('config', () => {
           if (typeof fullConfig.episode_refresher_config.screenshot_fallback_seconds === 'undefined') {
             fullConfig.episode_refresher_config.screenshot_fallback_seconds = 150;
           }
+          if (typeof fullConfig.episode_refresher_config.crop_widescreen_to_16_9 === 'undefined') {
+            fullConfig.episode_refresher_config.crop_widescreen_to_16_9 = true;
+          }
+          if (typeof fullConfig.episode_refresher_config.force_overwrite_screenshots === 'undefined') {
+            fullConfig.episode_refresher_config.force_overwrite_screenshots = false;
+          }
+          if (typeof fullConfig.episode_refresher_config.screenshot_cooldown === 'undefined') {
+            fullConfig.episode_refresher_config.screenshot_cooldown = 2.0;
+          }
         }
-        // --- 结束修改 ---
         
         appConfig.value = fullConfig
       } else {

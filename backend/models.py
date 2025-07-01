@@ -136,7 +136,6 @@ class EpisodeRefresherConfig(BaseModel):
     overwrite_metadata: bool = Field(default=True, description="刷新时是否覆盖现有元数据")
     skip_if_complete: bool = Field(default=True, description="如果分集已有标题、简介和图片，则跳过刷新")
     
-    # --- 新增截图相关配置 ---
     screenshot_enabled: bool = Field(
         default=False,
         description="当TMDB和Emby均无图片时，是否尝试从视频文件截图"
@@ -152,7 +151,23 @@ class EpisodeRefresherConfig(BaseModel):
         description="获取视频时长失败时的保底截图秒数",
         ge=1
     )
-    # --- 结束新增 ---
+    
+    # --- 新增配置项 ---
+    crop_widescreen_to_16_9: bool = Field(
+        default=True,
+        description="是否将宽屏(如21:9)截图裁剪为16:9以适应Emby显示"
+    )
+    force_overwrite_screenshots: bool = Field(
+        default=False,
+        description="是否强制覆盖已存在的截图(用于调整参数后重新截图)"
+    )
+
+    screenshot_cooldown: float = Field(
+        default=2.0,
+        description="每次截图操作之间的等待时间(秒)，用于保护视频源服务器",
+        ge=0
+    )
+    
 
 class ScheduledTaskItem(BaseModel):
     """单个定时任务的配置"""
@@ -163,12 +178,14 @@ class ScheduledTaskItem(BaseModel):
 
 class ScheduledTasksTargetScope(BaseModel):
     """定时任务通用的目标范围配置"""
-    mode: Literal['latest', 'all', 'by_type', 'by_library'] = 'latest'
+    mode: Literal['latest', 'all', 'by_type', 'by_library', 'by_search', 'favorites'] = 'latest'
     days: int = 7
     limit: int = 100
     media_type: Optional[Literal["Movie", "Series"]] = "Movie"
     library_ids: List[str] = Field(default_factory=list)
     library_blacklist: str = ""
+    # --- 新增 item_ids 字段用于接收搜索结果 ---
+    item_ids: List[str] = Field(default_factory=list)
 
 class ScheduledTasksConfig(BaseModel):
     """定时任务总配置"""

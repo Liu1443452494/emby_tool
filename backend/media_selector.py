@@ -3,8 +3,8 @@ import logging
 import requests
 from typing import List, Optional
 from datetime import datetime, timedelta, timezone
+import json 
 
-# --- 核心修改：导入 ui_logger ---
 from log_manager import ui_logger
 from models import AppConfig, ScheduledTasksTargetScope
 
@@ -36,6 +36,8 @@ class MediaSelector:
             logging.error(f"【媒体选择器】获取最新项目失败: {e}")
             return []
 
+    # backend/media_selector.py (修改 get_item_ids 方法)
+
     def get_item_ids(self, scope: ScheduledTasksTargetScope, target_collection_type: Optional[str] = None) -> List[str]:
         """
         根据范围配置获取媒体ID列表
@@ -45,6 +47,52 @@ class MediaSelector:
         ui_logger.info(f"开始根据范围 '{scope.mode}' 获取媒体ID...", task_category=task_cat)
         if target_collection_type:
             ui_logger.info(f"  - 任务目标类型: {target_collection_type}", task_category=task_cat)
+
+        if scope.mode == 'by_search':
+            ui_logger.info(f"  - 模式: 按搜索结果 (共 {len(scope.item_ids)} 项)", task_category=task_cat)
+            return scope.item_ids
+        
+        if scope.mode == 'favorites':
+            ui_logger.info("  - 模式: 仅收藏", task_category=task_cat)
+            final_ids = set()
+            
+            try:
+                # --- 核心修改：分类型请求，然后合并去重 ---
+                
+                # 1. 获取收藏的电影 (仅当任务需要电影时)
+                if target_collection_type != 'tvshows':
+                    movie_params = {**self.params, "Filters": "IsFavorite", "IncludeItemTypes": "Movie", "Recursive": "true", "Fields": "Id"}
+                    ui_logger.debug(f"  - [调试] 正在请求收藏的电影...", task_category=task_cat)
+                    movie_resp = self.session.get(f"{self.base_url}/Users/{self.user_id}/Items", params=movie_params, timeout=60).json()
+                    movie_ids = {item['Id'] for item in movie_resp.get("Items", [])}
+                    final_ids.update(movie_ids)
+                    ui_logger.debug(f"  - [调试] 找到 {len(movie_ids)} 个收藏的电影。", task_category=task_cat)
+
+                # 2. 获取收藏的剧集和分集 (仅当任务需要剧集时)
+                if target_collection_type != 'movies':
+                    # 2a. 获取整个被收藏的剧集
+                    series_params = {**self.params, "Filters": "IsFavorite", "IncludeItemTypes": "Series", "Recursive": "true", "Fields": "Id"}
+                    ui_logger.debug(f"  - [调试] 正在请求收藏的剧集...", task_category=task_cat)
+                    series_resp = self.session.get(f"{self.base_url}/Users/{self.user_id}/Items", params=series_params, timeout=60).json()
+                    series_ids = {item['Id'] for item in series_resp.get("Items", [])}
+                    final_ids.update(series_ids)
+                    ui_logger.debug(f"  - [调试] 找到 {len(series_ids)} 个被完整收藏的剧集。", task_category=task_cat)
+
+                    # 2b. 获取被单独收藏的分集，并提取其所属剧集ID
+                    episode_params = {**self.params, "Filters": "IsFavorite", "IncludeItemTypes": "Episode", "Recursive": "true", "Fields": "SeriesId"}
+                    ui_logger.debug(f"  - [调试] 正在请求收藏的分集...", task_category=task_cat)
+                    episode_resp = self.session.get(f"{self.base_url}/Users/{self.user_id}/Items", params=episode_params, timeout=60).json()
+                    episode_parent_series_ids = {item['SeriesId'] for item in episode_resp.get("Items", []) if item.get('SeriesId')}
+                    final_ids.update(episode_parent_series_ids)
+                    ui_logger.debug(f"  - [调试] 从 {len(episode_resp.get('Items', []))} 个收藏的分集中提取出 {len(episode_parent_series_ids)} 个不重复的剧集ID。", task_category=task_cat)
+
+                item_ids = list(final_ids)
+                ui_logger.info(f"成功获取 {len(item_ids)} 个收藏的媒体ID (电影/剧集去重后)。", task_category=task_cat)
+                return item_ids
+
+            except requests.RequestException as e:
+                ui_logger.error(f"获取收藏项目列表时出错: {e}", task_category=task_cat)
+                return []
 
         if scope.mode == 'latest':
             ui_logger.info(f"  - 模式: 最新入库 (最近 {scope.days} 天, 最多 {scope.limit} 条)", task_category=task_cat)
