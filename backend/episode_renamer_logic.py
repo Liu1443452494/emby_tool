@@ -39,8 +39,8 @@ class EpisodeRenamerLogic:
             params = {
                 **self.params,
                 "Recursive": "true",
-                "MetadataRefreshMode": "None",
-                "ImageRefreshMode": "None",
+                "MetadataRefreshMode": "Default",
+                "ImageRefreshMode": "Default",
                 "ReplaceAllMetadata": "false",
                 "ReplaceAllImages": "false"
             }
