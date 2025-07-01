@@ -171,6 +171,12 @@ class EpisodeRefresherConfig(BaseModel):
         default=True,
         description="是否启用智能截图(分析1秒内多帧选择最清晰的一张)，会增加CPU消耗"
     )
+
+class EpisodeRenamerConfig(BaseModel):
+    """剧集文件重命名器功能的配置"""
+    emby_path_root: str = Field(default="/media", description="Emby 容器内看到的媒体根路径")
+    clouddrive_path_root: str = Field(default="/cd2", description="CloudDrive 挂载到本工具容器内的根路径")
+    clouddrive_rename_cooldown: float = Field(default=1.0, description="每次重命名网盘文件之间的间隔时间（秒）", ge=0)
     
 
 class ScheduledTaskItem(BaseModel):
@@ -228,6 +234,8 @@ class AppConfig(BaseModel):
     webhook_config: WebhookConfig = Field(default_factory=WebhookConfig)
     # --- 新增：将新配置模型添加到主配置中 ---
     episode_refresher_config: EpisodeRefresherConfig = Field(default_factory=EpisodeRefresherConfig)
+
+    episode_renamer_config: EpisodeRenamerConfig = Field(default_factory=EpisodeRenamerConfig)
     # --- 结束新增 ---
 
 class TargetScope(BaseModel):

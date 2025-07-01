@@ -55,6 +55,11 @@ export const useConfigStore = defineStore('config', () => {
       force_overwrite_screenshots: false,
       screenshot_cooldown: 2.0,
       use_smart_screenshot: true
+    },
+    episode_renamer_config: {
+      emby_path_root: '/media',
+      clouddrive_path_root: '/cd2',
+      clouddrive_rename_cooldown: 1.0
     }
     // --- 结束新增 ---
   })
@@ -147,6 +152,14 @@ export const useConfigStore = defineStore('config', () => {
           if (typeof fullConfig.episode_refresher_config.use_smart_screenshot === 'undefined') {
             fullConfig.episode_refresher_config.use_smart_screenshot = true;
           }
+        }
+
+        if (!fullConfig.episode_renamer_config) {
+          fullConfig.episode_renamer_config = { 
+            emby_path_root: '/media',
+            clouddrive_path_root: '/cd2',
+            clouddrive_rename_cooldown: 1.0
+          };
         }
         
         appConfig.value = fullConfig
@@ -363,7 +376,23 @@ export const useConfigStore = defineStore('config', () => {
       return { success: false, message: error.message };
     }
   }
-  // --- 结束新增 ---
+  
+  async function saveEpisodeRenamerConfig(newConfig) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/config/episode-renamer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '未知错误');
+      
+      appConfig.value.episode_renamer_config = newConfig;
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
 
   return { 
     appConfig, 
@@ -382,6 +411,7 @@ export const useConfigStore = defineStore('config', () => {
     saveDoubanPosterUpdaterConfig,
     saveWebhookConfig,
     // --- 新增：导出新方法 ---
-    saveEpisodeRefresherConfig
+    saveEpisodeRefresherConfig,
+    saveEpisodeRenamerConfig
   }
 })

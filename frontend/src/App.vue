@@ -55,15 +55,14 @@
             <template #title>豆瓣ID修复器</template>
           </el-menu-item>
           <!-- --- 结束新增 --- -->
+           <el-menu-item index="/episode-renamer">
+            <el-icon><EditPen /></el-icon>
+            <template #title>网盘文件重命名</template>
+          </el-menu-item>
 
           <el-menu-item index="/scheduled-tasks">
             <el-icon><Clock /></el-icon>
             <template #title>定时任务</template>
-          </el-menu-item>
-
-          <el-menu-item index="/file-sync">
-            <el-icon><EditPen /></el-icon>
-            <template #title>网盘文件重命名</template>
           </el-menu-item>
           <!-- --- 结束新增 --- -->
 

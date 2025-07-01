@@ -34,17 +34,16 @@ const router = createRouter({
       name: 'actor-gallery',
       component: () => import('../views/ActorGalleryView.vue')
     },
-    // --- 新增路由 ---
+    
     {
       path: '/douban-fixer',
       name: 'douban-fixer',
       component: () => import('../views/DoubanFixerView.vue')
     },
-    // --- 结束新增 ---
     {
-      path: '/file-sync',
-      name: 'file-sync',
-      component: () => import('../views/FileSyncView.vue')
+      path: '/episode-renamer',
+      name: 'episode-renamer',
+      component: () => import('../views/EpisodeRenamerView.vue')
     },
 
     {

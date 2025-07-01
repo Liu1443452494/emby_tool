@@ -20,6 +20,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from task_manager import TaskManager, task_manager
+from models import EpisodeRenamerConfig
+from episode_renamer_router import router as episode_renamer_router
 
 from media_selector import MediaSelector
 from models import ScheduledTasksConfig
@@ -51,17 +53,11 @@ from webhook_logic import WebhookLogic
 from proxy_manager import ProxyManager
 from episode_renamer_logic import EpisodeRenamerLogic
 
-
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
 webhook_queue = asyncio.Queue()
 webhook_processing_set = set()
-
-class ScanPlanRequest(BaseModel):
-    series_id: str
-    path_from: str
-    path_to: str
 
 async def webhook_worker():
     # Webhook 日志已在 webhook_logic.py 中处理，此处保留底层日志
@@ -398,6 +394,7 @@ app.add_middleware(
 
 app.include_router(actor_gallery_router, prefix="/api/gallery")
 app.include_router(douban_fixer_router, prefix="/api/douban-fixer")
+app.include_router(episode_renamer_router, prefix="/api/episode-renamer")
 
 # ... (其他路由保持不变) ...
 @app.get("/api/image-proxy")
@@ -1117,6 +1114,19 @@ def save_episode_refresher_config_api(config: EpisodeRefresherConfig):
     except Exception as e:
         logging.error(f"保存剧集元数据刷新器设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+    
+@app.post("/api/config/episode-renamer")
+def save_episode_renamer_config_api(config: EpisodeRenamerConfig):
+    try:
+        logging.info("正在保存剧集文件重命名器设置...")
+        current_app_config = app_config.load_app_config()
+        current_app_config.episode_renamer_config = config
+        app_config.save_app_config(current_app_config)
+        logging.info("剧集文件重命名器设置保存成功！")
+        return {"success": True, "message": "设置已保存！"}
+    except Exception as e:
+        logging.error(f"保存剧集文件重命名器设置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
 # --- 结束新增 ---
 
 @app.post("/api/webhook/emby")
@@ -1182,19 +1192,3 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     
     logging.info(f"【Webhook】事件 '{payload.Event}' 或类型 '{target_item_type}' 无需处理，已跳过。")
     return {"status": "skipped", "message": "Event not applicable"}
-
-
-@app.post("/api/renamer/scan-plan")
-def create_rename_plan_api(req: ScanPlanRequest):
-    config = app_config.load_app_config()
-    logic = EpisodeRenamerLogic(config)
-    task_name = f"扫描网盘生成重命名计划 (SeriesID: {req.series_id})"
-    task_id = task_manager.register_task(
-        logic.scan_series_for_rename_plan,
-        task_name,
-        req.series_id,
-        req.path_from,
-        req.path_to,
-        task_category="网盘扫描"
-    )
-    return {"status": "success", "message": "扫描任务已启动", "task_id": task_id}

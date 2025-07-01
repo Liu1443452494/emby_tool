@@ -125,10 +125,15 @@ def load_app_config() -> AppConfig:
     if "webhook_config" not in config_data:
         config_data["webhook_config"] = {}
         
-    # --- 新增：为新配置添加加载逻辑 ---
     if "episode_refresher_config" not in config_data:
         config_data["episode_refresher_config"] = {}
-    # --- 结束新增 ---
+
+    if "episode_refresher_config" not in config_data:
+        config_data["episode_refresher_config"] = {}
+    
+    if "episode_renamer_config" not in config_data:
+        config_data["episode_renamer_config"] = {}
+
 
     if "subtitle_processor_config" in config_data:
         del config_data["subtitle_processor_config"]

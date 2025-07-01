@@ -344,36 +344,9 @@
         </el-form-item>
           </div>
         </el-form>
-        
       </div>
       <template #footer>
         <el-button @click="isRefresherDialogVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
-    <el-dialog
-      v-model="isRenamerDialogVisible"
-      title="剧集文件重命名 - 设置"
-      width="600px"
-      :close-on-click-modal="false"
-    >
-      <div class="independent-task-config">
-        <el-alert
-          title="重要前提条件"
-          type="warning"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 20px;"
-        >
-          <p>此功能直接操作文件系统。为确保成功，请务必保证 <strong>Emby 容器内看到的媒体路径</strong> 与 <strong>本工具容器内的路径</strong> 完全一致。</p>
-          <p style="margin-top: 8px;"><b>示例：</b>如果 Emby 内某文件路径为 <code>/media/shows/剧集/文件名.strm</code>，则本工具也必须能通过完全相同的路径 <code>/media/shows/剧集/文件名.strm</code> 访问到该文件。</p>
-          <p style="margin-top: 8px;">如果路径不一致，请调整容器的路径映射（Volume Mapping）以使其统一。</p>
-        </el-alert>
-
-        <!-- 未来可以在这里添加此任务相关的独立配置 -->
-        <el-empty description="当前暂无其他可配置项" />
-      </div>
-      <template #footer>
-        <el-button @click="isRenamerDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -396,7 +369,7 @@ const definedTasks = ref([
   { id: 'douban_fixer', name: '豆瓣ID修复器', hasSettings: false },
   { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
   { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true },
-  { id: 'episode_renamer', name: '剧集文件重命名', hasSettings: true }
+  { id: 'episode_renamer', name: '剧集文件重命名', hasSettings: false }
 ]);
 
 const localScope = ref({});
@@ -409,7 +382,6 @@ const isTriggering = reactive({});
 const isPosterDialogVisible = ref(false);
 const isWebhookDialogVisible = ref(false);
 const isRefresherDialogVisible = ref(false);
-const isRenamerDialogVisible = ref(false);
 const isSearchDialogVisible = ref(false);
 const searchQuery = ref('');
 const searchDialogTableRef = ref(null);
@@ -545,8 +517,6 @@ const openSettingsDialog = (taskId) => {
     isPosterDialogVisible.value = true;
   } else if (taskId === 'episode_refresher') {
     isRefresherDialogVisible.value = true;
-  } else if (taskId === 'episode_renamer') {
-    isRenamerDialogVisible.value = true;
   }
 };
 
