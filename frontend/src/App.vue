@@ -99,7 +99,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { ElConfigProvider, ElIcon } from 'element-plus'
 // --- 新增图标 ---
-import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock } from '@element-plus/icons-vue'
+import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen } from '@element-plus/icons-vue'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { useStorage } from '@vueuse/core'
 import { useConfigStore } from '@/stores/config'

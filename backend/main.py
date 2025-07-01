@@ -49,6 +49,7 @@ from douban_fixer_logic import DoubanFixerLogic
 from douban_fixer_router import router as douban_fixer_router
 from webhook_logic import WebhookLogic
 from proxy_manager import ProxyManager
+from episode_renamer_logic import EpisodeRenamerLogic
 
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
@@ -170,12 +171,65 @@ def _episode_refresher_task_runner(
         task_cat
     )
 
+def _episode_renamer_task_runner(
+    series_ids: List[str], 
+    config: AppConfig, 
+    cancellation_event: threading.Event, 
+    task_id: str, 
+    task_manager: TaskManager,
+    task_name: str 
+):
+    task_cat = task_name
+    ui_logger.info(f"开始从 {len(series_ids)} 个剧集(Series)中获取所有分集(Episode)...", task_category=task_cat)
+    task_manager.update_task_progress(task_id, 0, len(series_ids))
+
+    all_episode_ids = []
+    session = requests.Session()
+    for i, series_id in enumerate(series_ids):
+        if cancellation_event.is_set():
+            ui_logger.warning("在获取分集阶段被取消。", task_category=task_cat)
+            return
+
+        try:
+            episodes_url = f"{config.server_config.server}/Items"
+            episodes_params = {
+                "api_key": config.server_config.api_key,
+                "ParentId": series_id,
+                "IncludeItemTypes": "Episode",
+                "Recursive": "true",
+                "Fields": "Id"
+            }
+            episodes_resp = session.get(episodes_url, params=episodes_params, timeout=30)
+            if episodes_resp.ok:
+                episodes = episodes_resp.json().get("Items", [])
+                all_episode_ids.extend([ep['Id'] for ep in episodes])
+        except Exception as e:
+            ui_logger.error(f"获取剧集 {series_id} 的分集时失败: {e}", task_category=task_cat)
+        
+        task_manager.update_task_progress(task_id, i + 1, len(series_ids))
+
+    ui_logger.info(f"分集获取完毕，共找到 {len(all_episode_ids)} 个分集需要处理。", task_category=task_cat)
+    
+    logic = EpisodeRenamerLogic(config)
+    logic.run_rename_for_episodes(
+        all_episode_ids,
+        cancellation_event,
+        task_id,
+        task_manager,
+        task_cat
+    )
+
+
+
+
 def trigger_scheduled_task(task_id: str):
     task_name_map = {
         "actor_localizer": "演员中文化",
         "douban_fixer": "豆瓣ID修复",
         "douban_poster_updater": "豆瓣海报更新",
-        "episode_refresher": "剧集元数据刷新"
+        "episode_refresher": "剧集元数据刷新",
+        # --- 新增行 ---
+        "episode_renamer": "剧集文件重命名"
     }
     task_display_name = task_name_map.get(task_id, task_id)
     task_cat = f"定时任务-{task_display_name}"
@@ -186,7 +240,7 @@ def trigger_scheduled_task(task_id: str):
     selector = MediaSelector(config)
     
     target_collection_type = None
-    if task_id == "episode_refresher":
+    if task_id == "episode_refresher" or task_id == "episode_renamer": # --- 修改此行 ---
         target_collection_type = "tvshows"
         
     item_ids = selector.get_item_ids(scope, target_collection_type=target_collection_type)
@@ -232,6 +286,19 @@ def trigger_scheduled_task(task_id: str):
             config=config,
             task_name=task_name
         )
+    # --- 新增代码块 ---
+    elif task_id == "episode_renamer":
+        # 注意：重命名任务需要的是分集ID，但范围选择器返回的是剧集ID
+        # 所以我们需要一个类似 _episode_refresher_task_runner 的包装器
+        task_name = f"定时任务-剧集文件重命名({scope.mode})"
+        task_manager.register_task(
+            _episode_renamer_task_runner, # 我们将创建一个新的包装器函数
+            task_name,
+            series_ids=item_ids,
+            config=config,
+            task_name=task_name
+        )
+    # --- 结束新增 ---
     else:
         ui_logger.warning(f"未知的任务ID: {task_id}", task_category=task_cat)
 

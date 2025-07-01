@@ -368,7 +368,8 @@ const definedTasks = ref([
   { id: 'actor_localizer', name: '演员中文化', hasSettings: false },
   { id: 'douban_fixer', name: '豆瓣ID修复器', hasSettings: false },
   { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
-  { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true }
+  { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true },
+  { id: 'episode_renamer', name: '剧集文件重命名', hasSettings: false }
 ]);
 
 const localScope = ref({});

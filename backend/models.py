@@ -179,6 +179,7 @@ class ScheduledTaskItem(BaseModel):
     name: str
     enabled: bool = False
     cron: str = ""
+    hasSettings: bool = Field(default=True, description="前端是否显示此任务的独立设置按钮")
 
 class ScheduledTasksTargetScope(BaseModel):
     """定时任务通用的目标范围配置"""
@@ -199,7 +200,8 @@ class ScheduledTasksConfig(BaseModel):
         ScheduledTaskItem(id="actor_localizer", name="演员中文化"),
         ScheduledTaskItem(id="douban_fixer", name="豆瓣ID修复器"),
         ScheduledTaskItem(id="douban_poster_updater", name="豆瓣海报更新"),
-        ScheduledTaskItem(id="episode_refresher", name="剧集元数据刷新")
+        ScheduledTaskItem(id="episode_refresher", name="剧集元数据刷新"),
+        ScheduledTaskItem(id="episode_renamer", name="剧集文件重命名", hasSettings=False)
     ])
     # --- 结束修改 ---
 
