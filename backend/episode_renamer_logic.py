@@ -124,46 +124,67 @@ class EpisodeRenamerLogic:
     
     def _calculate_new_filename(self, base_filename: str, episode_details: Dict, series_details: Dict) -> Optional[str]:
         """
-        根据三模式策略计算新的文件名。
-        模式一：替换标题。模式二：插入标题。模式三：完全重构。
+        根据新的四段式结构解析策略计算新的文件名。
         如果无需改动，则返回 None。
         """
         emby_title = episode_details.get("Name")
         if not emby_title or self._is_generic_episode_title(emby_title):
+            # 如果Emby中没有有效标题，则无需进行任何重命名
             return None
 
+        # 核心正则表达式，用于解析文件名结构
+        # 结构: [剧集信息部分] - [SXXEXX] - [标题部分(可选)] - [标签部分(可选)]
+        # 例子: 最灿烂的我们.2024 - S01E10 - 周然陪同徐蔓选婚纱 - ADWeb
+        # 捕获组: (1:剧集信息) (2:SXXEXX) (3:标题) (4:标签)
+        parser_regex = re.compile(
+            r'^(.*?)'  # (1) 剧集信息部分 (非贪婪)
+            r'\s*-\s*'
+            r'(S\d{2}E\d{2})'  # (2) SXXEXX部分
+            r'(?:\s*-\s*(.*?))?'  # (3) 标题部分 (可选, 非贪婪)
+            r'(?:\s*-\s*([a-zA-Z0-9_]+))?$'  # (4) 标签部分 (可选, 必须是最后一个)
+            , re.IGNORECASE
+        )
+        
+        match = parser_regex.match(base_filename)
+
+        if not match:
+            # 如果连基础的 "信息 - SXXEXX" 结构都匹配不上，则进入完全重构模式
+            series_name = self._sanitize_filename(series_details.get("Name", "UnknownSeries"))
+            series_year = series_details.get("ProductionYear")
+            season_number = episode_details.get("ParentIndexNumber")
+            episode_number = episode_details.get("IndexNumber")
+
+            if all([series_name, series_year, season_number is not None, episode_number is not None]):
+                sxxexx_part = f"S{season_number:02d}E{episode_number:02d}"
+                new_title_for_filename = self._sanitize_filename(emby_title)
+                reconstructed_name = f"{series_name}.{series_year} - {sxxexx_part} - {new_title_for_filename}"
+                
+                if reconstructed_name.lower() != base_filename.lower():
+                    return reconstructed_name
+            return None
+
+        # 解析成功，获取各个部分
+        series_part = match.group(1).strip()
+        sxxexx_part = match.group(2)
+        title_part = match.group(3).strip() if match.group(3) else None
+        tag_part = match.group(4)
+
+        # 检查文件名中的标题是否是通用标题
+        if title_part and self._is_generic_episode_title(title_part):
+            title_part = None # 将 "第 11 集" 这种视为无标题
+
         new_title_for_filename = self._sanitize_filename(emby_title)
+
+        # 比较标题，如果一致则无需改动
+        if (title_part or "").lower() == new_title_for_filename.lower():
+            return None
+
+        # 根据解析出的部分和Emby的新标题，重新构建文件名
+        parts = [series_part, sxxexx_part, new_title_for_filename]
+        if tag_part:
+            parts.append(tag_part)
         
-        # 模式一：尝试替换标题
-        old_title_in_filename = self._extract_title_from_filename(base_filename)
-        if old_title_in_filename:
-            if old_title_in_filename.lower() == new_title_for_filename.lower():
-                return None # 标题已是最新，无需改动
-            return base_filename.replace(old_title_in_filename, new_title_for_filename)
-
-        # 模式二：尝试插入标题
-        no_title_match = re.search(r'(S\d{2}E\d{2})\s*-\s*(\w+)$', base_filename, re.IGNORECASE)
-        if no_title_match:
-            prefix_part = base_filename[:no_title_match.start()]
-            sxxexx_part = no_title_match.group(1)
-            suffix_part = no_title_match.group(2)
-            return f"{prefix_part}{sxxexx_part} - {new_title_for_filename} - {suffix_part}"
-
-        # 模式三：完全重构文件名
-        series_name = self._sanitize_filename(series_details.get("Name", "UnknownSeries"))
-        series_year = series_details.get("ProductionYear")
-        season_number = episode_details.get("ParentIndexNumber")
-        episode_number = episode_details.get("IndexNumber")
-
-        if all([series_name, series_year, season_number is not None, episode_number is not None]):
-            sxxexx_part = f"S{season_number:02d}E{episode_number:02d}"
-            reconstructed_name = f"{series_name}.{series_year} - {sxxexx_part} - {new_title_for_filename}"
-            
-            # 只有当重构后的名字与原名不同时，才返回新名字
-            if reconstructed_name.lower() != base_filename.lower():
-                return reconstructed_name
-        
-        return None
+        return " - ".join(parts)
 
     def _rename_associated_files(self, old_base_path: str, new_base_path: str, task_cat: str) -> bool:
         """重命名 .strm, .nfo, 和 -thumb.jpg 文件"""
