@@ -504,9 +504,10 @@ import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
 import { useEpisodeRenamerStore } from '@/stores/episodeRenamer';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Setting } from '@element-plus/icons-vue';
+import { Setting, ArrowDown, Finished } from '@element-plus/icons-vue'; 
 import cronstrue from 'cronstrue/i18n';
 import _ from 'lodash';
+import { API_BASE_URL } from '@/config/apiConfig';
 
 const configStore = useConfigStore();
 const mediaStore = useMediaStore();
@@ -688,7 +689,7 @@ const handleBackupScreenshots = async () => {
     };
 
     // 修正：直接调用新API
-    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/episode-refresher/backup-screenshots`, {
+    const response = await fetch(`${API_BASE_URL}/api/episode-refresher/backup-screenshots`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
