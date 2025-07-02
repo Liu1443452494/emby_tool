@@ -172,6 +172,11 @@ class EpisodeRefresherConfig(BaseModel):
         description="是否启用智能截图(分析1秒内多帧选择最清晰的一张)，会增加CPU消耗"
     )
 
+    local_screenshot_caching_enabled: bool = Field(
+        default=True,
+        description="是否启用本地截图缓存，避免重复截图"
+    )
+
 class EpisodeRenamerConfig(BaseModel):
     """剧集文件重命名器功能的配置"""
     emby_path_root: str = Field(default="/media", description="Emby 容器内看到的媒体根路径")

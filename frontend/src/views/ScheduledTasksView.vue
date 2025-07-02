@@ -290,6 +290,7 @@
             <el-switch v-model="localRefresherConfig.skip_if_complete" active-text="开启智能跳过" />
             <div class="form-item-description">
               开启后，如果一个分集已经拥有标题、简介和主图片，任务将自动跳过该分集，以提高效率。
+              如果想处理所有剧集，就关闭该按钮
             </div>
           </el-form-item>
 
@@ -342,6 +343,17 @@
             高质量模式会分析1秒内的多帧图像，选择最清晰的一张，效果接近Emby原生截图，但会增加CPU负担。
           </div>
         </el-form-item>
+
+        <el-form-item label="本地截图缓存">
+              <el-switch 
+                v-model="localRefresherConfig.local_screenshot_caching_enabled" 
+                active-text="启用本地缓存"
+                :disabled="!localRefresherConfig.screenshot_enabled"
+              />
+              <div class="form-item-description">
+                开启后，新生成的截图会自动保存到本地。下次需要截图时会优先使用本地缓存，避免重复耗时操作。缓存将存放在您配置的豆瓣数据根目录下的 `EpisodeScreenshots` 文件夹内。
+              </div>
+            </el-form-item>
           </div>
         </el-form>
       </div>

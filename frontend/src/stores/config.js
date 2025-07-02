@@ -54,7 +54,8 @@ export const useConfigStore = defineStore('config', () => {
       crop_widescreen_to_16_9: true,
       force_overwrite_screenshots: false,
       screenshot_cooldown: 2.0,
-      use_smart_screenshot: true
+      use_smart_screenshot: true,
+      local_screenshot_caching_enabled: true
     },
     episode_renamer_config: {
       emby_path_root: '/media',
@@ -151,6 +152,9 @@ export const useConfigStore = defineStore('config', () => {
           }
           if (typeof fullConfig.episode_refresher_config.use_smart_screenshot === 'undefined') {
             fullConfig.episode_refresher_config.use_smart_screenshot = true;
+          }
+          if (typeof fullConfig.episode_refresher_config.local_screenshot_caching_enabled === 'undefined') {
+            fullConfig.episode_refresher_config.local_screenshot_caching_enabled = true;
           }
         }
 
