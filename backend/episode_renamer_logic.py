@@ -77,6 +77,34 @@ class EpisodeRenamerLogic:
         except requests.RequestException as e:
             logging.error(f"【剧集重命名】获取分集详情 (ID: {episode_id}) 失败: {e}")
             return None
+        
+    def _get_latest_episode_by_series_and_number(self, series_id: str, season_number: int, episode_number: int, task_cat: str) -> Optional[Dict]:
+        """通过剧集ID、季号和集号获取最新的分集详情"""
+        import requests
+        ui_logger.debug(f"     - 正在为剧集(ID:{series_id})查找 S{season_number:02d}E{episode_number:02d} 的最新信息...", task_category=task_cat)
+        try:
+            url = f"{self.base_url}/Items"
+            params = {
+                **self.params,
+                "ParentId": series_id,
+                "IncludeItemTypes": "Episode",
+                "Recursive": "true",
+                "Fields": "Path,Name,SeriesId,SeriesName,IndexNumber,ParentIndexNumber,MediaSources"
+            }
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            episodes = response.json().get("Items", [])
+            
+            for ep in episodes:
+                if ep.get("ParentIndexNumber") == season_number and ep.get("IndexNumber") == episode_number:
+                    ui_logger.debug(f"     - 成功找到匹配的分集，新ID为: {ep['Id']}", task_category=task_cat)
+                    return ep
+            
+            ui_logger.warning(f"     - 在剧集(ID:{series_id})下未找到 S{season_number:02d}E{episode_number:02d}。", task_category=task_cat)
+            return None
+        except requests.RequestException as e:
+            logging.error(f"【剧集重命名】获取剧集(ID:{series_id})的分集列表时失败: {e}")
+            return None
 
     def _extract_title_from_filename(self, filename: str) -> Optional[str]:
         """
@@ -117,11 +145,13 @@ class EpisodeRenamerLogic:
         
         return renamed_any
 
-    def _log_rename_operation(self, episode_id: str, old_base_path: str, new_base_path: str, task_cat: str):
+    def _log_rename_operation(self, series_id: str, season_number: int, episode_number: int, old_base_path: str, new_base_path: str, task_cat: str):
         """将重命名操作记录到 JSON 文件中"""
         log_entry = {
-            "id": f"{episode_id}-{int(time.time())}",
-            "episode_id": episode_id,
+            "id": f"{series_id}-{season_number}-{episode_number}-{int(time.time())}",
+            "series_id": series_id,
+            "season_number": season_number,
+            "episode_number": episode_number,
             "old_base_path": old_base_path,
             "new_base_path": new_base_path,
             "timestamp": datetime.now().isoformat(),
@@ -137,7 +167,16 @@ class EpisodeRenamerLogic:
                 else:
                     logs = []
                 
-                if any(log.get('episode_id') == episode_id and log.get('status') == 'pending_clouddrive_rename' for log in logs):
+                # 检查是否已存在相同的待处理任务
+                pending_exists = any(
+                    log.get('series_id') == series_id and
+                    log.get('season_number') == season_number and
+                    log.get('episode_number') == episode_number and
+                    log.get('status') == 'pending_clouddrive_rename'
+                    for log in logs
+                )
+
+                if pending_exists:
                     ui_logger.info(f"     - 已存在待处理的重命名日志，本次不再重复添加。", task_category=task_cat)
                     return
 
@@ -174,7 +213,7 @@ class EpisodeRenamerLogic:
                 ui_logger.warning("任务在获取分集信息阶段被取消。", task_category=task_category)
                 return
             
-            details = self._get_episode_details(episode_id, fields="Path,Name,SeriesId,SeriesName")
+            details = self._get_episode_details(episode_id, fields="Path,Name,SeriesId,SeriesName,IndexNumber,ParentIndexNumber")
             if details and details.get("SeriesId"):
                 series_map[details["SeriesId"]].append(details)
             
@@ -232,18 +271,10 @@ class EpisodeRenamerLogic:
                     # 模式二：文件名中无标题，尝试插入
                     no_title_match = re.search(r'(S\d{2}E\d{2})\s*-\s*(\w+)$', base_filename, re.IGNORECASE)
                     if no_title_match:
-                        # --- 核心修正开始 ---
-                        # 获取匹配部分之前的所有内容
                         prefix_part = base_filename[:no_title_match.start()]
-                        # 获取 SXXEXX 部分
                         sxxexx_part = no_title_match.group(1)
-                        # 获取后缀部分
                         suffix_part = no_title_match.group(2)
-                        
-                        # 重新组装，确保前缀被保留
                         new_base_filename = f"{prefix_part}{sxxexx_part} - {new_title_for_filename} - {suffix_part}"
-                        # --- 核心修正结束 ---
-
                         ui_logger.info(f"  -> 计划重命名 (插入): {base_filename}", task_category=task_category)
                         ui_logger.info(f"     - 将插入标题: '{new_title_for_filename}'", task_category=task_category)
                     else:
@@ -257,7 +288,14 @@ class EpisodeRenamerLogic:
 
                     if self._rename_associated_files(old_base_path, new_base_path, task_category):
                         series_renamed_count += 1
-                        self._log_rename_operation(episode['Id'], old_base_path, new_base_path, task_category)
+                        self._log_rename_operation(
+                            series_id=episode['SeriesId'],
+                            season_number=episode['ParentIndexNumber'],
+                            episode_number=episode['IndexNumber'],
+                            old_base_path=old_base_path,
+                            new_base_path=new_base_path,
+                            task_cat=task_category
+                        )
 
             # 单个剧集处理完毕，打印总结并触发扫描
             skipped_count = sum(series_skipped_reasons.values())
@@ -274,16 +312,15 @@ class EpisodeRenamerLogic:
         ui_logger.info(f"【本地重命名任务】全部执行完毕。共成功重命名了 {total_renamed_count} 组文件，总共跳过了 {total_skipped_count} 组文件。", task_category=task_category)
         return {"renamed_count": total_renamed_count, "skipped_count": total_skipped_count}
 
-    def _get_clouddrive_video_path(self, episode_id: str, old_base_path: str, task_cat: str) -> Optional[Tuple[str, str]]:
+    def _get_clouddrive_video_path(self, episode_details: Dict, old_base_path: str, task_cat: str) -> Optional[Tuple[str, str]]:
         """通过 MediaSources 获取网盘视频的真实路径和文件名"""
-        details = self._get_episode_details(episode_id, fields="MediaSources")
-        if not details:
-            ui_logger.error(f"     - 无法获取分集 {episode_id} 的 MediaSources。", task_category=task_cat)
+        if not episode_details:
+            ui_logger.error(f"     - 无法获取分集的 MediaSources，因为分集详情为空。", task_category=task_cat)
             return None
 
-        media_sources = details.get("MediaSources")
+        media_sources = episode_details.get("MediaSources")
         if not media_sources or not isinstance(media_sources, list) or len(media_sources) == 0:
-            ui_logger.warning(f"     - 分集 {episode_id} 的 MediaSources 为空，无法获取网盘文件名。", task_category=task_cat)
+            ui_logger.warning(f"     - 分集 {episode_details.get('Id')} 的 MediaSources 为空，无法获取网盘文件名。", task_category=task_cat)
             return None
 
         strm_url = media_sources[0].get("Path")
@@ -327,13 +364,21 @@ class EpisodeRenamerLogic:
             
             task_manager.update_task_progress(task_id, index + 1, total_items)
             
-            episode_id = log_entry['episode_id']
+            series_id = log_entry['series_id']
+            season_number = log_entry['season_number']
+            episode_number = log_entry['episode_number']
             old_base_path = log_entry['old_base_path']
             new_base_path = log_entry['new_base_path']
             
             ui_logger.info(f"  -> 正在处理: {os.path.basename(old_base_path)}", task_category=task_cat)
 
-            path_info = self._get_clouddrive_video_path(episode_id, old_base_path, task_cat)
+            latest_episode_details = self._get_latest_episode_by_series_and_number(series_id, season_number, episode_number, task_cat)
+            if not latest_episode_details:
+                log_entry['error'] = "无法在Emby中找到对应的最新分集信息"
+                failed_logs.append(log_entry)
+                continue
+
+            path_info = self._get_clouddrive_video_path(latest_episode_details, old_base_path, task_cat)
             if not path_info:
                 log_entry['error'] = "无法获取网盘文件路径"
                 failed_logs.append(log_entry)
@@ -396,7 +441,7 @@ class EpisodeRenamerLogic:
                 "ParentId": series_id,
                 "IncludeItemTypes": "Episode",
                 "Recursive": "true",
-                "Fields": "Name,IndexNumber,ParentIndexNumber,Path,SeriesName"
+                "Fields": "Name,IndexNumber,ParentIndexNumber,Path,SeriesName,MediaSources"
             }
             episodes_resp = requests.get(episodes_url, params=episodes_params, timeout=30)
             episodes_resp.raise_for_status()
@@ -416,23 +461,39 @@ class EpisodeRenamerLogic:
             if not emby_title or self._is_generic_episode_title(emby_title):
                 continue
 
-            path_info = self._get_clouddrive_video_path(episode['Id'], episode['Path'], task_cat)
+            path_info = self._get_clouddrive_video_path(episode, episode['Path'], task_cat)
             if not path_info: continue
             
             clouddrive_path, clouddrive_filename = path_info
-            base_clouddrive_filename, _ = os.path.splitext(clouddrive_filename)
+            base_clouddrive_filename, old_ext = os.path.splitext(clouddrive_filename)
             
-            title_in_filename = self._extract_title_from_filename(base_clouddrive_filename)
-            if title_in_filename is None: continue
-
             new_title_for_filename = self._sanitize_filename(emby_title)
-            if title_in_filename.lower() == new_title_for_filename.lower(): continue
+            new_base_filename = None
+
+            old_title_in_filename = self._extract_title_from_filename(base_clouddrive_filename)
             
-            new_base_filename = base_clouddrive_filename.replace(title_in_filename, new_title_for_filename)
+            if old_title_in_filename:
+                if old_title_in_filename.lower() == new_title_for_filename.lower():
+                    continue
+                new_base_filename = base_clouddrive_filename.replace(old_title_in_filename, new_title_for_filename)
+            else:
+                no_title_match = re.search(r'(S\d{2}E\d{2})\s*-\s*(\w+)$', base_clouddrive_filename, re.IGNORECASE)
+                if no_title_match:
+                    prefix_part = base_clouddrive_filename[:no_title_match.start()]
+                    sxxexx_part = no_title_match.group(1)
+                    suffix_part = no_title_match.group(2)
+                    new_base_filename = f"{prefix_part}{sxxexx_part} - {new_title_for_filename} - {suffix_part}"
+                else:
+                    continue
             
+            if not new_base_filename:
+                continue
+
             new_log_entry = {
                 "id": f"manual-{episode['Id']}",
-                "episode_id": episode['Id'],
+                "series_id": episode['SeriesId'],
+                "season_number": episode['ParentIndexNumber'],
+                "episode_number": episode['IndexNumber'],
                 "old_base_path": os.path.join(os.path.dirname(episode['Path']), base_clouddrive_filename),
                 "new_base_path": os.path.join(os.path.dirname(episode['Path']), new_base_filename),
                 "timestamp": datetime.now().isoformat(),
@@ -452,8 +513,13 @@ class EpisodeRenamerLogic:
                 else:
                     all_logs = []
                 
-                existing_ids = {log['episode_id'] for log in all_logs}
-                new_logs_to_add = [log for log in results if log['episode_id'] not in existing_ids]
+                existing_keys = {f"{log['series_id']}-{log['season_number']}-{log['episode_number']}" for log in all_logs if log.get('status') == 'pending_clouddrive_rename'}
+                
+                new_logs_to_add = []
+                for log in results:
+                    key = f"{log['series_id']}-{log['season_number']}-{log['episode_number']}"
+                    if key not in existing_keys:
+                        new_logs_to_add.append(log)
                 
                 if new_logs_to_add:
                     all_logs.extend(new_logs_to_add)
