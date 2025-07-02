@@ -24,7 +24,7 @@ from models import EpisodeRenamerConfig
 from episode_renamer_router import router as episode_renamer_router
 
 from media_selector import MediaSelector
-from models import ScheduledTasksConfig
+from models import ScheduledTasksConfig, ScheduledTasksTargetScope
 from douban_poster_updater_logic import DoubanPosterUpdaterLogic
 from models import DoubanPosterUpdaterConfig, EpisodeRefresherConfig
 from episode_refresher_logic import EpisodeRefresherLogic
@@ -171,6 +171,24 @@ def _episode_refresher_task_runner(
         task_id,
         task_manager,
         task_cat
+    )
+
+def _episode_screenshot_backup_task_runner(
+    series_ids: List[str], 
+    config: AppConfig, 
+    cancellation_event: threading.Event, 
+    task_id: str, 
+    task_manager: TaskManager,
+    task_name: str 
+):
+    task_cat = task_name
+    logic = EpisodeRefresherLogic(config)
+    logic.backup_screenshots_from_emby_task(
+        series_ids,
+        config.episode_refresher_config,
+        cancellation_event,
+        task_id,
+        task_manager
     )
 
 def _episode_renamer_task_runner(
@@ -1114,6 +1132,35 @@ def save_episode_refresher_config_api(config: EpisodeRefresherConfig):
     except Exception as e:
         logging.error(f"保存剧集元数据刷新器设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+    
+class ScreenshotBackupRequest(BaseModel):
+    scope: ScheduledTasksTargetScope
+    config: EpisodeRefresherConfig
+
+@app.post("/api/episode-refresher/backup-screenshots")
+def backup_screenshots_api(req: ScreenshotBackupRequest):
+    task_cat = "API-截图备份"
+    ui_logger.info(f"收到截图备份请求，范围: {req.scope.mode}", task_category=task_cat)
+    
+    config = app_config.load_app_config()
+    # 使用请求中临时的配置
+    config.episode_refresher_config = req.config
+    
+    selector = MediaSelector(config)
+    series_ids = selector.get_item_ids(req.scope, target_collection_type="tvshows")
+
+    if not series_ids:
+        raise HTTPException(status_code=404, detail="在指定范围内未找到任何剧集。")
+
+    task_name = f"手动备份截图 ({req.scope.mode})"
+    task_id = task_manager.register_task(
+        _episode_screenshot_backup_task_runner,
+        task_name,
+        series_ids=series_ids,
+        config=config,
+        task_name=task_name
+    )
+    return {"status": "success", "message": "截图备份任务已启动。", "task_id": task_id}
     
 @app.post("/api/config/episode-renamer")
 def save_episode_renamer_config_api(config: EpisodeRenamerConfig):

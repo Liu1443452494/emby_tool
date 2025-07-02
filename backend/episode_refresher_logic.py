@@ -692,3 +692,113 @@ class EpisodeRefresherLogic:
         if config.refresh_mode == 'emby':
             ui_logger.warning("请注意：Emby 的刷新是在后台进行的，实际元数据更新可能会有延迟。请稍后在 Emby 中查看结果。", task_category=task_category)
         return {"refreshed_count": refreshed_count}
+    
+    def backup_screenshots_from_emby_task(self, series_ids: Iterable[str], config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: Optional[str] = None, task_manager: Optional[TaskManager] = None):
+        """
+        从 Emby 备份已存在的、由工具箱生成的截图到本地缓存目录。
+        """
+        task_cat = "截图备份"
+        ui_logger.info(f"【{task_cat}】任务启动，开始从 {len(series_ids)} 个剧集中查找并备份已有截图...", task_category=task_cat)
+        ui_logger.info(f"  - 备份配置：覆盖本地文件={'开启' if config.backup_overwrite_local else '关闭'}", task_category=task_cat)
+
+        # 步骤1: 获取所有分集ID
+        all_episode_ids = []
+        if task_manager and task_id:
+            task_manager.update_task_progress(task_id, 0, len(series_ids))
+        
+        for i, series_id in enumerate(series_ids):
+            if cancellation_event.is_set():
+                ui_logger.warning(f"【{task_cat}】任务在获取分集列表阶段被取消。", task_category=task_cat)
+                return
+            try:
+                episodes_url = f"{self.base_url}/Items"
+                episodes_params = {**self.params, "ParentId": series_id, "IncludeItemTypes": "Episode", "Recursive": "true", "Fields": "Id"}
+                episodes_resp = self.session.get(episodes_url, params=episodes_params, timeout=30)
+                episodes_resp.raise_for_status()
+                episodes = episodes_resp.json().get("Items", [])
+                all_episode_ids.extend([ep['Id'] for ep in episodes])
+            except Exception as e:
+                ui_logger.error(f"【{task_cat}】获取剧集 {series_id} 的分集时失败: {e}", task_category=task_cat)
+            if task_manager and task_id:
+                task_manager.update_task_progress(task_id, i + 1, len(series_ids))
+        
+        ui_logger.info(f"【{task_cat}】分集列表获取完毕，共找到 {len(all_episode_ids)} 个分集需要检查。", task_category=task_cat)
+
+        # 步骤2: 遍历所有分集并执行备份
+        backed_up_count = 0
+        skipped_count = 0
+        failed_count = 0
+        total_episodes = len(all_episode_ids)
+        if task_manager and task_id:
+            task_manager.update_task_progress(task_id, 0, total_episodes)
+
+        series_tmdb_id_cache = {}
+
+        for i, episode_id in enumerate(all_episode_ids):
+            if cancellation_event.is_set():
+                ui_logger.warning(f"【{task_cat}】任务在处理分集时被取消。", task_category=task_cat)
+                break
+            
+            try:
+                # 获取分集详细信息
+                ep_details = self._get_emby_item_details(episode_id, fields="ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,Name,SeriesName")
+                if not ep_details:
+                    ui_logger.warning(f"  -> 无法获取分集 {episode_id} 的详情，跳过。", task_category=task_cat)
+                    failed_count += 1
+                    continue
+
+                log_prefix = f"  -> 正在处理《{ep_details.get('SeriesName', '未知剧集')}》S{ep_details.get('ParentIndexNumber', 0):02d}E{ep_details.get('IndexNumber', 0):02d}:"
+
+                # 检查是否是工具箱生成的截图
+                provider_ids = ep_details.get("ProviderIds", {})
+                if provider_ids.get("ToolboxImageSource") != "screenshot":
+                    ui_logger.debug(f"{log_prefix} 非工具箱截图，跳过。", task_category=task_cat)
+                    skipped_count += 1
+                    continue
+
+                # 获取剧集的TMDB ID
+                series_id = ep_details.get("SeriesId")
+                series_tmdb_id = series_tmdb_id_cache.get(series_id)
+                if not series_tmdb_id:
+                    series_details = self._get_emby_item_details(series_id, fields="ProviderIds")
+                    series_tmdb_id = next((v for k, v in series_details.get("ProviderIds", {}).items() if k.lower() == 'tmdb'), None)
+                    if not series_tmdb_id:
+                        ui_logger.warning(f"{log_prefix} 所属剧集(ID: {series_id})缺少TMDB ID，无法构建缓存路径，跳过。", task_category=task_cat)
+                        failed_count += 1
+                        continue
+                    series_tmdb_id_cache[series_id] = series_tmdb_id
+                
+                # 构建本地路径并检查是否需要覆盖
+                local_path = self._get_local_screenshot_path(series_tmdb_id, ep_details.get("ParentIndexNumber"), ep_details.get("IndexNumber"))
+                if not local_path:
+                    failed_count += 1
+                    continue
+                
+                if os.path.exists(local_path) and not config.backup_overwrite_local:
+                    ui_logger.info(f"{log_prefix} 本地缓存已存在且未开启覆盖，跳过。", task_category=task_cat)
+                    skipped_count += 1
+                    continue
+
+                # 下载图片
+                image_url = f"{self.base_url}/Items/{episode_id}/Images/Primary?api_key={self.api_key}"
+                image_resp = self.session.get(image_url, timeout=30)
+                image_resp.raise_for_status()
+                image_bytes = image_resp.content
+
+                # 保存到本地
+                if self._save_screenshot_to_local(image_bytes, series_tmdb_id, ep_details.get("ParentIndexNumber"), ep_details.get("IndexNumber"), task_cat):
+                    ui_logger.info(f"{log_prefix} 成功备份到本地。", task_category=task_cat)
+                    backed_up_count += 1
+                else:
+                    ui_logger.error(f"{log_prefix} 备份失败。", task_category=task_cat)
+                    failed_count += 1
+
+            except Exception as e:
+                ui_logger.error(f"  -> 处理分集 {episode_id} 时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+                failed_count += 1
+            finally:
+                if task_manager and task_id:
+                    task_manager.update_task_progress(task_id, i + 1, total_episodes)
+
+        ui_logger.info(f"【{task_cat}】任务执行完毕。成功备份: {backed_up_count} 张, 跳过: {skipped_count} 张, 失败: {failed_count} 张。", task_category=task_cat)
+        return {"backed_up_count": backed_up_count, "skipped_count": skipped_count, "failed_count": failed_count}

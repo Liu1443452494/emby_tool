@@ -356,6 +356,24 @@
             </el-form-item>
           </div>
         </el-form>
+        <el-divider />
+        <div class="backup-section">
+          <h4><el-icon><Finished /></el-icon> 存量数据处理工具</h4>
+          <p class="form-item-description">
+            如果您是从旧版本升级，或之前未开启本地缓存，可以使用此工具将 Emby 中已存在的截图一次性备份到本地，以备不时之需。
+          </p>
+          <el-form-item label="备份时覆盖本地已有文件">
+            <el-switch v-model="localRefresherConfig.backup_overwrite_local" />
+          </el-form-item>
+          <el-button 
+            type="success" 
+            plain 
+            @click="handleBackupScreenshots"
+            :loading="isBackuping"
+          >
+            使用通用目标范围立即备份
+          </el-button>
+        </div>
       </div>
       <template #footer>
         <el-button @click="isRefresherDialogVisible = false">关闭</el-button>
@@ -507,6 +525,7 @@ const localTaskStates = reactive({});
 const localPosterConfig = ref(null);
 const localWebhookConfig = ref(null);
 const localRefresherConfig = ref(null);
+const isBackuping = ref(false); 
 const isSaving = ref(false);
 const isTriggering = reactive({});
 const isPosterDialogVisible = ref(false);
@@ -559,6 +578,9 @@ function updateStateFromConfig() {
   localPosterConfig.value = _.cloneDeep(configStore.appConfig.douban_poster_updater_config);
   localWebhookConfig.value = _.cloneDeep(configStore.appConfig.webhook_config);
   localRefresherConfig.value = _.cloneDeep(configStore.appConfig.episode_refresher_config);
+  if (typeof localRefresherConfig.value.backup_overwrite_local === 'undefined') {
+    localRefresherConfig.value.backup_overwrite_local = false;
+  }
 
   if (localWebhookConfig.value && !localWebhookConfig.value.url_override) {
     const baseUrl = window.location.origin;
@@ -641,6 +663,48 @@ const handleTriggerOnce = async (taskId) => {
     // 用户点击了取消
   } finally {
     isTriggering[taskId] = false;
+  }
+};
+
+
+const handleBackupScreenshots = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '即将使用当前选择的通用目标范围，扫描并备份所有已存在的截图到本地。此过程可能需要较长时间，是否继续？',
+      '确认备份操作',
+      {
+        confirmButtonText: '开始备份',
+        cancelButtonText: '取消',
+        type: 'info',
+      }
+    );
+    
+    isBackuping.value = true;
+    
+    const scope = localScope.value;
+    const payload = {
+        scope: scope,
+        config: localRefresherConfig.value
+    };
+
+    // 修正：直接调用新API
+    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/episode-refresher/backup-screenshots`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || '启动备份任务失败');
+    
+    ElMessage.success(data.message);
+
+  } catch (error) {
+    if (error && error.message) {
+      ElMessage.error(`启动备份失败: ${error.message}`);
+    }
+    // 用户点击取消时，error为'cancel'，不显示消息
+  } finally {
+    isBackuping.value = false;
   }
 };
 
@@ -996,5 +1060,21 @@ const getBaseName = (path) => {
   margin-top: 10px;
   font-family: 'Courier New', Courier, monospace;
   white-space: pre-wrap;
+}
+.backup-section {
+  margin-top: 20px;
+  padding: 15px;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 8px;
+  background-color: var(--el-fill-color-lighter);
+}
+.backup-section h4 {
+  margin: 0 0 10px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.backup-section .el-form-item {
+  margin-bottom: 15px;
 }
 </style>

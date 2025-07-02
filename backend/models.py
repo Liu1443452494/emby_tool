@@ -177,6 +177,11 @@ class EpisodeRefresherConfig(BaseModel):
         description="是否启用本地截图缓存，避免重复截图"
     )
 
+    backup_overwrite_local: bool = Field(
+        default=False,
+        description="从Emby备份截图到本地时，是否覆盖本地已有的同名文件"
+    )
+
 class EpisodeRenamerConfig(BaseModel):
     """剧集文件重命名器功能的配置"""
     emby_path_root: str = Field(default="/media", description="Emby 容器内看到的媒体根路径")
