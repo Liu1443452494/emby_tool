@@ -858,7 +858,12 @@ class EpisodeRefresherLogic:
                     series_tmdb_id_cache[series_id] = series_tmdb_id
                 
                 # 构建本地路径并检查是否需要覆盖
-                local_path = self._get_local_screenshot_path(series_tmdb_id, ep_details.get("ParentIndexNumber"), ep_details.get("IndexNumber"))
+                local_path = self._get_local_screenshot_path(
+                    series_tmdb_id, 
+                    ep_details.get("ParentIndexNumber"), 
+                    ep_details.get("IndexNumber"),
+                    ep_details.get("SeriesName")
+                )
                 if not local_path:
                     failed_count += 1
                     continue
