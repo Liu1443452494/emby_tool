@@ -25,6 +25,7 @@ export const useEpisodeRenamerStore = defineStore('episodeRenamer', () => {
         const err = await response.json()
         throw new Error(err.detail || '获取日志失败')
       }
+      // 获取的是所有日志，前端将根据 status 自行分类
       logs.value = await response.json()
     } catch (error) {
       showMessage('error', error.message)
@@ -47,6 +48,31 @@ export const useEpisodeRenamerStore = defineStore('episodeRenamer', () => {
       )
       const response = await fetch(`${API_BASE_URL}/api/episode-renamer/logs/clear-completed`, {
         method: 'POST',
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || '清理失败')
+      showMessage('success', data.message)
+      await fetchLogs()
+    } catch (error) {
+      if (error !== 'cancel') {
+        showMessage('error', error.message)
+      }
+    }
+  }
+
+  async function clearAllLogs() {
+    try {
+      await ElMessageBox.confirm(
+        '危险操作！这将清空所有待处理和已完成的记录，且不可恢复。确定吗？',
+        '警告',
+        {
+          confirmButtonText: '确定全部清空',
+          cancelButtonText: '取消',
+          type: 'warning',
+        }
+      )
+      const response = await fetch(`${API_BASE_URL}/api/episode-renamer/logs/clear-all`, {
+        method: 'DELETE',
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || '清理失败')
@@ -132,6 +158,7 @@ export const useEpisodeRenamerStore = defineStore('episodeRenamer', () => {
     isScanning,
     fetchLogs,
     clearCompletedLogs,
+    clearAllLogs, // 导出新方法
     applyToCloudDrive,
     searchMedia,
     manualScan,

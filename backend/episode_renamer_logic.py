@@ -348,7 +348,7 @@ class EpisodeRenamerLogic:
         return full_clouddrive_path, clouddrive_filename
 
     def apply_clouddrive_rename_task(self, log_entries: List[Dict], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-        """根据日志条目，重命名网盘文件"""
+        """根据日志条目，重命名网盘文件并回写.strm文件"""
         task_cat = "网盘重命名"
         total_items = len(log_entries)
         task_manager.update_task_progress(task_id, 0, total_items)
@@ -378,52 +378,84 @@ class EpisodeRenamerLogic:
                 failed_logs.append(log_entry)
                 continue
 
-            path_info = self._get_clouddrive_video_path(latest_episode_details, old_base_path, task_cat)
-            if not path_info:
-                log_entry['error'] = "无法获取网盘文件路径"
+            # 从最新的分集详情中获取旧的URL，这是我们操作的起点
+            old_strm_url = latest_episode_details.get("MediaSources", [{}])[0].get("Path")
+            if not old_strm_url:
+                log_entry['error'] = "在MediaSources中未找到URL"
+                failed_logs.append(log_entry)
+                continue
+
+            # 1. 解析旧URL，分离出前缀和旧文件名
+            try:
+                last_q_mark = old_strm_url.rfind('?')
+                last_slash = old_strm_url.rfind('/')
+                split_pos = max(last_q_mark, last_slash)
+                if split_pos == -1: raise ValueError("无法解析URL结构")
+                
+                url_prefix = old_strm_url[:split_pos+1]
+                old_clouddrive_filename_from_url = old_strm_url[split_pos+1:]
+            except Exception as e:
+                log_entry['error'] = f"解析旧URL失败: {e}"
+                failed_logs.append(log_entry)
+                continue
+
+            # 2. 计算网盘文件路径
+            emby_root = self.renamer_config.emby_path_root
+            clouddrive_root = self.renamer_config.clouddrive_path_root
+            if not old_base_path.startswith(emby_root):
+                log_entry['error'] = f"路径错误！'{old_base_path}' 与Emby根目录'{emby_root}'不匹配"
                 failed_logs.append(log_entry)
                 continue
             
-            old_clouddrive_path, old_clouddrive_filename = path_info
-            
+            relative_dir = os.path.dirname(old_base_path).replace(emby_root, '', 1).lstrip('/\\')
+            clouddrive_dir = os.path.join(clouddrive_root, relative_dir)
+            old_clouddrive_path = os.path.join(clouddrive_dir, old_clouddrive_filename_from_url)
+
+            # 3. 检查旧文件是否存在
             if not os.path.exists(old_clouddrive_path):
                 ui_logger.error(f"     - 网盘文件不存在: {old_clouddrive_path}", task_category=task_cat)
                 log_entry['error'] = "网盘文件不存在"
                 failed_logs.append(log_entry)
                 continue
 
-            _, old_ext = os.path.splitext(old_clouddrive_filename)
+            # 4. 计算新文件名和新路径
+            _, old_ext = os.path.splitext(old_clouddrive_filename_from_url)
             new_clouddrive_filename = os.path.basename(new_base_path) + old_ext
-            new_clouddrive_path = os.path.join(os.path.dirname(old_clouddrive_path), new_clouddrive_filename)
+            new_clouddrive_path = os.path.join(clouddrive_dir, new_clouddrive_filename)
 
             try:
+                # 5. 重命名网盘文件
                 os.rename(old_clouddrive_path, new_clouddrive_path)
                 ui_logger.info(f"     - 成功重命名网盘文件 -> {new_clouddrive_filename}", task_category=task_cat)
+
+                # 6. 回写本地 .strm 文件
+                local_strm_path = f"{new_base_path}.strm"
+                if os.path.exists(local_strm_path):
+                    new_strm_url = f"{url_prefix}{new_clouddrive_filename}"
+                    with open(local_strm_path, 'w', encoding='utf-8') as f:
+                        f.write(new_strm_url)
+                    ui_logger.info(f"     - 成功更新 .strm 文件内容", task_category=task_cat)
+                else:
+                    ui_logger.warning(f"     - 未找到本地 .strm 文件进行更新: {local_strm_path}", task_category=task_cat)
+
+                # 7. 更新日志状态
                 updated_count += 1
-                
                 lock_path = RENAME_LOG_FILE + ".lock"
                 with FileLock(lock_path, timeout=10):
                     if os.path.exists(RENAME_LOG_FILE):
-                        with open(RENAME_LOG_FILE, 'r', encoding='utf-8') as f:
-                            all_logs = json.load(f)
-                        
+                        with open(RENAME_LOG_FILE, 'r', encoding='utf-8') as f: all_logs = json.load(f)
                         for log in all_logs:
                             if log.get('id') == log_entry.get('id'):
-                                log['status'] = 'completed'
-                                break
-                        
-                        with open(RENAME_LOG_FILE, 'w', encoding='utf-8') as f:
-                            json.dump(all_logs, f, indent=4, ensure_ascii=False)
-
+                                log['status'] = 'completed'; break
+                        with open(RENAME_LOG_FILE, 'w', encoding='utf-8') as f: json.dump(all_logs, f, indent=4, ensure_ascii=False)
+            
             except Exception as e:
-                ui_logger.error(f"     - 重命名网盘文件失败: {e}", task_category=task_cat)
+                ui_logger.error(f"     - 处理失败: {e}", task_category=task_cat, exc_info=True)
                 log_entry['error'] = str(e)
                 failed_logs.append(log_entry)
 
             if self.renamer_config.clouddrive_rename_cooldown > 0:
-                ui_logger.debug(f"     - [网盘重命名-冷却] 等待 {self.renamer_config.clouddrive_rename_cooldown} 秒...", task_category=task_cat)
-            
-            time.sleep(self.renamer_config.clouddrive_rename_cooldown)
+                time.sleep(self.renamer_config.clouddrive_rename_cooldown)
 
         ui_logger.info(f"【{task_cat}】任务执行完毕。成功: {updated_count}, 失败: {len(failed_logs)}", task_category=task_cat)
         return {"updated_count": updated_count, "failed_logs": failed_logs}

@@ -1,4 +1,4 @@
-<!-- frontend/src/views/EpisodeRenamerView.vue (新文件) -->
+<!-- frontend/src/views/EpisodeRenamerView.vue (最终修正版) -->
 <template>
   <div class="episode-renamer-page">
     <div class="page-header">
@@ -12,21 +12,39 @@
           type="primary" 
           @click="handleApply" 
           :loading="store.isApplying"
-          :disabled="selectedLogs.length === 0 || isTaskRunning"
+          :disabled="selectedLogs.length === 0 || isTaskRunning || activeTab !== 'pending'"
         >
           应用选中项到网盘
         </el-button>
         <el-button @click="store.fetchLogs()" :loading="store.isLoading" :disabled="isTaskRunning">刷新列表</el-button>
-        <el-button @click="store.clearCompletedLogs()" :disabled="isTaskRunning">清理已完成记录</el-button>
+        <el-dropdown>
+          <el-button type="danger" plain>
+            清理记录<el-icon class="el-icon--right"><arrow-down /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="store.clearCompletedLogs()" :disabled="completedLogs.length === 0">清理已完成记录</el-dropdown-item>
+              <el-dropdown-item @click="store.clearAllLogs()" :disabled="store.logs.length === 0" divided>清理所有记录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
       <div class="right-actions">
         <el-button @click="isSettingsDialogVisible = true" :icon="Setting">设置与帮助</el-button>
       </div>
     </div>
 
+    <!-- 布局修正：将 el-tabs 作为独立的、非伸缩的元素 -->
+    <el-tabs v-model="activeTab" class="log-tabs">
+      <el-tab-pane :label="`待处理任务 (${pendingLogs.length})`" name="pending"></el-tab-pane>
+      <el-tab-pane :label="`已完成记录 (${completedLogs.length})`" name="completed"></el-tab-pane>
+    </el-tabs>
+
+    <!-- 布局修正：表格容器独立出来，并根据 activeTab 显示不同的数据 -->
     <div class="table-container" v-loading="store.isLoading">
       <el-table
-        :data="store.logs"
+        v-if="activeTab === 'pending'"
+        :data="pendingLogs"
         style="width: 100%"
         height="100%"
         @selection-change="handleSelectionChange"
@@ -49,9 +67,33 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <el-table
+        v-if="activeTab === 'completed'"
+        :data="completedLogs"
+        style="width: 100%"
+        height="100%"
+        empty-text="暂无已完成的记录。"
+      >
+        <el-table-column label="旧文件名" min-width="350">
+          <template #default="scope">
+            <span class="filename">{{ getBaseName(scope.row.old_base_path) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="新文件名" min-width="350">
+          <template #default="scope">
+            <span class="filename new-filename">{{ getBaseName(scope.row.new_base_path) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="记录时间" width="200">
+          <template #default="scope">
+            {{ new Date(scope.row.timestamp).toLocaleString() }}
+          </template>
+        </el-table-column>
+      </el-table>
     </div>
 
-    <!-- 设置与帮助对话框 -->
+    <!-- 设置与帮助对话框 (内容不变) -->
     <el-dialog v-model="isSettingsDialogVisible" title="设置与帮助" width="700px">
       <el-tabs>
         <el-tab-pane label="路径与冷却">
@@ -92,7 +134,7 @@ services:
       </template>
     </el-dialog>
 
-    <!-- 手动扫描对话框 -->
+    <!-- 手动扫描对话框 (内容不变) -->
     <el-dialog v-model="isManualScanDialogVisible" title="手动查找需要重命名的剧集" width="60%">
       <div class="manual-scan-dialog-content">
         <el-form @submit.prevent="handleSearch" class="search-form">
@@ -129,13 +171,14 @@ import { useEpisodeRenamerStore } from '@/stores/episodeRenamer';
 import { useConfigStore } from '@/stores/config';
 import { useTaskStore } from '@/stores/task';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Setting } from '@element-plus/icons-vue';
+import { Setting, ArrowDown } from '@element-plus/icons-vue';
 import _ from 'lodash';
 
 const store = useEpisodeRenamerStore();
 const configStore = useConfigStore();
 const taskStore = useTaskStore();
 
+const activeTab = ref('pending');
 const selectedLogs = ref([]);
 const isSettingsDialogVisible = ref(false);
 const isManualScanDialogVisible = ref(false);
@@ -149,6 +192,9 @@ const localConfig = ref({
 const isTaskRunning = computed(() => 
   taskStore.tasks.some(task => task.name.includes('重命名') && task.status === 'running')
 );
+
+const pendingLogs = computed(() => store.logs.filter(log => log.status === 'pending_clouddrive_rename'));
+const completedLogs = computed(() => store.logs.filter(log => log.status === 'completed'));
 
 onMounted(() => {
   store.fetchLogs();
@@ -212,6 +258,12 @@ const handleManualScan = (row) => {
 
 <style scoped>
 .episode-renamer-page {
+  --custom-theme-color: #609e95;
+  --custom-theme-color-hover: #7fb8af;
+  --custom-theme-color-active: #4a8a7f;
+}
+
+.episode-renamer-page {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -237,11 +289,24 @@ const handleManualScan = (row) => {
   gap: 15px;
 }
 
+/* 布局修正：移除 flex 布局，让 tabs 和 table-container 成为块级元素，自然上下排列 */
+.log-tabs {
+  flex-grow: 0; /* 不再伸缩 */
+  flex-shrink: 0;
+}
+.log-tabs :deep(.el-tabs__header) {
+  margin: 0; /* 移除 header 的下边距 */
+}
+.log-tabs :deep(.el-tabs__nav-wrap::after) {
+  height: 1px; /* 将底部分割线变细 */
+}
+
 .table-container {
-  flex-grow: 1;
+  flex-grow: 1; /* 让表格容器占据所有剩余空间 */
   overflow: hidden;
   border: 1px solid var(--el-border-color-light);
   border-radius: 4px;
+  margin-top: 15px; /* 增加与 tabs 的间距 */
 }
 
 .filename {
@@ -282,5 +347,24 @@ const handleManualScan = (row) => {
   border: 1px solid var(--el-border-color-light);
   border-radius: 4px;
   overflow: hidden;
+}
+
+.episode-renamer-page :deep(.el-button--primary) {
+  --el-button-bg-color: var(--custom-theme-color);
+  --el-button-border-color: var(--custom-theme-color);
+  --el-button-hover-bg-color: var(--custom-theme-color-hover);
+  --el-button-hover-border-color: var(--custom-theme-color-hover);
+  --el-button-active-bg-color: var(--custom-theme-color-active);
+  --el-button-active-border-color: var(--custom-theme-color-active);
+}
+.episode-renamer-page :deep(.el-tabs__item.is-active) {
+  color: var(--custom-theme-color);
+}
+.episode-renamer-page :deep(.el-tabs__active-bar) {
+  background-color: var(--custom-theme-color);
+}
+.episode-renamer-page :deep(.el-table__row .el-checkbox__input.is-checked .el-checkbox__inner) {
+  background-color: var(--custom-theme-color);
+  border-color: var(--custom-theme-color);
 }
 </style>

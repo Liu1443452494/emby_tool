@@ -32,16 +32,15 @@ def save_episode_renamer_config(config: EpisodeRenamerConfig):
 
 @router.get("/logs")
 def get_rename_logs() -> List[Dict]:
-    """获取待处理的重命名日志"""
+    """获取所有状态的重命名日志"""
     if not os.path.exists(RENAME_LOG_FILE):
         return []
     try:
         with FileLock(RENAME_LOG_FILE + ".lock", timeout=5):
             with open(RENAME_LOG_FILE, 'r', encoding='utf-8') as f:
                 all_logs = json.load(f)
-        
-        pending_logs = [log for log in all_logs if log.get('status') == 'pending_clouddrive_rename']
-        return pending_logs
+        # 直接返回所有日志，让前端根据 status 字段进行分类
+        return all_logs
     except (IOError, json.JSONDecodeError, Timeout) as e:
         ui_logger.error(f"读取重命名日志文件失败: {e}", task_category="API-重命名器")
         return []
@@ -64,6 +63,18 @@ def clear_completed_logs():
         return {"status": "success", "message": "已成功清理已完成的日志记录。"}
     except Exception as e:
         ui_logger.error(f"清理日志文件失败: {e}", task_category="API-重命名器")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.delete("/logs/clear-all")
+def clear_all_logs():
+    """清空所有日志记录"""
+    try:
+        with FileLock(RENAME_LOG_FILE + ".lock", timeout=10):
+            if os.path.exists(RENAME_LOG_FILE):
+                os.remove(RENAME_LOG_FILE)
+        return {"status": "success", "message": "所有日志记录已成功清空。"}
+    except Exception as e:
+        ui_logger.error(f"清空所有日志文件失败: {e}", task_category="API-重命名器")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/apply-clouddrive-rename")
