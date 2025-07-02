@@ -349,6 +349,55 @@
         <el-button @click="isRefresherDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+    <el-dialog
+      v-model="isRenamerInfoDialogVisible"
+      title="剧集文件重命名 - 重要配置说明"
+      width="700px"
+    >
+      <div class="independent-task-config">
+        <el-alert 
+          title="核心前提：一致的路径映射" 
+          type="warning" 
+          :closable="false" 
+          show-icon
+          style="margin-bottom: 20px;"
+        >
+          <p>
+            为了让本工具能正确地找到并重命名您的 <code>.strm</code> 文件，您必须确保 <strong>Emby 容器</strong> 和 <strong>Emby-Toolkit 容器</strong> 的媒体目录挂载点完全一致。
+          </p>
+        </el-alert>
+        
+        <h4>正确配置示例 (docker-compose.yml)</h4>
+        <p class="form-item-description">
+          请检查您的 <code>docker-compose.yml</code> 文件，确保两个服务中的 <code>volumes</code> 媒体路径部分是相同的。
+        </p>
+        <pre class="code-example">
+services:
+  emby:
+    # ... emby的其他配置 ...
+    volumes:
+      - /path/on/your/host/media:/media  # <-- Emby的挂载点
+
+  emby-toolkit-backend:
+    # ... 工具箱的其他配置 ...
+    volumes:
+      - ./data:/app/data
+      - /path/on/your/host/media:/media  # <-- 工具箱的挂载点，必须与上方一致
+      # ... 其他可能的挂载 ...
+</pre>
+
+        <h4>为什么需要这样配置？</h4>
+        <p class="form-item-description">
+          本工具会从 Emby API 获取文件的路径（例如 <code>/media/tv/我的剧集/S01E01.strm</code>）。为了能直接操作这个文件，工具箱容器内必须能通过完全相同的路径访问到它。
+        </p>
+        <p class="form-item-description">
+          <strong>注意：</strong>此要求仅针对“本地文件重命名”功能。“网盘文件重命名”功能则通过您在“网盘文件重命名”页面设置的路径转换规则来工作，更为灵活。
+        </p>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="isRenamerInfoDialogVisible = false">我明白了</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -369,7 +418,7 @@ const definedTasks = ref([
   { id: 'douban_fixer', name: '豆瓣ID修复器', hasSettings: false },
   { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
   { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true },
-  { id: 'episode_renamer', name: '剧集文件重命名', hasSettings: false }
+  { id: 'episode_renamer', name: '剧集文件重命名', hasSettings: true }
 ]);
 
 const localScope = ref({});
@@ -382,6 +431,7 @@ const isTriggering = reactive({});
 const isPosterDialogVisible = ref(false);
 const isWebhookDialogVisible = ref(false);
 const isRefresherDialogVisible = ref(false);
+const isRenamerInfoDialogVisible = ref(false); 
 const isSearchDialogVisible = ref(false);
 const searchQuery = ref('');
 const searchDialogTableRef = ref(null);
@@ -517,6 +567,8 @@ const openSettingsDialog = (taskId) => {
     isPosterDialogVisible.value = true;
   } else if (taskId === 'episode_refresher') {
     isRefresherDialogVisible.value = true;
+  } else if (taskId === 'episode_renamer') {
+    isRenamerInfoDialogVisible.value = true;
   }
 };
 
