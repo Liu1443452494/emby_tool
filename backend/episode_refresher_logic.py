@@ -45,6 +45,19 @@ class EpisodeRefresherLogic:
         if not text: return True
         pattern = re.compile(r'^(第\s*\d+\s*集|Episode\s*\d+)$', re.IGNORECASE)
         return bool(pattern.match(text.strip()))
+    
+    def _get_emby_item_details(self, item_id: str, fields: str) -> Optional[Dict]:
+        """获取媒体项的详细信息"""
+        try:
+            url = f"{self.base_url}/Users/{self.user_id}/Items/{item_id}"
+            params = {**self.params, "Fields": fields}
+            response = self.session.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            # 这个错误主要给后端看，保留 logging
+            logging.error(f"【剧集刷新】获取媒体详情 (ID: {item_id}) 失败: {e}")
+            return None
 
     def _unlock_item(self, item_id: str, task_category: str) -> bool:
         try:
