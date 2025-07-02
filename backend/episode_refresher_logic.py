@@ -29,6 +29,39 @@ from task_manager import TaskManager
 from tmdb_logic import TmdbLogic
 
 class EpisodeRefresherLogic:
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        """清理文件名中的非法字符"""
+        if not name:
+            return "Unknown"
+        return re.sub(r'[\\/*?:"<>|]', '_', name)
+    
+    def _find_screenshot_cache_dir_by_tmdbid(self, series_tmdb_id: str) -> Optional[str]:
+        """通过 TMDB ID 查找实际存在的缓存目录路径，忽略标题。"""
+        douban_data_root = self.app_config.douban_config.directory
+        if not douban_data_root:
+            return None
+        
+        base_cache_dir = os.path.join(douban_data_root, "EpisodeScreenshots")
+        if not os.path.isdir(base_cache_dir):
+            return None
+
+        # 正则表达式，用于从 "任意标题 [12345]" 中提取出数字 12345
+        id_pattern = re.compile(r'\[(\d+)\]$')
+
+        try:
+            for dirname in os.listdir(base_cache_dir):
+                dirpath = os.path.join(base_cache_dir, dirname)
+                if os.path.isdir(dirpath):
+                    match = id_pattern.search(dirname)
+                    if match and match.group(1) == str(series_tmdb_id):
+                        return dirpath
+        except OSError as e:
+            # 使用 ui_logger 记录底层文件系统错误
+            ui_logger.error(f"【截图缓存】扫描缓存目录时出错: {e}", task_category="截图缓存")
+        
+        return None
+    
     def __init__(self, app_config: AppConfig):
         self.app_config = app_config
         self.server_config = app_config.server_config
@@ -207,39 +240,73 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - [截图] ffprobe 获取时长失败: {e}", task_category=task_category)
             return None
         
-    def _get_local_screenshot_path(self, series_tmdb_id: str, season_number: int, episode_number: int) -> Optional[str]:
-        """根据剧集信息生成本地截图缓存的完整路径"""
+    def _get_local_screenshot_path(self, series_tmdb_id: str, season_number: int, episode_number: int, series_name: str) -> Optional[str]:
+        """根据剧集信息生成本地截图缓存的完整路径 (用于写入和重命名)"""
         douban_data_root = self.app_config.douban_config.directory
         if not douban_data_root:
             ui_logger.warning("     - [本地缓存] 未配置豆瓣数据根目录，无法使用本地截图缓存功能。", task_category="截图缓存")
             return None
         
-        # 缓存文件夹命名为 "EpisodeScreenshots"
-        cache_dir = os.path.join(douban_data_root, "EpisodeScreenshots", str(series_tmdb_id))
-        # 文件名格式: season-1-episode-1.jpg
+        sanitized_name = self._sanitize_filename(series_name)
+        folder_name = f"{sanitized_name} [{series_tmdb_id}]"
+        
+        cache_dir = os.path.join(douban_data_root, "EpisodeScreenshots", folder_name)
         filename = f"season-{season_number}-episode-{episode_number}.jpg"
         return os.path.join(cache_dir, filename)
 
-    def _save_screenshot_to_local(self, image_bytes: bytes, series_tmdb_id: str, season_number: int, episode_number: int, task_category: str) -> bool:
-        """将截图二进制数据保存到本地缓存"""
-        filepath = self._get_local_screenshot_path(series_tmdb_id, season_number, episode_number)
-        if not filepath:
+    def _save_screenshot_to_local(self, image_bytes: bytes, series_tmdb_id: str, season_number: int, episode_number: int, series_name: str, task_category: str) -> bool:
+        """将截图二进制数据保存到本地缓存，并智能处理文件夹重命名。"""
+        # 1. 构建理论上的新文件路径
+        new_filepath = self._get_local_screenshot_path(series_tmdb_id, season_number, episode_number, series_name)
+        if not new_filepath:
             return False
         
+        new_dir = os.path.dirname(new_filepath)
+
+        # 2. 查找基于TMDB ID的旧目录
+        old_dir = self._find_screenshot_cache_dir_by_tmdbid(series_tmdb_id)
+        
+        final_dir = new_dir
+        
         try:
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            with open(filepath, 'wb') as f:
+            # 3. 处理目录重命名和创建
+            if old_dir:
+                # 如果找到了旧目录
+                if old_dir != new_dir:
+                    # 且旧目录名和新目录名不一致（意味着标题变了），则重命名
+                    ui_logger.info(f"     - [本地缓存] 检测到剧集标题变更，正在重命名缓存文件夹: '{os.path.basename(old_dir)}' -> '{os.path.basename(new_dir)}'", task_category=task_category)
+                    os.rename(old_dir, new_dir)
+                final_dir = new_dir # 最终目录就是新目录
+            else:
+                # 如果没找到旧目录，直接创建新目录
+                os.makedirs(new_dir, exist_ok=True)
+            
+            # 4. 在最终确定的目录中写入文件
+            final_filepath = os.path.join(final_dir, os.path.basename(new_filepath))
+            with open(final_filepath, 'wb') as f:
                 f.write(image_bytes)
-            ui_logger.info(f"     - [本地缓存] 成功将截图保存到: {filepath}", task_category=task_category)
+            ui_logger.info(f"     - [本地缓存] 成功将截图保存到: {final_filepath}", task_category=task_category)
             return True
+            
+        except OSError as e:
+            ui_logger.error(f"     - [本地缓存] 保存或重命名缓存时发生文件系统错误: {e}", task_category=task_category, exc_info=True)
+            return False
         except Exception as e:
-            ui_logger.error(f"     - [本地缓存] 保存截图到本地失败: {e}", task_category=task_category, exc_info=True)
+            ui_logger.error(f"     - [本地缓存] 保存截图到本地时发生未知错误: {e}", task_category=task_category, exc_info=True)
             return False
 
     def _read_screenshot_from_local(self, series_tmdb_id: str, season_number: int, episode_number: int, task_category: str) -> Optional[bytes]:
-        """从本地缓存读取截图二进制数据"""
-        filepath = self._get_local_screenshot_path(series_tmdb_id, season_number, episode_number)
-        if not filepath or not os.path.exists(filepath):
+        """从本地缓存读取截图二进制数据 (通过TMDB ID查找)"""
+        # 1. 通过TMDB ID查找文件夹
+        cache_dir = self._find_screenshot_cache_dir_by_tmdbid(series_tmdb_id)
+        if not cache_dir:
+            return None
+        
+        # 2. 构建文件路径
+        filename = f"season-{season_number}-episode-{episode_number}.jpg"
+        filepath = os.path.join(cache_dir, filename)
+
+        if not os.path.exists(filepath):
             return None
         
         try:
@@ -252,11 +319,20 @@ class EpisodeRefresherLogic:
             return None
 
     def _delete_local_screenshot(self, series_tmdb_id: str, season_number: int, episode_number: int, task_category: str) -> bool:
-        """从本地缓存中删除指定的截图文件"""
-        filepath = self._get_local_screenshot_path(series_tmdb_id, season_number, episode_number)
-        if not filepath or not os.path.exists(filepath):
+        """从本地缓存中删除指定的截图文件 (通过TMDB ID查找)"""
+        # 1. 通过TMDB ID查找文件夹
+        cache_dir = self._find_screenshot_cache_dir_by_tmdbid(series_tmdb_id)
+        if not cache_dir:
+            ui_logger.debug(f"     - [本地缓存] 无需删除，未找到TMDB ID为 {series_tmdb_id} 的缓存目录。", task_category=task_category)
+            return True
+
+        # 2. 构建文件路径
+        filename = f"season-{season_number}-episode-{episode_number}.jpg"
+        filepath = os.path.join(cache_dir, filename)
+
+        if not os.path.exists(filepath):
             ui_logger.debug(f"     - [本地缓存] 无需删除，文件不存在: {filepath}", task_category=task_category)
-            return True # 文件本就不在，视为成功
+            return True
         
         try:
             os.remove(filepath)
@@ -389,6 +465,7 @@ class EpisodeRefresherLogic:
 
         season_number = episode_details.get("ParentIndexNumber")
         episode_number = episode_details.get("IndexNumber")
+        series_name = episode_details.get("SeriesName", "Unknown Series")
 
         # 步骤 1: 检查本地缓存 (仅在非强制覆盖模式下)
         if config.local_screenshot_caching_enabled and not config.force_overwrite_screenshots:
@@ -431,14 +508,13 @@ class EpisodeRefresherLogic:
             
             # 步骤 4: 如果上传成功且缓存开启，则保存到本地
             if upload_success and config.local_screenshot_caching_enabled:
-                self._save_screenshot_to_local(image_bytes, series_tmdb_id, season_number, episode_number, task_category)
+                self._save_screenshot_to_local(image_bytes, series_tmdb_id, season_number, episode_number, series_name, task_category)
             
             return upload_success
         
         return False
 
     def _set_image_source_tag(self, item_id: str, source: str, task_category: str):
-        # ... (此函数无变化) ...
         try:
             item_details = self.tmdb_logic._get_emby_item_details(item_id, fields="ProviderIds")
             if not item_details: return
@@ -799,7 +875,7 @@ class EpisodeRefresherLogic:
                 image_bytes = image_resp.content
 
                 # 保存到本地
-                if self._save_screenshot_to_local(image_bytes, series_tmdb_id, ep_details.get("ParentIndexNumber"), ep_details.get("IndexNumber"), task_cat):
+                if self._save_screenshot_to_local(image_bytes, series_tmdb_id, ep_details.get("ParentIndexNumber"), ep_details.get("IndexNumber"), ep_details.get("SeriesName"), task_cat):
                     ui_logger.info(f"{log_prefix} 成功备份到本地。", task_category=task_cat)
                     backed_up_count += 1
                 else:
