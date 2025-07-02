@@ -92,6 +92,21 @@ def apply_clouddrive_rename(log_entries: List[Dict] = Body(...)):
     )
     return {"status": "success", "message": "网盘文件重命名任务已启动。", "task_id": task_id}
 
+@router.post("/undo-local-rename")
+def undo_local_rename(log_entries: List[Dict] = Body(...)):
+    """启动一个任务来撤销本地文件的重命名"""
+    if not log_entries:
+        raise HTTPException(status_code=400, detail="必须提供要处理的日志条目。")
+    
+    logic = get_logic()
+    task_name = f"撤销本地重命名 (共 {len(log_entries)} 项)"
+    task_id = task_manager.register_task(
+        logic.undo_local_rename_task,
+        task_name,
+        log_entries
+    )
+    return {"status": "success", "message": "撤销本地重命名任务已启动。", "task_id": task_id}
+
 @router.post("/manual-scan/{series_id}")
 def manual_scan(series_id: str):
     """启动一个任务来手动扫描指定剧集"""

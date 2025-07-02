@@ -477,6 +477,70 @@ class EpisodeRenamerLogic:
 
         ui_logger.info(f"【{task_cat}】任务执行完毕。成功: {updated_count}, 失败: {len(failed_logs)}", task_category=task_cat)
         return {"updated_count": updated_count, "failed_logs": failed_logs}
+    
+
+    def undo_local_rename_task(self, log_entries: List[Dict], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        """根据日志条目，撤销本地文件的重命名操作"""
+        task_cat = "撤销重命名"
+        total_items = len(log_entries)
+        task_manager.update_task_progress(task_id, 0, total_items)
+        ui_logger.info(f"【{task_cat}】任务启动，共需撤销 {total_items} 个项目。", task_category=task_cat)
+
+        undone_count = 0
+        failed_logs = []
+        series_to_refresh = set()
+
+        for index, log_entry in enumerate(log_entries):
+            if cancellation_event.is_set():
+                ui_logger.warning(f"【{task_cat}】任务被用户取消。", task_category=task_cat)
+                break
+            
+            task_manager.update_task_progress(task_id, index + 1, total_items)
+            
+            old_base_path = log_entry['old_base_path']
+            new_base_path = log_entry['new_base_path']
+            series_id = log_entry.get('series_id')
+            
+            ui_logger.info(f"  -> 正在撤销: {os.path.basename(new_base_path)} -> {os.path.basename(old_base_path)}", task_category=task_cat)
+
+            try:
+                # 执行反向重命名
+                if self._rename_associated_files(new_base_path, old_base_path, task_category):
+                    undone_count += 1
+                    if series_id:
+                        series_to_refresh.add(series_id)
+                    
+                    # 从日志文件中移除该条记录
+                    lock_path = RENAME_LOG_FILE + ".lock"
+                    with FileLock(lock_path, timeout=10):
+                        if os.path.exists(RENAME_LOG_FILE):
+                            with open(RENAME_LOG_FILE, 'r', encoding='utf-8') as f:
+                                all_logs = json.load(f)
+                            
+                            # 过滤掉与当前处理的日志ID相同的记录
+                            logs_after_removal = [log for log in all_logs if log.get('id') != log_entry.get('id')]
+                            
+                            with open(RENAME_LOG_FILE, 'w', encoding='utf-8') as f:
+                                json.dump(logs_after_removal, f, indent=4, ensure_ascii=False)
+                            ui_logger.info(f"     - 已成功从日志中移除该条记录。", task_category=task_cat)
+                else:
+                    # 如果 _rename_associated_files 返回 False，说明新文件不存在
+                    raise FileNotFoundError(f"找不到需要被撤销的文件: {new_base_path}")
+
+            except Exception as e:
+                ui_logger.error(f"     - 撤销失败: {e}", task_category=task_cat, exc_info=True)
+                log_entry['error'] = str(e)
+                failed_logs.append(log_entry)
+
+        # 为所有受影响的剧集触发一次扫描
+        if series_to_refresh:
+            ui_logger.info(f"【{task_cat}】开始为 {len(series_to_refresh)} 个受影响的剧集触发Emby扫描...", task_category=task_cat)
+            for sid in series_to_refresh:
+                self._trigger_emby_scan(sid, task_cat)
+                time.sleep(1) # 短暂间隔避免请求过于密集
+
+        ui_logger.info(f"【{task_cat}】任务执行完毕。成功撤销: {undone_count}, 失败: {len(failed_logs)}", task_category=task_cat)
+        return {"undone_count": undone_count, "failed_logs": failed_logs}
 
     def manual_scan_for_rename_task(self, series_id: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """手动扫描指定剧集，找出需要重命名的网盘文件"""

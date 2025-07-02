@@ -349,9 +349,11 @@
         <el-button @click="isRefresherDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 剧集重命名设置与撤销工具对话框 (新) -->
     <el-dialog
-      v-model="isRenamerInfoDialogVisible"
-      title="剧集文件重命名 - 重要配置说明"
+      v-model="isRenamerSettingsDialogVisible"
+      title="剧集文件重命名 - 设置"
       width="700px"
     >
       <div class="independent-task-config">
@@ -385,19 +387,84 @@ services:
       - /path/on/your/host/media:/media  # <-- 工具箱的挂载点，必须与上方一致
       # ... 其他可能的挂载 ...
 </pre>
-
-        <h4>为什么需要这样配置？</h4>
-        <p class="form-item-description">
-          本工具会从 Emby API 获取文件的路径（例如 <code>/media/tv/我的剧集/S01E01.strm</code>）。为了能直接操作这个文件，工具箱容器内必须能通过完全相同的路径访问到它。
-        </p>
-        <p class="form-item-description">
-          <strong>注意：</strong>此要求仅针对“本地文件重命名”功能。“网盘文件重命名”功能则通过您在“网盘文件重命名”页面设置的路径转换规则来工作，更为灵活。
-        </p>
+        <el-divider />
+        <div style="text-align: center;">
+          <el-button type="danger" plain @click="openUndoDialog">打开撤销工具</el-button>
+        </div>
       </div>
       <template #footer>
-        <el-button type="primary" @click="isRenamerInfoDialogVisible = false">我明白了</el-button>
+        <el-button type="primary" @click="isRenamerSettingsDialogVisible = false">我明白了</el-button>
       </template>
     </el-dialog>
+
+    <!-- 撤销重命名列表对话框 (新) -->
+    <el-dialog
+      v-model="isUndoDialogVisible"
+      title="撤销本地文件重命名"
+      width="70%"
+      top="5vh"
+      destroy-on-close
+    >
+      <div class="undo-dialog-content">
+        <el-alert 
+          title="警告" 
+          type="warning" 
+          show-icon 
+          :closable="false"
+          style="margin-bottom: 15px;"
+        >
+          <p>此操作将把本地文件恢复到重命名之前的状态。这可能会导致 Emby 媒体库中的项目暂时失效，建议操作完成后手动扫描媒体库。</p>
+          <p><strong>此工具仅操作本地文件，不会操作您的网盘文件。</strong></p>
+        </el-alert>
+        <div class="undo-toolbar">
+          <el-button @click="renamerStore.fetchLogs()" :loading="renamerStore.isLoading">刷新列表</el-button>
+        </div>
+        <div class="undo-table-container" v-loading="renamerStore.isLoading">
+          <el-table
+            :data="renamerStore.logs"
+            height="100%"
+            @selection-change="handleUndoSelectionChange"
+            empty-text="没有找到任何重命名记录"
+          >
+            <el-table-column type="selection" width="55" />
+            <el-table-column label="新文件名 (将被撤销)" min-width="300">
+              <template #default="scope">
+                <span class="filename new-filename">{{ getBaseName(scope.row.new_base_path) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="旧文件名 (将恢复为)" min-width="300">
+              <template #default="scope">
+                <span class="filename">{{ getBaseName(scope.row.old_base_path) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="120">
+              <template #default="scope">
+                <el-tag :type="scope.row.status === 'completed' ? 'success' : 'primary'">
+                  {{ scope.row.status === 'completed' ? '已同步网盘' : '仅本地重命名' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="记录时间" width="180">
+              <template #default="scope">
+                {{ new Date(scope.row.timestamp).toLocaleString() }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="isUndoDialogVisible = false">关闭</el-button>
+        <el-button 
+          type="danger" 
+          @click="handleUndo" 
+          :disabled="selectedUndoLogs.length === 0"
+          :loading="renamerStore.isApplying"
+        >
+          撤销选中项 ({{ selectedUndoLogs.length }})
+        </el-button>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -405,13 +472,15 @@ services:
 import { ref, onMounted, watch, reactive, nextTick } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
+import { useEpisodeRenamerStore } from '@/stores/episodeRenamer';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import _ from 'lodash';
 import { Setting } from '@element-plus/icons-vue';
 import cronstrue from 'cronstrue/i18n';
+import _ from 'lodash';
 
 const configStore = useConfigStore();
 const mediaStore = useMediaStore();
+const renamerStore = useEpisodeRenamerStore();
 
 const definedTasks = ref([
   { id: 'actor_localizer', name: '演员中文化', hasSettings: false },
@@ -431,8 +500,10 @@ const isTriggering = reactive({});
 const isPosterDialogVisible = ref(false);
 const isWebhookDialogVisible = ref(false);
 const isRefresherDialogVisible = ref(false);
-const isRenamerInfoDialogVisible = ref(false); 
 const isSearchDialogVisible = ref(false);
+const isRenamerSettingsDialogVisible = ref(false);
+const isUndoDialogVisible = ref(false);
+const selectedUndoLogs = ref([]);
 const searchQuery = ref('');
 const searchDialogTableRef = ref(null);
 const dialogSelection = ref([]);
@@ -461,7 +532,6 @@ onMounted(() => {
 watch(isSearchDialogVisible, (visible) => {
   if (visible) {
     nextTick(() => {
-      // 当对话框可见时，根据已有的 item_ids 恢复表格的勾选状态
       const selectedIds = new Set(localScope.value.item_ids);
       mediaStore.searchResults.forEach(row => {
         if (selectedIds.has(row.Id)) {
@@ -568,8 +638,14 @@ const openSettingsDialog = (taskId) => {
   } else if (taskId === 'episode_refresher') {
     isRefresherDialogVisible.value = true;
   } else if (taskId === 'episode_renamer') {
-    isRenamerInfoDialogVisible.value = true;
+    isRenamerSettingsDialogVisible.value = true;
   }
+};
+
+const openUndoDialog = () => {
+  isRenamerSettingsDialogVisible.value = false;
+  isUndoDialogVisible.value = true;
+  renamerStore.fetchLogs();
 };
 
 const parseCron = (task) => {
@@ -607,6 +683,29 @@ const handleDialogSelectionChange = (selection) => {
 const confirmSearchSelection = () => {
   localScope.value.item_ids = dialogSelection.value.map(item => item.Id);
   isSearchDialogVisible.value = false;
+};
+
+const handleUndoSelectionChange = (selection) => {
+  selectedUndoLogs.value = selection;
+};
+
+const handleUndo = async () => {
+  try {
+    await ElMessageBox.confirm(
+      `即将对选中的 ${selectedUndoLogs.value.length} 个项目执行撤销操作，文件将被重命名回旧名称。此操作可能导致Emby媒体库项目丢失，建议操作后手动扫描媒体库。是否继续？`,
+      '确认撤销操作',
+      { confirmButtonText: '确定撤销', cancelButtonText: '取消', type: 'warning' }
+    );
+    await renamerStore.startUndoTask(selectedUndoLogs.value);
+    isUndoDialogVisible.value = false;
+  } catch (error) {
+    // 用户取消
+  }
+};
+
+const getBaseName = (path) => {
+  if (!path) return '';
+  return path.split(/[\\/]/).pop();
 };
 </script>
 
@@ -855,5 +954,35 @@ const confirmSearchSelection = () => {
   margin-left: 15px;
   color: var(--el-text-color-secondary);
   font-size: 14px;
+}
+
+.undo-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  height: 65vh;
+}
+.undo-toolbar {
+  flex-shrink: 0;
+}
+.undo-table-container {
+  flex-grow: 1;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 4px;
+}
+.filename {
+  font-family: 'Courier New', Courier, monospace;
+}
+.new-filename {
+  color: var(--el-color-error);
+}
+.code-example {
+  background-color: var(--el-fill-color);
+  padding: 10px;
+  border-radius: 4px;
+  margin-top: 10px;
+  font-family: 'Courier New', Courier, monospace;
+  white-space: pre-wrap;
 }
 </style>

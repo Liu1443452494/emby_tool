@@ -149,6 +149,28 @@ export const useEpisodeRenamerStore = defineStore('episodeRenamer', () => {
     }
   }
 
+    async function startUndoTask(selectedLogs) {
+    if (selectedLogs.length === 0) {
+      showMessage('warning', '请至少选择一个项目进行撤销。')
+      return
+    }
+    isApplying.value = true // 复用 isApplying 状态
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/episode-renamer/undo-local-rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selectedLogs),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || '启动任务失败')
+      showMessage('success', data.message)
+    } catch (error) {
+      showMessage('error', error.message)
+    } finally {
+      isApplying.value = false
+    }
+  }
+
   return {
     isLoading,
     logs,
@@ -162,5 +184,6 @@ export const useEpisodeRenamerStore = defineStore('episodeRenamer', () => {
     applyToCloudDrive,
     searchMedia,
     manualScan,
+    startUndoTask 
   }
 })
