@@ -455,7 +455,11 @@ class EpisodeRenamerLogic:
                 failed_logs.append(log_entry)
 
             if self.renamer_config.clouddrive_rename_cooldown > 0:
-                time.sleep(self.renamer_config.clouddrive_rename_cooldown)
+            
+                ui_logger.debug(f"     - [网盘重命名-冷却] 等待 {self.renamer_config.clouddrive_rename_cooldown} 秒...", task_category=task_cat)
+            
+            time.sleep(self.renamer_config.clouddrive_rename_cooldown)
+            
 
         ui_logger.info(f"【{task_cat}】任务执行完毕。成功: {updated_count}, 失败: {len(failed_logs)}", task_category=task_cat)
         return {"updated_count": updated_count, "failed_logs": failed_logs}
