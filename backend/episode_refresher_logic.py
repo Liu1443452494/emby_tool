@@ -1089,6 +1089,8 @@ class EpisodeRefresherLogic:
 
         return {"uploaded_count": len(successful_uploads), "skipped_count": 0, "failed_count": 0}
 
+    # 在 backend/episode_refresher_logic.py 文件中
+
     def _upload_file_to_github(self, item: Dict, github_conf) -> Optional[str]:
         task_cat = "备份到GitHub"
         try:
@@ -1104,21 +1106,33 @@ class EpisodeRefresherLogic:
                 "Authorization": f"token {github_conf.personal_access_token}"
             }
             
-            # 先获取文件sha（如果存在）
-            sha = None
-            try:
-                proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
-                get_resp = self.session.get(api_url, headers=headers, timeout=20, proxies=proxies)
-                if get_resp.status_code == 200:
-                    sha = get_resp.json().get('sha')
-            except Exception:
-                pass # 获取失败也没关系，说明是新文件
+            # --- 核心 Bug 修复开始 ---
 
+            # 1. 初始化 payload，不包含 sha
             payload = {
                 "message": f"feat: Add screenshot for {item['github_path']}",
                 "content": content,
                 "branch": github_conf.branch
             }
+            
+            # 2. 尝试获取现有文件的 sha
+            sha = None
+            try:
+                proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+                get_resp = self.session.get(api_url, headers=headers, timeout=20, proxies=proxies)
+                if get_resp.status_code == 200:
+                    # 只有在成功获取到文件信息时，才提取 sha
+                    sha = get_resp.json().get('sha')
+                    ui_logger.debug(f"     - [GitHub] 文件 '{item['github_path']}' 已存在，获取到 SHA: {sha}，将执行更新操作。", task_category=task_cat)
+                elif get_resp.status_code == 404:
+                    ui_logger.debug(f"     - [GitHub] 文件 '{item['github_path']}' 不存在，将执行创建操作。", task_category=task_cat)
+                else:
+                    # 对于其他错误，打印警告但继续，当作新文件处理
+                    ui_logger.warning(f"     - [GitHub] 获取文件 SHA 时遇到非预期状态码 {get_resp.status_code}，将尝试作为新文件创建。", task_category=task_cat)
+            except Exception as e:
+                ui_logger.warning(f"     - [GitHub] 获取文件 SHA 时发生网络错误: {e}，将尝试作为新文件创建。", task_category=task_cat)
+
+            # 3. 只有在 sha 确实是一个有效值时，才将其加入 payload
             if sha:
                 payload["sha"] = sha
 
@@ -1126,7 +1140,15 @@ class EpisodeRefresherLogic:
             put_resp = self.session.put(api_url, headers=headers, json=payload, timeout=60, proxies=proxies)
             
             if put_resp.status_code not in [200, 201]:
-                raise Exception(f"GitHub API 返回错误: {put_resp.status_code} - {put_resp.text}")
+                # 打印更详细的错误信息
+                error_detail = put_resp.text
+                try:
+                    # 尝试解析为JSON获取更具体的message
+                    error_json = put_resp.json()
+                    error_detail = error_json.get('message', put_resp.text)
+                except json.JSONDecodeError:
+                    pass
+                raise Exception(f"GitHub API 返回错误: {put_resp.status_code} - {error_detail}")
             
             return put_resp.json()["content"]["download_url"]
         except Exception as e:
