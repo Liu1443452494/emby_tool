@@ -1144,27 +1144,30 @@ class EpisodeRefresherLogic:
             api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{item['github_path']}"
             
             sha = None
-            # --- 核心修改：只有在非覆盖模式下才获取 SHA ---
-            if not github_conf.overwrite_remote:
-                try:
-                    get_headers = {
-                        "Accept": "application/vnd.github.v3+json",
-                        "Authorization": f"token {github_conf.personal_access_token}"
-                    }
-                    proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
-                    get_resp = self.session.get(api_url, headers=get_headers, timeout=20, proxies=proxies)
-                    if get_resp.status_code == 200:
-                        sha = get_resp.json().get('sha')
-                except Exception:
-                    # 获取SHA失败是正常的（比如文件第一次上传），静默处理
-                    pass
+            # --- 核心修改：无论是否覆盖，都尝试获取 SHA，因为更新操作总是需要它 ---
+            try:
+                ui_logger.debug(f"     - [GitHub上传] 正在查询文件 '{item['github_path']}' 的当前 SHA...", task_category=task_cat)
+                get_headers = {
+                    "Accept": "application/vnd.github.v3+json",
+                    "Authorization": f"token {github_conf.personal_access_token}"
+                }
+                proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+                get_resp = self.session.get(api_url, headers=get_headers, timeout=20, proxies=proxies)
+                if get_resp.status_code == 200:
+                    sha = get_resp.json().get('sha')
+                    ui_logger.debug(f"     - [GitHub上传] 文件已存在，获取到 SHA: {sha}", task_category=task_cat)
+                else:
+                    ui_logger.debug(f"     - [GitHub上传] 文件不存在或查询失败 (状态码: {get_resp.status_code})，将作为新文件创建。", task_category=task_cat)
+            except Exception as e:
+                # 获取SHA失败是正常的（比如文件第一次上传），记录一个debug日志即可
+                ui_logger.debug(f"     - [GitHub上传] 查询 SHA 时发生异常 (可能是新文件): {e}", task_category=task_cat)
 
             payload_dict = {
                 "message": f"feat: Add screenshot for {item['github_path']}",
                 "content": content_b64,
                 "branch": github_conf.branch
             }
-            # --- 核心修改：只有在获取到 SHA 的情况下才附带它 ---
+            # --- 核心修改：只要获取到了 SHA，就必须附带它 ---
             if sha:
                 payload_dict["sha"] = sha
 
@@ -1191,17 +1194,17 @@ class EpisodeRefresherLogic:
             try:
                 response_data = json.loads(result.stdout)
             except json.JSONDecodeError:
-                # --- 核心修改：当cURL返回非JSON时，检查stderr是否有明确的GitHub错误 ---
-                # 这种情况通常发生在API返回错误HTML页面时
                 if "409 Conflict" in result.stderr:
                      raise Exception(f"GitHub API 返回 409 Conflict 错误，这通常是并发写入冲突导致的。请稍后重试。")
                 raise Exception(f"cURL 返回了非JSON响应: {result.stdout} | 错误: {result.stderr}")
 
-            # --- 核心修改：更健壮的错误判断 ---
             if result.returncode != 0 or 'content' not in response_data or 'download_url' not in response_data.get('content', {}):
-                 # 检查是否有来自GitHub API的明确错误消息
                  if "message" in response_data and "documentation_url" in response_data:
-                     raise Exception(f"GitHub API 错误: {response_data['message']} (状态码: {response_data.get('status', '未知')})")
+                     # --- 核心修改：对 422 错误进行更友好的日志提示 ---
+                     error_message = response_data['message']
+                     if response_data.get('status') == '422' and "sha" in error_message:
+                         error_message = f"无效请求。服务器提示 'sha' 参数有问题。这可能是因为在您操作期间，文件被其他进程修改。请重试。({error_message})"
+                     raise Exception(f"GitHub API 错误: {error_message} (状态码: {response_data.get('status', '未知')})")
                  raise Exception(f"cURL 上传失败。返回码: {result.returncode}, 输出: {result.stdout}, 错误: {result.stderr}")
 
             return response_data["content"]["download_url"]
