@@ -316,7 +316,7 @@
       </div>
     </template>
 
-    <!-- === 文件: frontend/src/views/ServerConfigView.vue === -->
+  <!-- === 文件: frontend/src/views/ServerConfigView.vue === -->
 
     <!-- 新增：自定义代理规则对话框 -->
     <el-dialog
@@ -341,7 +341,6 @@
           <el-table :data="proxyRulesForTable" style="width: 100%" height="100%" border>
             <el-table-column label="启用" width="70" align="center">
               <template #default="scope">
-                <!-- 核心修改：对内置规则禁用复选框，并增加提示 -->
                 <el-tooltip
                   v-if="scope.row.isBuiltIn"
                   content="请在主配置页面修改内置规则的启用状态"
@@ -359,7 +358,12 @@
             </el-table-column>
             <el-table-column label="URL 关键词">
               <template #default="scope">
-                <el-input v-model="scope.row.keyword" :disabled="scope.row.isBuiltIn" placeholder="例如: github.com" />
+                <!-- 核心修改：将提示信息放入 placeholder -->
+                <el-input 
+                  v-model="scope.row.keyword" 
+                  :disabled="scope.row.isBuiltIn" 
+                  :placeholder="scope.row.isBuiltIn ? '' : '例如: github.com | githubusercontent.com 记住分隔符用| 前后空格会自动处理'"
+                />
               </template>
             </el-table-column>
             <el-table-column label="当前模式下的行为" width="180" align="center">

@@ -14,7 +14,6 @@ class ProxyManager:
         self.emby_config = app_config.server_config
         self.tmdb_config = app_config.tmdb_config
 
-    # === 文件: backend/proxy_manager.py === #
 
     def get_proxies(self, target_url: str) -> Dict:
         """
@@ -26,16 +25,20 @@ class ProxyManager:
         if not config.enabled or not config.url:
             return {}
 
-        # 1. 检查自定义规则
+        # 1. 检查自定义规则 (支持'|'分隔的多关键词，并忽略前后空格)
         for rule in config.custom_rules:
-            if rule.enabled and rule.keyword and rule.keyword in target_url:
-                # 命中自定义规则，立即决策
-                if config.mode == 'whitelist':
-                    logging.debug(f"【动态代理-白名单】命中自定义规则 '{rule.remark}' (关键词: {rule.keyword})，启用代理: {target_url}")
-                    return {'http': config.url, 'https': config.url}
-                else: # blacklist
-                    logging.debug(f"【动态代理-黑名单】命中自定义规则 '{rule.remark}' (关键词: {rule.keyword})，禁用代理: {target_url}")
-                    return {}
+            if rule.enabled and rule.keyword:
+                # 核心修改：对每个分割后的关键词使用 .strip()
+                keywords = [k.strip() for k in rule.keyword.split('|') if k.strip()]
+                # 检查是否有任何一个关键词匹配成功
+                if any(k in target_url for k in keywords):
+                    # 命中自定义规则，立即决策
+                    if config.mode == 'whitelist':
+                        logging.debug(f"【动态代理-白名单】命中自定义规则 '{rule.remark}' (关键词: {rule.keyword})，启用代理: {target_url}")
+                        return {'http': config.url, 'https': config.url}
+                    else: # blacklist
+                        logging.debug(f"【动态代理-黑名单】命中自定义规则 '{rule.remark}' (关键词: {rule.keyword})，禁用代理: {target_url}")
+                        return {}
 
         # 2. 检查内置规则
         is_tmdb_target = "themoviedb.org" in target_url or (self.tmdb_config.custom_api_domain_enabled and self.tmdb_config.custom_api_domain in target_url)
@@ -60,6 +63,7 @@ class ProxyManager:
         # 3. 如果决定要走代理，最后检查全局排除列表
         if should_use_proxy and config.exclude:
             try:
+                # 全局排除列表仍然使用逗号分隔
                 excluded_domains = [d.strip() for d in config.exclude.split(',') if d.strip()]
                 if any(domain in target_url for domain in excluded_domains):
                     logging.debug(f"【动态代理】请求 '{target_url}' 命中全局排除列表，最终禁用代理。")
