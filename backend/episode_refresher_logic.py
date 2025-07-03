@@ -690,7 +690,7 @@ class EpisodeRefresherLogic:
                         image_update_action = "screenshot"
                     else:
                         # 包含了“有用户图”和“有截图但未强制覆盖”两种情况
-                        ui_logger.info(f"{log_prefix} [跳过] Emby 中已有图片且未开启强制覆盖，无需截图。", task_category=task_category)
+                        ui_logger.info(f"{log_prefix} [跳过] Emby 中已有工具截图且未开启强制覆盖，无需截图。", task_category=task_category)
                 # --- 修复结束 ---
 
                 if not potential_changes and not image_update_action:
@@ -1095,94 +1095,123 @@ class EpisodeRefresherLogic:
         task_cat = "备份到GitHub"
         try:
             with open(item["local_path"], "rb") as f:
-                content = base64.b64encode(f.read()).decode('utf-8')
+                content_bytes = f.read()
+            
+            content_b64 = base64.b64encode(content_bytes).decode('utf-8')
             
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
             owner, repo = match.groups()
             
             api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{item['github_path']}"
-            headers = {
-                "Accept": "application/vnd.github.v3+json",
-                "Authorization": f"token {github_conf.personal_access_token}"
-            }
             
-            # --- 核心 Bug 修复开始 ---
-
-            # 1. 初始化 payload，不包含 sha
-            payload = {
-                "message": f"feat: Add screenshot for {item['github_path']}",
-                "content": content,
-                "branch": github_conf.branch
-            }
-            
-            # 2. 尝试获取现有文件的 sha
+            # 尝试获取 sha
             sha = None
             try:
+                get_headers = {
+                    "Accept": "application/vnd.github.v3+json",
+                    "Authorization": f"token {github_conf.personal_access_token}"
+                }
                 proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
-                get_resp = self.session.get(api_url, headers=headers, timeout=20, proxies=proxies)
+                get_resp = self.session.get(api_url, headers=get_headers, timeout=20, proxies=proxies)
                 if get_resp.status_code == 200:
-                    # 只有在成功获取到文件信息时，才提取 sha
                     sha = get_resp.json().get('sha')
-                    ui_logger.debug(f"     - [GitHub] 文件 '{item['github_path']}' 已存在，获取到 SHA: {sha}，将执行更新操作。", task_category=task_cat)
-                elif get_resp.status_code == 404:
-                    ui_logger.debug(f"     - [GitHub] 文件 '{item['github_path']}' 不存在，将执行创建操作。", task_category=task_cat)
-                else:
-                    # 对于其他错误，打印警告但继续，当作新文件处理
-                    ui_logger.warning(f"     - [GitHub] 获取文件 SHA 时遇到非预期状态码 {get_resp.status_code}，将尝试作为新文件创建。", task_category=task_cat)
-            except Exception as e:
-                ui_logger.warning(f"     - [GitHub] 获取文件 SHA 时发生网络错误: {e}，将尝试作为新文件创建。", task_category=task_cat)
+            except Exception:
+                pass
 
-            # 3. 只有在 sha 确实是一个有效值时，才将其加入 payload
+            payload_dict = {
+                "message": f"feat: Add screenshot for {item['github_path']}",
+                "content": content_b64,
+                "branch": github_conf.branch
+            }
             if sha:
-                payload["sha"] = sha
+                payload_dict["sha"] = sha
 
+            payload_json = json.dumps(payload_dict)
+
+            # 使用 curl 命令进行上传
+            command = [
+                'curl',
+                '-L', # 跟随重定向
+                '-X', 'PUT',
+                '-H', 'Accept: application/vnd.github.v3+json',
+                '-H', f'Authorization: token {github_conf.personal_access_token}',
+                '-H', 'Content-Type: application/json',
+                '-d', payload_json,
+                api_url
+            ]
+            
+            # 处理代理
             proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
-            put_resp = self.session.put(api_url, headers=headers, json=payload, timeout=60, proxies=proxies)
+            if proxies.get('https'):
+                command.extend(['--proxy', proxies['https']])
+
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
             
-            if put_resp.status_code not in [200, 201]:
-                # 打印更详细的错误信息
-                error_detail = put_resp.text
-                try:
-                    # 尝试解析为JSON获取更具体的message
-                    error_json = put_resp.json()
-                    error_detail = error_json.get('message', put_resp.text)
-                except json.JSONDecodeError:
-                    pass
-                raise Exception(f"GitHub API 返回错误: {put_resp.status_code} - {error_detail}")
-            
-            return put_resp.json()["content"]["download_url"]
+            response_data = {}
+            try:
+                response_data = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                raise Exception(f"cURL 返回了非JSON响应: {result.stdout} | 错误: {result.stderr}")
+
+            if result.returncode != 0 or 'download_url' not in response_data.get('content', {}):
+                 raise Exception(f"cURL 上传失败。返回码: {result.returncode}, 输出: {result.stdout}, 错误: {result.stderr}")
+
+            return response_data["content"]["download_url"]
+
         except Exception as e:
             ui_logger.error(f"【{task_cat}】上传文件 '{item['local_path']}' 时发生错误: {e}", task_category=task_cat)
             return None
-
+        
     def _upload_db_to_github(self, db_content: Dict, sha: Optional[str], github_conf) -> bool:
         task_cat = "备份到GitHub"
         try:
-            content = base64.b64encode(json.dumps(db_content, indent=2, ensure_ascii=False).encode('utf-8')).decode('utf-8')
+            content_b64 = base64.b64encode(json.dumps(db_content, indent=2, ensure_ascii=False).encode('utf-8')).decode('utf-8')
             
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
             owner, repo = match.groups()
             
             api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/database.json"
-            headers = {
-                "Accept": "application/vnd.github.v3+json",
-                "Authorization": f"token {github_conf.personal_access_token}"
-            }
             
-            payload = {
+            payload_dict = {
                 "message": f"feat: Update database.json - {datetime.utcnow().isoformat()}",
-                "content": content,
+                "content": content_b64,
                 "branch": github_conf.branch
             }
             if sha:
-                payload["sha"] = sha
+                payload_dict["sha"] = sha
+
+            payload_json = json.dumps(payload_dict)
+
+            # 使用 curl 命令进行上传
+            command = [
+                'curl',
+                '-L',
+                '-X', 'PUT',
+                '-H', 'Accept: application/vnd.github.v3+json',
+                '-H', f'Authorization: token {github_conf.personal_access_token}',
+                '-H', 'Content-Type: application/json',
+                '-d', payload_json,
+                api_url
+            ]
 
             proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
-            put_resp = self.session.put(api_url, headers=headers, json=payload, timeout=60, proxies=proxies)
+            if proxies.get('https'):
+                command.extend(['--proxy', proxies['https']])
+
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+
+            if result.returncode != 0:
+                raise Exception(f"cURL 上传失败。返回码: {result.returncode}, 输出: {result.stdout}, 错误: {result.stderr}")
             
-            if put_resp.status_code not in [200, 201]:
-                raise Exception(f"GitHub API 返回错误: {put_resp.status_code} - {put_resp.text}")
-            
+            # 检查响应是否包含错误信息
+            try:
+                response_json = json.loads(result.stdout)
+                if "message" in response_json and "documentation_url" in response_json:
+                     raise Exception(f"GitHub API 返回错误: {response_json['message']}")
+            except json.JSONDecodeError:
+                # 如果不是json，说明可能是成功了，或者是一个未知的html错误页
+                pass
+
             return True
         except Exception as e:
             ui_logger.error(f"【{task_cat}】上传 database.json 时发生错误: {e}", task_category=task_cat)
