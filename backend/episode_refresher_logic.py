@@ -1271,3 +1271,99 @@ class EpisodeRefresherLogic:
         except Exception as e:
             ui_logger.error(f"【{task_cat}】上传 database.json 时发生错误: {e}", task_category=task_cat)
             return False
+        
+
+    def precise_upload_from_local_task(self, series_tmdb_id: str, series_name: str, episodes: List[Dict], config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        """
+        根据前端指令，从本地读取已有的新截图，并精准上传覆盖到 GitHub。
+        """
+        task_cat = f"精准覆盖-{series_name}"
+        github_conf = config.github_config
+        
+        ui_logger.info(f"【{task_cat}】任务启动，共收到 {len(episodes)} 个分集的更新请求。", task_category=task_cat)
+        
+        if not github_conf.repo_url or not github_conf.personal_access_token:
+            ui_logger.error(f"【{task_cat}】❌ 任务中止：未配置完整的 GitHub 仓库 URL 和个人访问令牌 (PAT)。", task_category=task_cat)
+            raise ValueError("GitHub 仓库 URL 和 PAT 不能为空。")
+
+        # 步骤 1: 获取远程数据库状态
+        ui_logger.info(f"【{task_cat}】[步骤 1/3] 正在从 GitHub 获取最新的远程数据库...", task_category=task_cat)
+        remote_db, remote_sha = self._get_remote_db(config, force_refresh=True)
+        if remote_db is None:
+            ui_logger.info(f"【{task_cat}】远程仓库似乎没有 'database.json' 文件，将创建一个新的。", task_category=task_cat)
+            remote_db = {"version": 2, "last_updated": "", "series": {}}
+            remote_sha = None
+
+        # 步骤 2: 串行处理每个请求的分集
+        ui_logger.info(f"【{task_cat}】[步骤 2/3] 开始逐一处理请求的分集...", task_category=task_cat)
+        task_manager.update_task_progress(task_id, 0, len(episodes))
+        
+        successful_uploads = []
+        failed_uploads = []
+        skipped_uploads = []
+
+        for i, episode_info in enumerate(episodes):
+            if cancellation_event.is_set():
+                ui_logger.warning(f"【{task_cat}】任务在处理中被用户取消。", task_category=task_cat)
+                break
+            
+            season_number = episode_info.get("season_number")
+            episode_number = episode_info.get("episode_number")
+            log_prefix = f"➡️ S{season_number:02d}E{episode_number:02d}:"
+
+            # 定位本地截图
+            local_path = self._get_local_screenshot_path(series_tmdb_id, season_number, episode_number, series_name)
+            if not local_path:
+                ui_logger.error(f"{log_prefix} ❌ 无法构造本地路径，跳过。", task_category=task_cat)
+                failed_uploads.append(episode_info)
+                continue
+
+            if not os.path.exists(local_path):
+                ui_logger.warning(f"{log_prefix} ⚠️ 未在本地找到新截图 '{os.path.basename(local_path)}'，跳过此分集。", task_category=task_cat)
+                skipped_uploads.append(episode_info)
+                continue
+            
+            # 准备上传
+            upload_item = {
+                "local_path": local_path,
+                "github_path": f"EpisodeScreenshots/{series_tmdb_id}/{os.path.basename(local_path)}",
+                "tmdb_id": series_tmdb_id,
+                "episode_key": f"{season_number}-{episode_number}"
+            }
+
+            try:
+                download_url = self._upload_file_to_github(upload_item, github_conf)
+                if download_url:
+                    upload_item["download_url"] = download_url
+                    successful_uploads.append(upload_item)
+                    ui_logger.info(f"{log_prefix} ✅ 成功上传到 GitHub。", task_category=task_cat)
+                else:
+                    failed_uploads.append(episode_info)
+                    ui_logger.error(f"{log_prefix} ❌ 上传失败。", task_category=task_cat)
+            except Exception as e:
+                failed_uploads.append(episode_info)
+                ui_logger.error(f"{log_prefix} ❌ 上传时发生严重错误: {e}", task_category=task_cat)
+            
+            task_manager.update_task_progress(task_id, i + 1, len(episodes))
+
+        # 步骤 3: 更新索引文件
+        if not successful_uploads:
+            ui_logger.info(f"【{task_cat}】[步骤 3/3] 本次没有任何文件成功上传，无需更新索引。", task_category=task_cat)
+        else:
+            ui_logger.info(f"【{task_cat}】[步骤 3/3] 正在合并并提交更新后的索引文件...", task_category=task_cat)
+            final_db = remote_db
+            for item in successful_uploads:
+                tmdb_id = item["tmdb_id"]
+                episode_key = item["episode_key"]
+                if tmdb_id not in final_db["series"]:
+                    final_db["series"][tmdb_id] = {}
+                final_db["series"][tmdb_id][episode_key] = item["download_url"]
+            final_db["last_updated"] = datetime.utcnow().isoformat() + "Z"
+
+            if self._upload_db_to_github(final_db, remote_sha, github_conf):
+                ui_logger.info(f"【{task_cat}】🎉 索引文件更新成功！", task_category=task_cat)
+            else:
+                ui_logger.error(f"【{task_cat}】❌ 索引文件更新失败！图片已上传但未记录，请重新运行以修复索引。", task_category=task_cat)
+        
+        ui_logger.info(f"【{task_cat}】任务执行完毕。成功: {len(successful_uploads)}, 失败: {len(failed_uploads)}, 跳过: {len(skipped_uploads)}", task_category=task_cat)
+        return {"success": len(successful_uploads), "failed": len(failed_uploads), "skipped": len(skipped_uploads)}

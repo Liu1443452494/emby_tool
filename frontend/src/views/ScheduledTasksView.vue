@@ -1,3 +1,4 @@
+<!-- ❗ 注意：以下是 frontend/src/views/ScheduledTasksView.vue 的完整文件代码，请直接覆盖整个文件内容。 -->
 <template>
   <div class="scheduled-tasks-page">
     <div class="page-header">
@@ -414,7 +415,6 @@
               <p class="form-item-description">
                 此工具会将您本地 `EpisodeScreenshots` 文件夹中的所有截图，增量上传到您配置的 GitHub 仓库。仅限已配置 PAT 的维护者使用。
               </p>
-              <!-- 新增冷却时间配置 -->
               <el-form-item label="下载冷却时间 (秒)">
                 <el-input-number v-model="localRefresherConfig.github_config.download_cooldown" :min="0" :step="0.1" :precision="1" />
                 <div class="form-item-description">
@@ -427,7 +427,6 @@
                   每次向 GitHub 上传文件（截图或索引）前的等待时间。
                 </div>
               </el-form-item>
-              <!-- 结束新增 -->
               <el-form-item label="备份时覆盖远程同名文件">
                 <el-switch v-model="localRefresherConfig.github_config.overwrite_remote" />
               </el-form-item>
@@ -439,6 +438,21 @@
                 :disabled="!localRefresherConfig.github_config.personal_access_token"
               >
                 开始备份到 GitHub
+              </el-button>
+            </div>
+            <!-- 新增：精准覆盖工具入口 -->
+            <div class="backup-section">
+              <h4><el-icon><Aim /></el-icon> 精准覆盖 GitHub 截图</h4>
+              <p class="form-item-description">
+                当您对远程图床上的某些截图不满意时，可以在本地手动重新截图后，使用此工具选择特定分集，将本地的新截图上传以覆盖远程的旧截图。
+              </p>
+              <el-button 
+                type="danger" 
+                plain 
+                @click="openPreciseUpdateDialog"
+                :disabled="!localRefresherConfig.github_config.personal_access_token"
+              >
+                打开精准覆盖工具
               </el-button>
             </div>
           </el-tab-pane>
@@ -599,6 +613,78 @@ services:
       </template>
     </el-dialog>
 
+    <!-- 新增：精准覆盖对话框 -->
+    <el-dialog
+      v-model="isPreciseUpdateDialogVisible"
+      title="精准覆盖 GitHub 截图"
+      width="80%"
+      top="5vh"
+      destroy-on-close
+    >
+      <div class="precise-update-dialog-content">
+        <!-- 步骤一：搜索 -->
+        <div class="step-container">
+          <div class="step-header">
+            <div class="step-number">1</div>
+            <h4>搜索剧集</h4>
+          </div>
+          <el-form @submit.prevent="handlePreciseSearch" class="search-form">
+            <el-input v-model="preciseSearchQuery" placeholder="输入剧集标题或ID..." clearable />
+            <el-button type="primary" native-type="submit" :loading="mediaStore.isLoading">搜索 Emby</el-button>
+          </el-form>
+          <div class="search-results-table" v-loading="mediaStore.isLoading">
+            <el-table
+              :data="mediaStore.searchResults"
+              height="100%"
+              highlight-current-row
+              @current-change="handlePreciseSeriesSelection"
+              empty-text="请输入关键词搜索"
+            >
+              <el-table-column prop="Name" label="标题" show-overflow-tooltip />
+              <el-table-column prop="ProductionYear" label="年份" width="70" />
+              <el-table-column label="TMDB ID" width="120">
+                <template #default="scope">
+                  {{ getProviderId(scope.row, 'tmdb') || 'N/A' }}
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 步骤二：选择分集 -->
+        <div class="step-container">
+          <div class="step-header">
+            <div class="step-number">2</div>
+            <h4>选择要更新的分集</h4>
+          </div>
+          <div class="episodes-table-container" v-loading="isFetchingEpisodes">
+            <el-table
+              :data="episodesForSelection"
+              height="100%"
+              @selection-change="handlePreciseEpisodeSelection"
+              empty-text="请先在左侧选择一部剧集"
+            >
+              <el-table-column type="selection" width="55" />
+              <el-table-column label="季" prop="ParentIndexNumber" width="60" />
+              <el-table-column label="集" prop="IndexNumber" width="60" />
+              <el-table-column label="标题" prop="Name" show-overflow-tooltip />
+            </el-table>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="isPreciseUpdateDialogVisible = false">关闭</el-button>
+        <el-button 
+          type="danger" 
+          @click="handlePreciseUpdate" 
+          :disabled="selectedEpisodes.length === 0"
+          :loading="isPreciseUpdating"
+        >
+          开始更新选中的 ({{ selectedEpisodes.length }}) 项
+        </el-button>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -608,7 +694,7 @@ import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
 import { useEpisodeRenamerStore } from '@/stores/episodeRenamer';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Setting, ArrowDown, Finished, Upload, QuestionFilled } from '@element-plus/icons-vue';
+import { Setting, ArrowDown, Finished, Upload, QuestionFilled, Aim } from '@element-plus/icons-vue';
 import cronstrue from 'cronstrue/i18n';
 import _ from 'lodash';
 import { API_BASE_URL } from '@/config/apiConfig';
@@ -647,6 +733,16 @@ const searchDialogTableRef = ref(null);
 const dialogSelection = ref([]);
 const parsedRepoInfo = ref('');
 const dbRawUrl = ref('');
+
+// 新增：精准覆盖功能相关状态
+const isPreciseUpdateDialogVisible = ref(false);
+const preciseSearchQuery = ref('');
+const selectedSeriesForPreciseUpdate = ref(null);
+const isFetchingEpisodes = ref(false);
+const episodesForSelection = ref([]);
+const selectedEpisodes = ref([]);
+const isPreciseUpdating = ref(false);
+
 
 definedTasks.value.forEach(taskDef => {
   localTaskStates[taskDef.id] = {
@@ -941,6 +1037,109 @@ const parseRepoUrl = () => {
     dbRawUrl.value = '';
   }
 };
+
+const getProviderId = (row, providerName) => {
+  if (!row.ProviderIds) return null;
+  const lowerProviderName = providerName.toLowerCase();
+  const providerKey = Object.keys(row.ProviderIds).find(key => key.toLowerCase() === lowerProviderName);
+  return providerKey ? row.ProviderIds[providerKey] : null;
+};
+
+// --- 新增：精准覆盖相关函数 ---
+const openPreciseUpdateDialog = () => {
+  isPreciseUpdateDialogVisible.value = true;
+  preciseSearchQuery.value = '';
+  mediaStore.searchResults = [];
+  selectedSeriesForPreciseUpdate.value = null;
+  episodesForSelection.value = [];
+  selectedEpisodes.value = [];
+};
+
+const handlePreciseSearch = () => {
+  mediaStore.searchMedia(preciseSearchQuery.value);
+};
+
+const handlePreciseSeriesSelection = async (series) => {
+  if (!series) {
+    selectedSeriesForPreciseUpdate.value = null;
+    episodesForSelection.value = [];
+    return;
+  }
+  
+  const tmdbId = getProviderId(series, 'tmdb');
+  if (!tmdbId) {
+    ElMessage.warning('该剧集缺少 TMDB ID，无法进行后续操作。');
+    selectedSeriesForPreciseUpdate.value = null;
+    episodesForSelection.value = [];
+    return;
+  }
+
+  selectedSeriesForPreciseUpdate.value = series;
+  isFetchingEpisodes.value = true;
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/episodes/${series.Id}`);
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.detail || '获取分集列表失败');
+    }
+    const episodes = await response.json();
+    episodesForSelection.value = _.sortBy(episodes, ['ParentIndexNumber', 'IndexNumber']);
+  } catch (error) {
+    ElMessage.error(`获取分集列表失败: ${error.message}`);
+    episodesForSelection.value = [];
+  } finally {
+    isFetchingEpisodes.value = false;
+  }
+};
+
+const handlePreciseEpisodeSelection = (selection) => {
+  selectedEpisodes.value = selection;
+};
+
+const handlePreciseUpdate = async () => {
+  if (selectedEpisodes.value.length === 0) {
+    ElMessage.warning('请至少选择一个分集进行更新。');
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `即将为您选中的 ${selectedEpisodes.value.length} 个分集，从本地查找新截图并上传覆盖到 GitHub。请确保您已在本地准备好了新的截图文件。是否继续？`,
+      '确认精准覆盖操作',
+      { confirmButtonText: '开始更新', cancelButtonText: '取消', type: 'info' }
+    );
+
+    isPreciseUpdating.value = true;
+    const payload = {
+      series_tmdb_id: getProviderId(selectedSeriesForPreciseUpdate.value, 'tmdb'),
+      series_name: selectedSeriesForPreciseUpdate.value.Name,
+      episodes: selectedEpisodes.value.map(ep => ({
+        season_number: ep.ParentIndexNumber,
+        episode_number: ep.IndexNumber
+      })),
+      config: localRefresherConfig.value
+    };
+
+    const response = await fetch(`${API_BASE_URL}/api/episode-refresher/precise-upload-from-local`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || '启动任务失败');
+    
+    ElMessage.success(data.message);
+    isPreciseUpdateDialogVisible.value = false;
+
+  } catch (error) {
+    if (error && error.message) {
+      ElMessage.error(`启动任务失败: ${error.message}`);
+    }
+  } finally {
+    isPreciseUpdating.value = false;
+  }
+};
+
 </script>
 
 <style scoped>
@@ -1263,5 +1462,49 @@ const parseRepoUrl = () => {
 }
 .help-content li {
   margin-bottom: 8px;
+}
+
+/* 新增：精准覆盖对话框样式 */
+.precise-update-dialog-content {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  height: 70vh;
+}
+.step-container {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 15px;
+}
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.step-number {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: var(--custom-theme-color);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+}
+.step-header h4 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.episodes-table-container {
+  flex-grow: 1;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 4px;
+  overflow: hidden;
 }
 </style>

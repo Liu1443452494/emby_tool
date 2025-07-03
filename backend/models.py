@@ -418,6 +418,13 @@ class EmbyWebhookItem(BaseModel):
     Id: str
     Type: str
 
+class PreciseScreenshotUpdateRequest(BaseModel):
+    """精准截图更新请求模型"""
+    series_tmdb_id: str
+    series_name: str
+    episodes: List[Dict[str, Any]] # 包含 season_number, episode_number 的字典列表
+    config: "EpisodeRefresherConfig"
+
 class EmbyWebhookPayload(BaseModel):
     Event: str
     User: Optional[Dict[str, Any]] = None
@@ -425,3 +432,4 @@ class EmbyWebhookPayload(BaseModel):
 
     class Config:
         extra = 'ignore'
+

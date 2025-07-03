@@ -38,6 +38,7 @@ from models import (
     TmdbConfig, ProxyConfig,
     DoubanFixerConfig,
     EmbyWebhookPayload,
+    PreciseScreenshotUpdateRequest,
     WebhookConfig
 )
 import config as app_config
@@ -1196,6 +1197,50 @@ def save_episode_renamer_config_api(config: EpisodeRenamerConfig):
         logging.error(f"保存剧集文件重命名器设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
 # --- 结束新增 ---
+
+@app.get("/api/episodes/{series_id}")
+def get_series_episodes(series_id: str):
+    """获取指定剧集的所有分集信息"""
+    task_cat = "API-剧集刷新"
+    try:
+        config = app_config.load_app_config()
+        session = requests.Session()
+        episodes_url = f"{config.server_config.server}/Items"
+        episodes_params = {
+            "api_key": config.server_config.api_key,
+            "ParentId": series_id,
+            "IncludeItemTypes": "Episode",
+            "Recursive": "true",
+            "Fields": "Id,Name,IndexNumber,ParentIndexNumber,SeriesName,ProviderIds"
+        }
+        response = session.get(episodes_url, params=episodes_params, timeout=30)
+        response.raise_for_status()
+        return response.json().get("Items", [])
+    except Exception as e:
+        ui_logger.error(f"获取剧集 {series_id} 的分集列表时失败: {e}", task_category=task_cat, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/episode-refresher/precise-upload-from-local")
+def precise_upload_from_local_api(req: PreciseScreenshotUpdateRequest):
+    """启动一个任务，用于精准上传本地已有的截图"""
+    task_cat = "API-精准覆盖"
+    ui_logger.info(f"收到对剧集《{req.series_name}》的精准上传请求...", task_category=task_cat)
+    
+    config = app_config.load_app_config()
+    # 使用请求中临时的配置
+    config.episode_refresher_config = req.config
+    
+    logic = EpisodeRefresherLogic(config)
+    task_name = f"精准覆盖截图 - {req.series_name}"
+    task_id = task_manager.register_task(
+        logic.precise_upload_from_local_task,
+        task_name,
+        series_tmdb_id=req.series_tmdb_id,
+        series_name=req.series_name,
+        episodes=req.episodes,
+        config=req.config
+    )
+    return {"status": "success", "message": "精准覆盖任务已启动。", "task_id": task_id}
 
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):
