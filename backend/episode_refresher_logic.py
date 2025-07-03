@@ -1004,7 +1004,7 @@ class EpisodeRefresherLogic:
         ui_logger.info(f"【{task_cat}】任务执行完毕。成功备份: {backed_up_count} 张, 跳过: {skipped_count} 张, 失败: {failed_count} 张。", task_category=task_cat)
         return {"backed_up_count": backed_up_count, "skipped_count": skipped_count, "failed_count": failed_count}
 
-    # --- 新增：备份到 GitHub 的任务 ---
+
     def backup_screenshots_to_github_task(self, config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "备份到GitHub"
         github_conf = config.github_config
@@ -1070,37 +1070,37 @@ class EpisodeRefresherLogic:
             ui_logger.info(f"【{task_cat}】本地与远程没有差异，任务完成。", task_category=task_cat)
             return {"uploaded_count": 0, "skipped_count": 0, "failed_count": 0}
 
-        # 步骤 3: 并发上传
-        ui_logger.info(f"【{task_cat}】[步骤 3/5] 开始并发上传截图，请稍候...", task_category=task_cat)
+        # 步骤 3: 串行上传
+        ui_logger.info(f"【{task_cat}】[步骤 3/5] 开始串行上传截图，请稍候...", task_category=task_cat)
         task_manager.update_task_progress(task_id, 0, total_to_upload)
         
         successful_uploads = []
         failed_uploads = []
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_item = {executor.submit(self._upload_file_to_github, item, github_conf): item for item in upload_queue}
-            for i, future in enumerate(as_completed(future_to_item)):
-                if cancellation_event.is_set():
-                    ui_logger.warning(f"【{task_cat}】任务在上传阶段被用户取消。", task_category=task_cat)
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    return
-                
-                item = future_to_item[future]
-                try:
-                    download_url = future.result()
-                    if download_url:
-                        item["download_url"] = download_url
-                        successful_uploads.append(item)
-                    else:
-                        failed_uploads.append(item)
-                except Exception as e:
-                    ui_logger.error(f"【{task_cat}】上传文件 '{item['local_path']}' 失败: {e}", task_category=task_cat)
+        
+        for i, item in enumerate(upload_queue):
+            if cancellation_event.is_set():
+                ui_logger.warning(f"【{task_cat}】任务在上传阶段被用户取消。", task_category=task_cat)
+                break
+            
+            ui_logger.info(f"➡️ 正在上传第 {i + 1}/{total_to_upload} 个文件: {os.path.basename(item['local_path'])}", task_category=task_cat)
+            try:
+                download_url = self._upload_file_to_github(item, github_conf)
+                if download_url:
+                    item["download_url"] = download_url
+                    successful_uploads.append(item)
+                    ui_logger.info(f"✅ 上传成功: {os.path.basename(item['local_path'])}", task_category=task_cat)
+                else:
                     failed_uploads.append(item)
-                
-                task_manager.update_task_progress(task_id, i + 1, total_to_upload)
+                    ui_logger.error(f"❌ 上传失败: {os.path.basename(item['local_path'])}", task_category=task_cat)
+            except Exception as e:
+                ui_logger.error(f"❌ 上传文件 '{item['local_path']}' 时发生严重错误: {e}", task_category=task_cat)
+                failed_uploads.append(item)
+            
+            task_manager.update_task_progress(task_id, i + 1, total_to_upload)
 
         ui_logger.info(f"【{task_cat}】[步骤 3/5] 截图上传完成。成功: {len(successful_uploads)}, 失败: {len(failed_uploads)}。", task_category=task_cat)
         if failed_uploads:
-            ui_logger.error(f"【{task_cat}】由于存在上传失败的截图，任务中止，索引文件将不会更新。", task_category=task_cat)
+            ui_logger.error(f"【{task_cat}】⚠️ 由于存在上传失败的截图，任务中止，索引文件将不会更新。", task_category=task_cat)
             return {"uploaded_count": len(successful_uploads), "skipped_count": 0, "failed_count": len(failed_uploads)}
 
         # 步骤 4: 合并索引
