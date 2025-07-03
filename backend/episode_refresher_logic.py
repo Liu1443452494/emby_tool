@@ -437,7 +437,7 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - [失败❌] 截图过程中发生未知错误: {e}", task_category=task_category, exc_info=True)
             return None
 
-    # --- 新增：获取远程图床数据库 ---
+
     def _get_remote_db(self, config: EpisodeRefresherConfig, force_refresh: bool = False) -> Tuple[Optional[Dict], Optional[str]]:
         task_cat = "远程图床"
         github_conf = config.github_config
@@ -462,6 +462,12 @@ class EpisodeRefresherLogic:
                 raise ValueError("无效的 GitHub 仓库 URL 格式。")
             owner, repo = match.groups()
             
+            # --- 新增：下载冷却 ---
+            if github_conf.download_cooldown > 0:
+                ui_logger.debug(f"     - [远程图床] ⏱️ 下载冷却 {github_conf.download_cooldown} 秒...", task_category=task_cat)
+                time.sleep(github_conf.download_cooldown)
+            # --- 结束新增 ---
+
             # 优先尝试 Raw URL
             raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{github_conf.branch}/database.json"
             ui_logger.debug(f"     - [远程图床] 正在从 Raw URL 下载数据库: {raw_url}", task_category=task_cat)
@@ -1090,9 +1096,14 @@ class EpisodeRefresherLogic:
 
         return {"uploaded_count": len(successful_uploads), "skipped_count": 0, "failed_count": 0}
 
+
     def _upload_file_to_github(self, item: Dict, github_conf) -> Optional[str]:
         task_cat = "备份到GitHub"
         try:
+            if github_conf.upload_cooldown > 0:
+                ui_logger.debug(f"     - [GitHub上传] ⏱️ 上传冷却 {github_conf.upload_cooldown} 秒...", task_category=task_cat)
+                time.sleep(github_conf.upload_cooldown)
+
             with open(item["local_path"], "rb") as f:
                 content_bytes = f.read()
             
@@ -1126,7 +1137,6 @@ class EpisodeRefresherLogic:
 
             payload_json_str = json.dumps(payload_dict)
 
-            # --- 核心 Bug 修复：修正 curl 命令格式 ---
             command = [
                 'curl',
                 '-L',
@@ -1135,9 +1145,8 @@ class EpisodeRefresherLogic:
                 '-H', f'Authorization: token {github_conf.personal_access_token}',
                 '-H', 'Content-Type: application/json',
                 '--data-binary', '@-',
-                api_url  # 将 api_url 作为独立的列表元素
+                api_url
             ]
-            # --- 修复结束 ---
             
             proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
             if proxies.get('https'):
@@ -1160,9 +1169,16 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"【{task_cat}】上传文件 '{item['local_path']}' 时发生错误: {e}", task_category=task_cat)
             return None
 
+
     def _upload_db_to_github(self, db_content: Dict, sha: Optional[str], github_conf) -> bool:
         task_cat = "备份到GitHub"
         try:
+            # --- 新增：上传冷却 ---
+            if github_conf.upload_cooldown > 0:
+                ui_logger.debug(f"     - [GitHub上传] ⏱️ 上传冷却 {github_conf.upload_cooldown} 秒...", task_category=task_cat)
+                time.sleep(github_conf.upload_cooldown)
+            # --- 结束新增 ---
+
             content_b64 = base64.b64encode(json.dumps(db_content, indent=2, ensure_ascii=False).encode('utf-8')).decode('utf-8')
             
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
@@ -1180,7 +1196,6 @@ class EpisodeRefresherLogic:
 
             payload_json_str = json.dumps(payload_dict)
 
-            # --- 核心 Bug 修复：修正 curl 命令格式 ---
             command = [
                 'curl',
                 '-L',
@@ -1189,9 +1204,8 @@ class EpisodeRefresherLogic:
                 '-H', f'Authorization: token {github_conf.personal_access_token}',
                 '-H', 'Content-Type: application/json',
                 '--data-binary', '@-',
-                api_url # 将 api_url 作为独立的列表元素
+                api_url
             ]
-            # --- 修复结束 ---
 
             proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
             if proxies.get('https'):

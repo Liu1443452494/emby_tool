@@ -14,20 +14,32 @@ class ProxyManager:
         self.emby_config = app_config.server_config
         self.tmdb_config = app_config.tmdb_config
 
+    # === 文件: backend/proxy_manager.py === #
+
     def get_proxies(self, target_url: str) -> Dict:
         """
         根据目标URL和配置，返回适用于requests库的proxies字典。
         如果不需要代理，则返回空字典。
+        匹配顺序: 自定义规则 -> 内置规则 -> 全局排除
         """
         config = self.proxy_config
         if not config.enabled or not config.url:
             return {}
 
-        # 检查目标URL属于哪个服务
+        # 1. 检查自定义规则
+        for rule in config.custom_rules:
+            if rule.enabled and rule.keyword and rule.keyword in target_url:
+                # 命中自定义规则，立即决策
+                if config.mode == 'whitelist':
+                    logging.debug(f"【动态代理-白名单】命中自定义规则 '{rule.remark}' (关键词: {rule.keyword})，启用代理: {target_url}")
+                    return {'http': config.url, 'https': config.url}
+                else: # blacklist
+                    logging.debug(f"【动态代理-黑名单】命中自定义规则 '{rule.remark}' (关键词: {rule.keyword})，禁用代理: {target_url}")
+                    return {}
+
+        # 2. 检查内置规则
         is_tmdb_target = "themoviedb.org" in target_url or (self.tmdb_config.custom_api_domain_enabled and self.tmdb_config.custom_api_domain in target_url)
         is_douban_target = "douban.com" in target_url or "doubanio.com" in target_url
-        
-        # 核心修复：使用 startswith 检查，避免因路径问题导致匹配失败
         is_emby_target = target_url.startswith(self.emby_config.server) if self.emby_config.server else False
 
         should_use_proxy = False
@@ -44,6 +56,16 @@ class ProxyManager:
             if is_tmdb_target and config.target_tmdb: should_use_proxy = True
             if is_douban_target and config.target_douban: should_use_proxy = True
             if is_emby_target and config.target_emby: should_use_proxy = True
+
+        # 3. 如果决定要走代理，最后检查全局排除列表
+        if should_use_proxy and config.exclude:
+            try:
+                excluded_domains = [d.strip() for d in config.exclude.split(',') if d.strip()]
+                if any(domain in target_url for domain in excluded_domains):
+                    logging.debug(f"【动态代理】请求 '{target_url}' 命中全局排除列表，最终禁用代理。")
+                    should_use_proxy = False
+            except Exception as e:
+                logging.warning(f"【动态代理】解析全局排除列表时出错: {e}")
 
         if should_use_proxy:
             logging.debug(f"【动态代理-{config.mode}】为请求启用代理: {target_url}")

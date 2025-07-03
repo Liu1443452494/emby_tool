@@ -1,4 +1,4 @@
-// frontend/src/views/ServerConfigView.vue (修改后)
+<!-- ❗ 注意：以下是 frontend/src/views/ServerConfigView.vue 文件的完整文件代码，请直接覆盖整个文件内容。 -->
 <template>
   <div class="config-page">
     <template v-if="configStore.isLoaded">
@@ -71,7 +71,7 @@
             <b>白名单模式：</b>默认所有外部请求都不走代理，需勾选下方目标<b>走</b>代理。
           </div>
         </el-form-item>
-        <el-form-item label="代理目标">
+        <el-form-item label="内置代理目标">
           <div class="proxy-scope-group">
             <el-checkbox v-model="localProxyConfig.target_tmdb" :disabled="!localProxyConfig.enabled">TMDB</el-checkbox>
             <el-checkbox v-model="localProxyConfig.target_douban" :disabled="!localProxyConfig.enabled">豆瓣 (及图片)</el-checkbox>
@@ -81,18 +81,11 @@
             {{ proxyTargetDescription }}
           </div>
         </el-form-item>
-        <el-form-item label="高级: 排除列表">
-          <el-input 
-            v-model="localProxyConfig.exclude" 
-            type="textarea"
-            :rows="2"
-            class="glow-input" 
-            placeholder="例如: example.com,*.another-domain.com"
-            :disabled="!localProxyConfig.enabled"
-          />
-          <div class="form-item-description">
-            作为补充手段，指定哪些域名不走代理，多个地址用英文逗号(,)隔开。此功能依赖于后端环境支持。
-          </div>
+        <!-- 新增：自定义规则按钮 -->
+        <el-form-item>
+          <el-button @click="openProxyRulesDialog" :disabled="!localProxyConfig.enabled">
+            自定义代理规则...
+          </el-button>
         </el-form-item>
         <el-form-item class="form-button-container multi-button">
           <el-button @click="handleTestProxy" :loading="isProxyTesting" :disabled="!localProxyConfig.enabled">
@@ -235,7 +228,6 @@
         </el-form-item>
         
         <el-form-item label="额外保存字段">
-          <!-- --- 核心修改 4: 移除“国家/地区”的复选框 --- -->
           <el-checkbox-group v-model="localDoubanConfig.extra_fields" class="extra-fields-group">
             <el-checkbox value="rating">评分</el-checkbox>
             <el-checkbox value="pubdate">上映日期</el-checkbox>
@@ -323,18 +315,115 @@
         <el-skeleton :rows="1" animated />
       </div>
     </template>
+
+    <!-- === 文件: frontend/src/views/ServerConfigView.vue === -->
+
+    <!-- 新增：自定义代理规则对话框 -->
+    <el-dialog
+      v-model="isProxyRulesDialogVisible"
+      title="自定义代理规则"
+      width="80%"
+      top="5vh"
+    >
+      <div class="proxy-rules-dialog-content">
+        <el-alert
+          title="规则匹配说明"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 20px;"
+        >
+          <p>
+            程序将按以下顺序匹配规则：<b>自定义规则 > 内置规则 > 全局排除列表</b>。一旦命中任何一条规则，将立即做出决策，不再继续匹配。
+          </p>
+        </el-alert>
+        <div class="rules-table-container">
+          <el-table :data="proxyRulesForTable" style="width: 100%" height="100%" border>
+            <el-table-column label="启用" width="70" align="center">
+              <template #default="scope">
+                <!-- 核心修改：对内置规则禁用复选框，并增加提示 -->
+                <el-tooltip
+                  v-if="scope.row.isBuiltIn"
+                  content="请在主配置页面修改内置规则的启用状态"
+                  placement="top"
+                >
+                  <el-checkbox v-model="scope.row.enabled" disabled />
+                </el-tooltip>
+                <el-checkbox v-else v-model="scope.row.enabled" />
+              </template>
+            </el-table-column>
+            <el-table-column label="备注">
+              <template #default="scope">
+                <el-input v-model="scope.row.remark" :disabled="scope.row.isBuiltIn" placeholder="例如: GitHub" />
+              </template>
+            </el-table-column>
+            <el-table-column label="URL 关键词">
+              <template #default="scope">
+                <el-input v-model="scope.row.keyword" :disabled="scope.row.isBuiltIn" placeholder="例如: github.com" />
+              </template>
+            </el-table-column>
+            <el-table-column label="当前模式下的行为" width="180" align="center">
+              <template #default="scope">
+                <el-tag :type="getRuleBehavior(scope.row).type">
+                  {{ getRuleBehavior(scope.row).text }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="80" align="center">
+              <template #default="scope">
+                <el-button
+                  v-if="!scope.row.isBuiltIn"
+                  type="danger"
+                  :icon="Delete"
+                  circle
+                  @click="deleteCustomRule(scope.$index - 3)"
+                />
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <el-button @click="addCustomRule" :icon="Plus" style="margin-top: 15px;">
+          添加自定义规则
+        </el-button>
+        <el-divider />
+        <el-form label-position="top">
+          <el-form-item label="高级: 全局排除列表 (最终否决权)">
+            <el-input 
+              v-model="localProxyConfig.exclude" 
+              type="textarea"
+              :rows="2"
+              class="glow-input" 
+              placeholder="例如: example.com,*.another-domain.com"
+            />
+            <div class="form-item-description">
+              无论其他规则如何，只要 URL 包含此处的任何一个关键词，就绝对不会走代理。多个地址用英文逗号(,)隔开。
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="isProxyRulesDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="confirmProxyRules">确认</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
+// === 文件: frontend/src/views/ServerConfigView.vue === //
+
 <script setup>
-// <script> 部分无需修改，保持原样即可
 import { ref, onMounted, watch, computed, reactive } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useDoubanStore } from '@/stores/douban'
 import { useTaskStore } from '@/stores/task'
 import { ElMessage } from 'element-plus'
 import { useWindowSize } from '@vueuse/core'
-import { API_BASE_URL } from '@/config/apiConfig';
+import { API_BASE_URL } from '@/config/apiConfig'
+import { Delete, Plus } from '@element-plus/icons-vue'
+import _ from 'lodash'
 
 const configStore = useConfigStore()
 const doubanStore = useDoubanStore()
@@ -359,6 +448,7 @@ const localProxyConfig = ref({
   target_tmdb: false,
   target_douban: true,
   target_emby: true,
+  custom_rules: [],
 })
 const localDoubanFixerConfig = ref({ cookie: '', api_cooldown: 2.0, scan_cron: '' })
 
@@ -370,6 +460,9 @@ const isProxySaving = ref(false)
 const isProxyTesting = ref(false)
 const isDoubanFixerLoading = ref(false)
 const isCookieTesting = ref(false)
+
+const isProxyRulesDialogVisible = ref(false)
+const tempCustomRules = ref([])
 
 const proxyTargetDescription = computed(() => {
   if (localProxyConfig.value.mode === 'blacklist') {
@@ -441,6 +534,7 @@ watch(() => configStore.appConfig, (newConfig) => {
       target_tmdb: false,
       target_douban: true,
       target_emby: true,
+      custom_rules: [],
       ...newConfig.proxy_config 
     }
     localDoubanFixerConfig.value = {
@@ -634,10 +728,57 @@ const handleTestCookie = async () => {
 const handleForceRefresh = async () => {
   await doubanStore.forceRefresh()
 }
+
+const tmdbApiDomain = computed(() => {
+  const tmdbConf = localTmdbConfig.value;
+  if (tmdbConf.custom_api_domain_enabled && tmdbConf.custom_api_domain) {
+    try {
+      return new URL(tmdbConf.custom_api_domain).hostname;
+    } catch (e) {
+      return 'api.themoviedb.org';
+    }
+  }
+  return 'api.themoviedb.org';
+});
+
+const proxyRulesForTable = computed(() => {
+  const builtInRules = [
+    { id: 'tmdb', enabled: localProxyConfig.value.target_tmdb, remark: '内置规则: TMDB', keyword: tmdbApiDomain.value, isBuiltIn: true },
+    { id: 'douban', enabled: localProxyConfig.value.target_douban, remark: '内置规则: 豆瓣', keyword: 'douban.com', isBuiltIn: true },
+    { id: 'emby', enabled: localProxyConfig.value.target_emby, remark: '内置规则: Emby', keyword: localServerConfig.value.server, isBuiltIn: true },
+  ];
+  return [...builtInRules, ...tempCustomRules.value];
+});
+
+const getRuleBehavior = (rule) => {
+  const isWhitelist = localProxyConfig.value.mode === 'whitelist';
+  if (rule.enabled) {
+    return isWhitelist ? { text: '走代理', type: 'success' } : { text: '不走代理', type: 'danger' };
+  } else {
+    return isWhitelist ? { text: '不走代理', type: 'info' } : { text: '走代理', type: 'info' };
+  }
+};
+
+const openProxyRulesDialog = () => {
+  tempCustomRules.value = _.cloneDeep(localProxyConfig.value.custom_rules || []);
+  isProxyRulesDialogVisible.value = true;
+};
+
+const addCustomRule = () => {
+  tempCustomRules.value.push({ enabled: true, remark: '', keyword: '' });
+};
+
+const deleteCustomRule = (index) => {
+  tempCustomRules.value.splice(index, 1);
+};
+
+const confirmProxyRules = () => {
+  localProxyConfig.value.custom_rules = _.cloneDeep(tempCustomRules.value);
+  isProxyRulesDialogVisible.value = false;
+};
 </script>
 
 <style>
-/* 样式部分无需修改，保持原样即可 */
 .el-message-container {
   z-index: 9999 !important;
 }
@@ -794,5 +935,15 @@ const handleForceRefresh = async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 20px;
+}
+
+.proxy-rules-dialog-content {
+  height: 65vh;
+  display: flex;
+  flex-direction: column;
+}
+.rules-table-container {
+  flex-grow: 1;
+  overflow: hidden;
 }
 </style>

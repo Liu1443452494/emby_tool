@@ -254,6 +254,7 @@
       </template>
     </el-dialog>
 
+
     <el-dialog
       v-model="isRefresherDialogVisible"
       title="剧集元数据刷新 - 独立配置"
@@ -319,7 +320,6 @@
                   <p>所有缓存设置（远程和本地）将被临时忽略，任务将直接对每个分集进行实时截图。</p>
                 </el-alert>
 
-                <!-- 核心修改：在 label 中增加帮助按钮 -->
                 <el-form-item>
                   <template #label>
                     <span>截图与缓存模式</span>
@@ -414,6 +414,20 @@
               <p class="form-item-description">
                 此工具会将您本地 `EpisodeScreenshots` 文件夹中的所有截图，增量上传到您配置的 GitHub 仓库。仅限已配置 PAT 的维护者使用。
               </p>
+              <!-- 新增冷却时间配置 -->
+              <el-form-item label="下载冷却时间 (秒)">
+                <el-input-number v-model="localRefresherConfig.github_config.download_cooldown" :min="0" :step="0.1" :precision="1" />
+                <div class="form-item-description">
+                  每次从 GitHub 下载文件（如 database.json）前的等待时间。
+                </div>
+              </el-form-item>
+              <el-form-item label="上传冷却时间 (秒)">
+                <el-input-number v-model="localRefresherConfig.github_config.upload_cooldown" :min="0" :step="0.1" :precision="1" />
+                <div class="form-item-description">
+                  每次向 GitHub 上传文件（截图或索引）前的等待时间。
+                </div>
+              </el-form-item>
+              <!-- 结束新增 -->
               <el-form-item label="备份时覆盖远程同名文件">
                 <el-switch v-model="localRefresherConfig.github_config.overwrite_remote" />
               </el-form-item>

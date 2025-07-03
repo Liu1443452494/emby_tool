@@ -29,6 +29,8 @@ DEFAULT_SF_MODEL_REMARKS = {
     "deepseek-ai/DeepSeek-V2.5": "（收费 输入：￥1.33/ M Tokens）"
 }
 
+# === 文件: backend/config.py === #
+
 def load_app_config() -> AppConfig:
     config_dir = os.path.dirname(CONFIG_FILE)
     if not os.path.exists(config_dir):
@@ -45,14 +47,18 @@ def load_app_config() -> AppConfig:
             pass 
 
     if "proxy_config" not in config_data:
-        config_data["proxy_config"] = {"enabled": False, "url": "", "exclude": ""}
+        config_data["proxy_config"] = {"enabled": False, "url": "", "exclude": "", "mode": "blacklist", "target_tmdb": False, "target_douban": True, "target_emby": True, "custom_rules": []}
     elif not isinstance(config_data["proxy_config"], dict):
-        config_data["proxy_config"] = {"enabled": bool(config_data["proxy_config"]), "url": str(config_data["proxy_config"]), "exclude": ""}
+        config_data["proxy_config"] = {"enabled": bool(config_data["proxy_config"]), "url": str(config_data["proxy_config"]), "exclude": "", "mode": "blacklist", "target_tmdb": False, "target_douban": True, "target_emby": True, "custom_rules": []}
     else:
-        if "enabled" not in config_data["proxy_config"]:
-            config_data["proxy_config"]["enabled"] = False
-        if "exclude" not in config_data["proxy_config"]:
-            config_data["proxy_config"]["exclude"] = ""
+        if "enabled" not in config_data["proxy_config"]: config_data["proxy_config"]["enabled"] = False
+        if "exclude" not in config_data["proxy_config"]: config_data["proxy_config"]["exclude"] = ""
+        if "mode" not in config_data["proxy_config"]: config_data["proxy_config"]["mode"] = "blacklist"
+        if "target_tmdb" not in config_data["proxy_config"]: config_data["proxy_config"]["target_tmdb"] = False
+        if "target_douban" not in config_data["proxy_config"]: config_data["proxy_config"]["target_douban"] = True
+        if "target_emby" not in config_data["proxy_config"]: config_data["proxy_config"]["target_emby"] = True
+        if "custom_rules" not in config_data["proxy_config"]: config_data["proxy_config"]["custom_rules"] = []
+
 
     if "tmdb_config" not in config_data:
         config_data["tmdb_config"] = {"api_key": "", "custom_api_domain_enabled": False, "custom_api_domain": "https://api.themoviedb.org"}
@@ -118,31 +124,33 @@ def load_app_config() -> AppConfig:
     if "webhook_config" not in config_data:
         config_data["webhook_config"] = {}
         
-    # --- 核心修改开始 ---
     if "episode_refresher_config" not in config_data:
         config_data["episode_refresher_config"] = {}
     
     refresher_conf = config_data["episode_refresher_config"]
     
-    # 兼容性处理：将旧的 local_screenshot_caching_enabled 迁移到新的 screenshot_cache_mode
-    # 仅当旧字段存在且新字段不存在时执行
     if "local_screenshot_caching_enabled" in refresher_conf and "screenshot_cache_mode" not in refresher_conf:
         logging.info("【配置兼容】检测到旧的 'local_screenshot_caching_enabled' 配置，将自动迁移到新的 'screenshot_cache_mode'。")
         if refresher_conf["local_screenshot_caching_enabled"]:
             refresher_conf["screenshot_cache_mode"] = "local"
         else:
             refresher_conf["screenshot_cache_mode"] = "none"
-        # 标记为需要重写文件
         migration_needed = True
     
-    # 迁移后删除旧字段，无论其值如何
     if "local_screenshot_caching_enabled" in refresher_conf:
         del refresher_conf["local_screenshot_caching_enabled"]
-    # --- 核心修改结束 ---
     
+    # --- 新增：GitHub冷却时间兼容性处理 ---
+    if "github_config" in refresher_conf:
+        if "download_cooldown" not in refresher_conf["github_config"]:
+            refresher_conf["github_config"]["download_cooldown"] = 0.5
+            migration_needed = True
+        if "upload_cooldown" not in refresher_conf["github_config"]:
+            refresher_conf["github_config"]["upload_cooldown"] = 1.0
+            migration_needed = True
+
     if "episode_renamer_config" not in config_data:
         config_data["episode_renamer_config"] = {}
-
 
     if "subtitle_processor_config" in config_data:
         del config_data["subtitle_processor_config"]

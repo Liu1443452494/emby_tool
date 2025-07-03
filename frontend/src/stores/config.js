@@ -2,13 +2,16 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { API_BASE_URL } from '@/config/apiConfig';
 
+
+// === 文件: frontend/src/stores/config.js === #
+
 export const useConfigStore = defineStore('config', () => {
   const isLoaded = ref(false)
   const appConfig = ref({
     server_config: { server: '', api_key: '', user_id: '' },
     download_config: { download_directory: '', download_behavior: 'skip', directory_naming_rule: 'tmdb_id' , nfo_actor_limit: 20},
     tmdb_config: { api_key: '', custom_api_domain_enabled: false, custom_api_domain: '' },
-    proxy_config: { enabled: false, url: '', exclude: '' },
+    proxy_config: { enabled: false, url: '', exclude: '', mode: 'blacklist', target_tmdb: false, target_douban: true, target_emby: true, custom_rules: [] },
     douban_config: { directory: '', refresh_cron: '', extra_fields: [] },
     actor_localizer_config: {
       replace_english_role: false,
@@ -44,13 +47,12 @@ export const useConfigStore = defineStore('config', () => {
       initial_wait_time: 30,
       plugin_wait_time: 60
     },
-    // --- 核心修改开始 ---
     episode_refresher_config: {
       refresh_mode: 'emby',
       overwrite_metadata: true,
       skip_if_complete: true,
       screenshot_enabled: false,
-      screenshot_cache_mode: 'local', // 新增
+      screenshot_cache_mode: 'local',
       screenshot_percentage: 10,
       screenshot_fallback_seconds: 150,
       crop_widescreen_to_16_9: true,
@@ -58,15 +60,16 @@ export const useConfigStore = defineStore('config', () => {
       screenshot_cooldown: 2.0,
       use_smart_screenshot: true,
       backup_overwrite_local: false,
-      github_config: { // 新增
+      github_config: {
         repo_url: '',
         branch: 'main',
         personal_access_token: '',
         allow_fallback: true,
-        overwrite_remote: false
+        overwrite_remote: false,
+        download_cooldown: 0.5,
+        upload_cooldown: 1.0,
       }
     },
-    // --- 核心修改结束 ---
     episode_renamer_config: {
       emby_path_root: '/media',
       clouddrive_path_root: '/cd2',
@@ -86,7 +89,9 @@ export const useConfigStore = defineStore('config', () => {
       if (response.ok) {
         const fullConfig = await response.json()
         if (!fullConfig.proxy_config) {
-          fullConfig.proxy_config = { enabled: false, url: '', exclude: '' };
+          fullConfig.proxy_config = { enabled: false, url: '', exclude: '', mode: 'blacklist', target_tmdb: false, target_douban: true, target_emby: true, custom_rules: [] };
+        } else if (!fullConfig.proxy_config.custom_rules) {
+          fullConfig.proxy_config.custom_rules = [];
         }
         if (!fullConfig.tmdb_config) {
           fullConfig.tmdb_config = { api_key: '', custom_api_domain_enabled: false, custom_api_domain: '' };
@@ -122,7 +127,6 @@ export const useConfigStore = defineStore('config', () => {
           fullConfig.webhook_config = { enabled: false, initial_wait_time: 30, plugin_wait_time: 60 };
         }
         
-        // --- 核心修改开始 ---
         if (!fullConfig.episode_refresher_config) {
           fullConfig.episode_refresher_config = { 
             refresh_mode: 'emby', 
@@ -142,11 +146,12 @@ export const useConfigStore = defineStore('config', () => {
               branch: 'main',
               personal_access_token: '',
               allow_fallback: true,
-              overwrite_remote: false
+              overwrite_remote: false,
+              download_cooldown: 0.5,
+              upload_cooldown: 1.0,
             }
           };
         } else {
-          // 确保所有新字段都存在，避免 undefined 错误
           const defaultConfig = appConfig.value.episode_refresher_config;
           for (const key in defaultConfig) {
             if (typeof fullConfig.episode_refresher_config[key] === 'undefined') {
@@ -369,7 +374,6 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
   
-  // --- 新增：保存剧集刷新器配置的 action ---
   async function saveEpisodeRefresherConfig(newConfig) {
     try {
       const response = await fetch(`${API_BASE_URL}/api/config/episode-refresher`, {
@@ -420,7 +424,6 @@ export const useConfigStore = defineStore('config', () => {
     triggerScheduledTaskOnce,
     saveDoubanPosterUpdaterConfig,
     saveWebhookConfig,
-    // --- 新增：导出新方法 ---
     saveEpisodeRefresherConfig,
     saveEpisodeRenamerConfig
   }

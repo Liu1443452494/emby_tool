@@ -3,6 +3,12 @@ from typing import Literal, List, Optional, Dict, Any
 
 # --- 基础配置模型 ---
 
+class ProxyRule(BaseModel):
+    """单条自定义代理规则"""
+    enabled: bool = Field(default=True, description="是否启用此规则")
+    remark: str = Field(default="", description="规则备注")
+    keyword: str = Field(default="", description="用于匹配URL的关键词")
+
 class ProxyConfig(BaseModel):
     """HTTP 代理配置"""
     enabled: bool = Field(default=False, description="是否启用代理")
@@ -10,10 +16,15 @@ class ProxyConfig(BaseModel):
     
     mode: Literal['whitelist', 'blacklist'] = Field(default='blacklist', description="代理模式：whitelist-仅代理勾选的, blacklist-代理所有但排除勾选的")
     
-    target_tmdb: bool = Field(default=False, description="目标：TMDB。在黑名单模式下，勾选代表不走代理。在白名单模式下，勾选代表走代理。")
-    target_douban: bool = Field(default=True, description="目标：豆瓣。在黑名单模式下，勾选代表不走代理。在白名单模式下，勾选代表走代理。")
-    target_emby: bool = Field(default=True, description="目标：Emby。在黑名单模式下，勾选代表不走代理。在白名单模式下，勾选代表走代理。")
+    # 内置规则的启用状态
+    target_tmdb: bool = Field(default=False, description="内置规则：TMDB")
+    target_douban: bool = Field(default=True, description="内置规则：豆瓣")
+    target_emby: bool = Field(default=True, description="内置规则：Emby")
     
+    # 自定义规则列表
+    custom_rules: List[ProxyRule] = Field(default_factory=list, description="用户自定义代理规则列表")
+    
+    # 高级排除列表
     exclude: str = Field(default="", description="代理排除列表，逗号分隔 (高级)")
 
 DownloadBehavior = Literal["skip", "overwrite"]
@@ -120,7 +131,6 @@ class DoubanPosterUpdaterConfig(BaseModel):
     skip_mainland_china: bool = Field(default=False, description="是否跳过中国大陆地区的影视")
 
 
-# --- 核心修改开始 ---
 
 class GitHubCacheConfig(BaseModel):
     """GitHub 远程图床缓存配置"""
@@ -129,6 +139,8 @@ class GitHubCacheConfig(BaseModel):
     personal_access_token: str = Field(default="", description="个人访问令牌 (PAT)，用于写入权限")
     allow_fallback: bool = Field(default=True, description="远程图床找不到时，是否允许降级为实时截图")
     overwrite_remote: bool = Field(default=False, description="备份时，是否覆盖远程已存在的同名文件")
+    download_cooldown: float = Field(default=0.5, description="从GitHub下载文件（如索引）前的冷却时间（秒）", ge=0)
+    upload_cooldown: float = Field(default=1.0, description="向GitHub上传文件（截图或索引）前的冷却时间（秒）", ge=0)
 
 class EpisodeRefresherConfig(BaseModel):
     """剧集元数据刷新器功能的配置"""
