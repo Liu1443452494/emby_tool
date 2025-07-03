@@ -1089,8 +1089,6 @@ class EpisodeRefresherLogic:
 
         return {"uploaded_count": len(successful_uploads), "skipped_count": 0, "failed_count": 0}
 
-    # 在 backend/episode_refresher_logic.py 文件中
-
     def _upload_file_to_github(self, item: Dict, github_conf) -> Optional[str]:
         task_cat = "备份到GitHub"
         try:
@@ -1104,7 +1102,6 @@ class EpisodeRefresherLogic:
             
             api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{item['github_path']}"
             
-            # 尝试获取 sha
             sha = None
             try:
                 get_headers = {
@@ -1126,26 +1123,26 @@ class EpisodeRefresherLogic:
             if sha:
                 payload_dict["sha"] = sha
 
-            payload_json = json.dumps(payload_dict)
+            payload_json_str = json.dumps(payload_dict)
 
-            # 使用 curl 命令进行上传
+            # --- 核心 Bug 修复：修正 curl 命令格式 ---
             command = [
                 'curl',
-                '-L', # 跟随重定向
+                '-L',
                 '-X', 'PUT',
                 '-H', 'Accept: application/vnd.github.v3+json',
                 '-H', f'Authorization: token {github_conf.personal_access_token}',
                 '-H', 'Content-Type: application/json',
-                '-d', payload_json,
-                api_url
+                '--data-binary', '@-',
+                api_url  # 将 api_url 作为独立的列表元素
             ]
+            # --- 修复结束 ---
             
-            # 处理代理
             proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
             if proxies.get('https'):
                 command.extend(['--proxy', proxies['https']])
 
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            result = subprocess.run(command, input=payload_json_str, capture_output=True, text=True, check=False)
             
             response_data = {}
             try:
@@ -1161,7 +1158,7 @@ class EpisodeRefresherLogic:
         except Exception as e:
             ui_logger.error(f"【{task_cat}】上传文件 '{item['local_path']}' 时发生错误: {e}", task_category=task_cat)
             return None
-        
+
     def _upload_db_to_github(self, db_content: Dict, sha: Optional[str], github_conf) -> bool:
         task_cat = "备份到GitHub"
         try:
@@ -1180,9 +1177,9 @@ class EpisodeRefresherLogic:
             if sha:
                 payload_dict["sha"] = sha
 
-            payload_json = json.dumps(payload_dict)
+            payload_json_str = json.dumps(payload_dict)
 
-            # 使用 curl 命令进行上传
+            # --- 核心 Bug 修复：修正 curl 命令格式 ---
             command = [
                 'curl',
                 '-L',
@@ -1190,26 +1187,25 @@ class EpisodeRefresherLogic:
                 '-H', 'Accept: application/vnd.github.v3+json',
                 '-H', f'Authorization: token {github_conf.personal_access_token}',
                 '-H', 'Content-Type: application/json',
-                '-d', payload_json,
-                api_url
+                '--data-binary', '@-',
+                api_url # 将 api_url 作为独立的列表元素
             ]
+            # --- 修复结束 ---
 
             proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
             if proxies.get('https'):
                 command.extend(['--proxy', proxies['https']])
 
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            result = subprocess.run(command, input=payload_json_str, capture_output=True, text=True, check=False)
 
             if result.returncode != 0:
                 raise Exception(f"cURL 上传失败。返回码: {result.returncode}, 输出: {result.stdout}, 错误: {result.stderr}")
             
-            # 检查响应是否包含错误信息
             try:
                 response_json = json.loads(result.stdout)
                 if "message" in response_json and "documentation_url" in response_json:
                      raise Exception(f"GitHub API 返回错误: {response_json['message']}")
             except json.JSONDecodeError:
-                # 如果不是json，说明可能是成功了，或者是一个未知的html错误页
                 pass
 
             return True
