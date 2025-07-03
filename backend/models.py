@@ -1,5 +1,3 @@
-# backend/models.py (修改后)
-
 from pydantic import BaseModel, Field
 from typing import Literal, List, Optional, Dict, Any
 
@@ -61,8 +59,6 @@ class TencentApiConfig(BaseModel):
     secret_key: str = ""
     region: str = "ap-guangzhou"
 
-# backend/models.py (修改部分)
-
 class SiliconflowApiConfig(BaseModel):
     """SiliconFlow 大模型 API 配置"""
     api_key: str = ""
@@ -81,7 +77,6 @@ class SiliconflowApiConfig(BaseModel):
         ge=0.0,
         le=1.0
     )
-    # --- 核心修改：彻底移除旧的 timeout 字段 ---
     timeout_single: int = Field(
         default=20,
         description="单个翻译的API请求超时时间（秒）。",
@@ -94,7 +89,6 @@ class SiliconflowApiConfig(BaseModel):
         ge=10,
         le=300
     )
-    # --- 结束修改 ---
     batch_translation_enabled: bool = Field(
         default=True,
         description="是否启用批量翻译模式，可大幅减少API请求次数"
@@ -126,6 +120,15 @@ class DoubanPosterUpdaterConfig(BaseModel):
     skip_mainland_china: bool = Field(default=False, description="是否跳过中国大陆地区的影视")
 
 
+# --- 核心修改开始 ---
+
+class GitHubCacheConfig(BaseModel):
+    """GitHub 远程图床缓存配置"""
+    repo_url: str = Field(default="", description="GitHub 仓库 URL, 例如: https://github.com/user/repo")
+    branch: str = Field(default="main", description="仓库分支")
+    personal_access_token: str = Field(default="", description="个人访问令牌 (PAT)，用于写入权限")
+    allow_fallback: bool = Field(default=True, description="远程图床找不到时，是否允许降级为实时截图")
+    overwrite_remote: bool = Field(default=False, description="备份时，是否覆盖远程已存在的同名文件")
 
 class EpisodeRefresherConfig(BaseModel):
     """剧集元数据刷新器功能的配置"""
@@ -133,13 +136,25 @@ class EpisodeRefresherConfig(BaseModel):
         default='emby', 
         description="刷新模式: 'emby' - 通知Emby刷新, 'toolbox' - 工具箱代理刷新"
     )
-    overwrite_metadata: bool = Field(default=True, description="刷新时是否覆盖现有元数据")
+    overwrite_metadata: bool = Field(default=True, description="刷新时是否覆盖现有元数据 (仅emby模式)")
     skip_if_complete: bool = Field(default=True, description="如果分集已有标题、简介和图片，则跳过刷新")
     
     screenshot_enabled: bool = Field(
         default=False,
         description="当TMDB和Emby均无图片时，是否尝试从视频文件截图"
     )
+    
+    # 新增：截图缓存模式
+    screenshot_cache_mode: Literal['none', 'local', 'remote'] = Field(
+        default='local',
+        description="截图与缓存模式: 'none'-无缓存, 'local'-本地缓存, 'remote'-远程图床"
+    )
+    # 兼容旧版，后续在 config.py 中迁移
+    local_screenshot_caching_enabled: Optional[bool] = Field(
+        default=None, 
+        description="[已废弃] 是否启用本地截图缓存"
+    )
+
     screenshot_percentage: int = Field(
         default=10,
         description="截图位置在视频时长的百分比 (1-99)",
@@ -152,7 +167,6 @@ class EpisodeRefresherConfig(BaseModel):
         ge=1
     )
     
-    # --- 新增配置项 ---
     crop_widescreen_to_16_9: bool = Field(
         default=True,
         description="是否将宽屏(如21:9)截图裁剪为16:9以适应Emby显示"
@@ -172,15 +186,16 @@ class EpisodeRefresherConfig(BaseModel):
         description="是否启用智能截图(分析1秒内多帧选择最清晰的一张)，会增加CPU消耗"
     )
 
-    local_screenshot_caching_enabled: bool = Field(
-        default=True,
-        description="是否启用本地截图缓存，避免重复截图"
-    )
-
     backup_overwrite_local: bool = Field(
         default=False,
         description="从Emby备份截图到本地时，是否覆盖本地已有的同名文件"
     )
+    
+    # 新增：GitHub 配置
+    github_config: GitHubCacheConfig = Field(default_factory=GitHubCacheConfig)
+
+# --- 核心修改结束 ---
+
 
 class EpisodeRenamerConfig(BaseModel):
     """剧集文件重命名器功能的配置"""
@@ -205,21 +220,18 @@ class ScheduledTasksTargetScope(BaseModel):
     media_type: Optional[Literal["Movie", "Series"]] = "Movie"
     library_ids: List[str] = Field(default_factory=list)
     library_blacklist: str = ""
-    # --- 新增 item_ids 字段用于接收搜索结果 ---
     item_ids: List[str] = Field(default_factory=list)
 
 class ScheduledTasksConfig(BaseModel):
     """定时任务总配置"""
     target_scope: ScheduledTasksTargetScope = Field(default_factory=ScheduledTasksTargetScope)
-    # --- 修改：在任务列表中添加新任务 ---
     tasks: List[ScheduledTaskItem] = Field(default_factory=lambda: [
         ScheduledTaskItem(id="actor_localizer", name="演员中文化"),
         ScheduledTaskItem(id="douban_fixer", name="豆瓣ID修复器"),
         ScheduledTaskItem(id="douban_poster_updater", name="豆瓣海报更新"),
         ScheduledTaskItem(id="episode_refresher", name="剧集元数据刷新"),
-        ScheduledTaskItem(id="episode_renamer", name="剧集文件重命名", hasSettings=False)
+        ScheduledTaskItem(id="episode_renamer", name="剧集文件重命名", hasSettings=True)
     ])
-    # --- 结束修改 ---
 
 class WebhookConfig(BaseModel):
     """Webhook 相关配置"""
@@ -242,11 +254,8 @@ class AppConfig(BaseModel):
     scheduled_tasks_config: ScheduledTasksConfig = Field(default_factory=ScheduledTasksConfig)
     douban_poster_updater_config: DoubanPosterUpdaterConfig = Field(default_factory=DoubanPosterUpdaterConfig)
     webhook_config: WebhookConfig = Field(default_factory=WebhookConfig)
-    # --- 新增：将新配置模型添加到主配置中 ---
     episode_refresher_config: EpisodeRefresherConfig = Field(default_factory=EpisodeRefresherConfig)
-
     episode_renamer_config: EpisodeRenamerConfig = Field(default_factory=EpisodeRenamerConfig)
-    # --- 结束新增 ---
 
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]

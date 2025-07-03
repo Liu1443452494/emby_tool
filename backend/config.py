@@ -29,8 +29,6 @@ DEFAULT_SF_MODEL_REMARKS = {
     "deepseek-ai/DeepSeek-V2.5": "（收费 输入：￥1.33/ M Tokens）"
 }
 
-# backend/config.py (修改 load_app_config 函数)
-
 def load_app_config() -> AppConfig:
     config_dir = os.path.dirname(CONFIG_FILE)
     if not os.path.exists(config_dir):
@@ -80,7 +78,6 @@ def load_app_config() -> AppConfig:
     elif "extra_fields" not in config_data["douban_config"]:
         config_data["douban_config"]["extra_fields"] = []
 
-    # --- 核心修改：调整 actor_localizer_config 的加载和兼容性处理 ---
     if "actor_localizer_config" not in config_data:
         config_data["actor_localizer_config"] = {}
     
@@ -94,24 +91,20 @@ def load_app_config() -> AppConfig:
     if not sf_conf.get("model_remarks"):
         sf_conf["model_remarks"] = DEFAULT_SF_MODEL_REMARKS
 
-    # 兼容性处理：如果存在旧的 timeout 字段，则进行迁移
     migration_needed = "timeout" in sf_conf
     if migration_needed:
         logging.info("【配置兼容】检测到旧的 'timeout' 配置，将自动迁移到新的 'timeout_single' 和 'timeout_batch'。")
         old_timeout = sf_conf.get("timeout", 20)
         
-        # 只有在新字段不存在时才进行赋值，避免覆盖用户已有的设置
         if "timeout_single" not in sf_conf:
             sf_conf["timeout_single"] = old_timeout
         if "timeout_batch" not in sf_conf:
             sf_conf["timeout_batch"] = max(old_timeout + 25, 45)
             
-        # 迁移完成后，删除旧的键
         del sf_conf["timeout"]
 
     if "apply_cron" not in actor_conf:
         actor_conf["apply_cron"] = ""
-    # --- 结束修改 ---
 
     if "douban_fixer_config" not in config_data:
         config_data["douban_fixer_config"] = {"cookie": "", "api_cooldown": 2.0, "scan_cron": ""}
@@ -125,11 +118,27 @@ def load_app_config() -> AppConfig:
     if "webhook_config" not in config_data:
         config_data["webhook_config"] = {}
         
+    # --- 核心修改开始 ---
     if "episode_refresher_config" not in config_data:
         config_data["episode_refresher_config"] = {}
-
-    if "episode_refresher_config" not in config_data:
-        config_data["episode_refresher_config"] = {}
+    
+    refresher_conf = config_data["episode_refresher_config"]
+    
+    # 兼容性处理：将旧的 local_screenshot_caching_enabled 迁移到新的 screenshot_cache_mode
+    # 仅当旧字段存在且新字段不存在时执行
+    if "local_screenshot_caching_enabled" in refresher_conf and "screenshot_cache_mode" not in refresher_conf:
+        logging.info("【配置兼容】检测到旧的 'local_screenshot_caching_enabled' 配置，将自动迁移到新的 'screenshot_cache_mode'。")
+        if refresher_conf["local_screenshot_caching_enabled"]:
+            refresher_conf["screenshot_cache_mode"] = "local"
+        else:
+            refresher_conf["screenshot_cache_mode"] = "none"
+        # 标记为需要重写文件
+        migration_needed = True
+    
+    # 迁移后删除旧字段，无论其值如何
+    if "local_screenshot_caching_enabled" in refresher_conf:
+        del refresher_conf["local_screenshot_caching_enabled"]
+    # --- 核心修改结束 ---
     
     if "episode_renamer_config" not in config_data:
         config_data["episode_renamer_config"] = {}
@@ -154,7 +163,6 @@ def load_app_config() -> AppConfig:
             config_data["scheduled_tasks_config"] = {}
         config_data["scheduled_tasks_config"]["tasks"] = current_tasks
 
-    # 检查是否需要重写配置文件（例如，因为我们删除了旧的timeout键）
     should_rewrite = not os.path.exists(CONFIG_FILE) or migration_needed
 
     if should_rewrite:
@@ -165,6 +173,8 @@ def load_app_config() -> AppConfig:
             logging.info("【配置兼容】配置文件已更新到最新结构。")
 
     return AppConfig(**config_data)
+
+
 
 def save_app_config(app_config: AppConfig):
     config_dir = os.path.dirname(CONFIG_FILE)

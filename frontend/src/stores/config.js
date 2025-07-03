@@ -44,25 +44,34 @@ export const useConfigStore = defineStore('config', () => {
       initial_wait_time: 30,
       plugin_wait_time: 60
     },
+    // --- 核心修改开始 ---
     episode_refresher_config: {
       refresh_mode: 'emby',
       overwrite_metadata: true,
       skip_if_complete: true,
       screenshot_enabled: false,
+      screenshot_cache_mode: 'local', // 新增
       screenshot_percentage: 10,
       screenshot_fallback_seconds: 150,
       crop_widescreen_to_16_9: true,
       force_overwrite_screenshots: false,
       screenshot_cooldown: 2.0,
       use_smart_screenshot: true,
-      local_screenshot_caching_enabled: true
+      backup_overwrite_local: false,
+      github_config: { // 新增
+        repo_url: '',
+        branch: 'main',
+        personal_access_token: '',
+        allow_fallback: true,
+        overwrite_remote: false
+      }
     },
+    // --- 核心修改结束 ---
     episode_renamer_config: {
       emby_path_root: '/media',
       clouddrive_path_root: '/cd2',
       clouddrive_rename_cooldown: 1.0
     }
-    // --- 结束新增 ---
   })
   const isConnected = ref(false)
 
@@ -113,48 +122,45 @@ export const useConfigStore = defineStore('config', () => {
           fullConfig.webhook_config = { enabled: false, initial_wait_time: 30, plugin_wait_time: 60 };
         }
         
+        // --- 核心修改开始 ---
         if (!fullConfig.episode_refresher_config) {
           fullConfig.episode_refresher_config = { 
             refresh_mode: 'emby', 
             overwrite_metadata: true, 
             skip_if_complete: true,
             screenshot_enabled: false,
+            screenshot_cache_mode: 'local',
             screenshot_percentage: 10,
             screenshot_fallback_seconds: 150,
             crop_widescreen_to_16_9: true,
             force_overwrite_screenshots: false,
-            screenshot_cooldown: 2.0
+            screenshot_cooldown: 2.0,
+            use_smart_screenshot: true,
+            backup_overwrite_local: false,
+            github_config: {
+              repo_url: '',
+              branch: 'main',
+              personal_access_token: '',
+              allow_fallback: true,
+              overwrite_remote: false
+            }
           };
         } else {
-          if (typeof fullConfig.episode_refresher_config.refresh_mode === 'undefined') {
-            fullConfig.episode_refresher_config.refresh_mode = 'emby';
+          // 确保所有新字段都存在，避免 undefined 错误
+          const defaultConfig = appConfig.value.episode_refresher_config;
+          for (const key in defaultConfig) {
+            if (typeof fullConfig.episode_refresher_config[key] === 'undefined') {
+              fullConfig.episode_refresher_config[key] = defaultConfig[key];
+            }
           }
-          if (typeof fullConfig.episode_refresher_config.skip_if_complete === 'undefined') {
-            fullConfig.episode_refresher_config.skip_if_complete = true;
-          }
-          if (typeof fullConfig.episode_refresher_config.screenshot_enabled === 'undefined') {
-            fullConfig.episode_refresher_config.screenshot_enabled = false;
-          }
-          if (typeof fullConfig.episode_refresher_config.screenshot_percentage === 'undefined') {
-            fullConfig.episode_refresher_config.screenshot_percentage = 10;
-          }
-          if (typeof fullConfig.episode_refresher_config.screenshot_fallback_seconds === 'undefined') {
-            fullConfig.episode_refresher_config.screenshot_fallback_seconds = 150;
-          }
-          if (typeof fullConfig.episode_refresher_config.crop_widescreen_to_16_9 === 'undefined') {
-            fullConfig.episode_refresher_config.crop_widescreen_to_16_9 = true;
-          }
-          if (typeof fullConfig.episode_refresher_config.force_overwrite_screenshots === 'undefined') {
-            fullConfig.episode_refresher_config.force_overwrite_screenshots = false;
-          }
-          if (typeof fullConfig.episode_refresher_config.screenshot_cooldown === 'undefined') {
-            fullConfig.episode_refresher_config.screenshot_cooldown = 2.0;
-          }
-          if (typeof fullConfig.episode_refresher_config.use_smart_screenshot === 'undefined') {
-            fullConfig.episode_refresher_config.use_smart_screenshot = true;
-          }
-          if (typeof fullConfig.episode_refresher_config.local_screenshot_caching_enabled === 'undefined') {
-            fullConfig.episode_refresher_config.local_screenshot_caching_enabled = true;
+          if (typeof fullConfig.episode_refresher_config.github_config === 'undefined') {
+            fullConfig.episode_refresher_config.github_config = defaultConfig.github_config;
+          } else {
+            for (const key in defaultConfig.github_config) {
+              if (typeof fullConfig.episode_refresher_config.github_config[key] === 'undefined') {
+                fullConfig.episode_refresher_config.github_config[key] = defaultConfig.github_config[key];
+              }
+            }
           }
         }
 

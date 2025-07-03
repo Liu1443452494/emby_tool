@@ -1161,6 +1161,27 @@ def backup_screenshots_api(req: ScreenshotBackupRequest):
         task_name=task_name
     )
     return {"status": "success", "message": "截图备份任务已启动。", "task_id": task_id}
+
+class GitHubBackupRequest(BaseModel):
+    config: EpisodeRefresherConfig
+
+@app.post("/api/episode-refresher/backup-to-github")
+def backup_screenshots_to_github_api(req: GitHubBackupRequest):
+    task_cat = "API-备份到GitHub"
+    ui_logger.info(f"收到备份截图到 GitHub 的请求...", task_category=task_cat)
+    
+    config = app_config.load_app_config()
+    # 使用请求中临时的配置
+    config.episode_refresher_config = req.config
+    
+    logic = EpisodeRefresherLogic(config)
+    task_name = "备份截图到 GitHub"
+    task_id = task_manager.register_task(
+        logic.backup_screenshots_to_github_task,
+        task_name,
+        config=config.episode_refresher_config
+    )
+    return {"status": "success", "message": "备份到 GitHub 的任务已启动。", "task_id": task_id}
     
 @app.post("/api/config/episode-renamer")
 def save_episode_renamer_config_api(config: EpisodeRenamerConfig):

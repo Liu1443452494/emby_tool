@@ -223,7 +223,6 @@
       </template>
     </el-dialog>
 
-    <!-- 豆瓣海报更新对话框 -->
     <el-dialog
       v-model="isPosterDialogVisible"
       title="豆瓣海报更新 - 独立配置"
@@ -255,132 +254,223 @@
       </template>
     </el-dialog>
 
-    <!-- 剧集元数据刷新对话框 -->
     <el-dialog
       v-model="isRefresherDialogVisible"
       title="剧集元数据刷新 - 独立配置"
-      width="600px"
+      width="700px"
       :close-on-click-modal="false"
     >
       <div v-if="localRefresherConfig" class="independent-task-config">
-        <el-form :model="localRefresherConfig" label-position="top">
-          
-          <el-form-item label="刷新模式">
-            <el-radio-group v-model="localRefresherConfig.refresh_mode">
-              <el-radio value="emby">通知 Emby 刷新 (默认)</el-radio>
-              <el-radio value="toolbox">工具箱代理刷新</el-radio>
-            </el-radio-group>
-            <div class="form-item-description">
-              <b>通知 Emby 刷新：</b>由本工具向 Emby 发送刷新指令，Emby 服务器自行连接 TMDB 获取数据。如果您的 Emby 服务器无法访问 TMDB，此模式会失败。<br>
-              <b>工具箱代理刷新：</b>由本工具直接访问 TMDB 获取元数据，然后写入 Emby。此模式可以利用工具箱的代理设置，解决 Emby 无法联网的问题。
-            </div>
-          </el-form-item>
+        <el-tabs>
+          <el-tab-pane label="基础设置">
+            <el-form :model="localRefresherConfig" label-position="top" style="padding-top: 10px;">
+              <el-form-item label="刷新模式">
+                <el-radio-group v-model="localRefresherConfig.refresh_mode">
+                  <el-radio value="emby">通知 Emby 刷新 (默认)</el-radio>
+                  <el-radio value="toolbox">工具箱代理刷新</el-radio>
+                </el-radio-group>
+                <div class="form-item-description">
+                  <b>通知 Emby 刷新：</b>由本工具向 Emby 发送刷新指令，Emby 服务器自行连接 TMDB 获取数据。如果您的 Emby 服务器无法访问 TMDB，此模式会失败。<br>
+                  <b>工具箱代理刷新：</b>由本工具直接访问 TMDB 获取元数据，然后写入 Emby。此模式可以利用工具箱的代理设置，解决 Emby 无法联网的问题。
+                </div>
+              </el-form-item>
 
-          <el-form-item label="元数据写入方式">
-            <el-radio-group v-model="localRefresherConfig.overwrite_metadata">
-              <el-radio :value="false">仅补充缺失的元数据</el-radio>
-              <el-radio :value="true">覆盖所有元数据</el-radio>
-            </el-radio-group>
-            <div class="form-item-description">
-              “仅补充”模式仅填写空缺的字段。“覆盖所有”模式则会用刮削源的数据替换所有字段。
-            </div>
-          </el-form-item>
+              <el-form-item label="元数据写入方式 (仅“通知Emby刷新”模式生效)">
+                <el-radio-group v-model="localRefresherConfig.overwrite_metadata" :disabled="localRefresherConfig.refresh_mode !== 'emby'">
+                  <el-radio :value="false">仅补充缺失的元数据</el-radio>
+                  <el-radio :value="true">覆盖所有元数据</el-radio>
+                </el-radio-group>
+              </el-form-item>
 
-          <el-form-item label="智能跳过">
-            <el-switch v-model="localRefresherConfig.skip_if_complete" active-text="开启智能跳过" />
-            <div class="form-item-description">
-              开启后，如果一个分集已经拥有标题、简介和主图片，任务将自动跳过该分集，以提高效率。
-              如果想处理所有剧集，就关闭该按钮
-            </div>
-          </el-form-item>
+              <el-form-item label="智能跳过">
+                <el-switch v-model="localRefresherConfig.skip_if_complete" active-text="开启智能跳过" />
+                <div class="form-item-description">
+                  开启后，如果一个分集已经拥有标题、简介和非截图类图片，任务将自动跳过该分集，以提高效率。
+                </div>
+              </el-form-item>
+            </el-form>
+          </el-tab-pane>
 
-           <el-divider />
-          <el-form-item label="视频截图 (仅在“工具箱代理刷新”模式下生效)">
-            <el-switch v-model="localRefresherConfig.screenshot_enabled" active-text="启用视频截图" />
-            <div class="form-item-description">
-              当 TMDB 和 Emby 都没有分集图片时，尝试从视频文件（仅支持.strm）直接截图。需要 Docker 容器内已安装 ffmpeg。
-            </div>
-          </el-form-item>
-          
-          <div v-if="localRefresherConfig.screenshot_enabled" class="sub-options" style="margin-left: 0; padding-left: 10px;">
-            <el-form-item label="截图位置百分比">
-              <el-slider v-model="localRefresherConfig.screenshot_percentage" :min="1" :max="99" show-input />
-              <div class="form-item-description">
-                在视频总时长的哪个位置进行截图。例如，10% 表示在视频开头十分之一处。
-              </div>
-            </el-form-item>
-            <el-form-item label="保底截图秒数">
-              <el-input-number v-model="localRefresherConfig.screenshot_fallback_seconds" :min="1" />
-              <div class="form-item-description">
-                如果无法获取到视频总时长（例如网络问题），则直接在视频的这个秒数进行截图。
-              </div>
-            </el-form-item>
-            <el-form-item label="截图操作冷却时间 (秒)">
-              <el-input-number v-model="localRefresherConfig.screenshot_cooldown" :min="0" :step="0.5" :precision="1" />
-              <div class="form-item-description">
-                每次截图（调用ffmpeg）之间的等待时间，用于保护视频源服务器（如网盘）。设为0则不等待。
-              </div>
-            </el-form-item>
-            <el-form-item label="宽屏截图处理">
-              <el-switch v-model="localRefresherConfig.crop_widescreen_to_16_9" active-text="裁剪为 16:9" />
-              <div class="form-item-description">
-                开启后，会将超宽屏（如 21:9）的截图从两侧裁剪，使其变为 16:9，以优化在 Emby 中的显示效果。
-              </div>
-            </el-form-item>
-            <el-form-item label="强制覆盖截图">
-              <el-switch v-model="localRefresherConfig.force_overwrite_screenshots" active-text="开启强制覆盖" />
-              <div class="form-item-description">
-                临时开启此项，任务将无视已存在的截图，强制重新生成。用于在调整截图参数后更新不满意的图片。建议用完后关闭。
-              </div>
-            </el-form-item>
-            <el-form-item label="截图质量模式">
-          <el-switch 
-            v-model="localRefresherConfig.use_smart_screenshot" 
-            active-text="高质量(消耗CPU)"
-            inactive-text="快速(单帧)"
-          />
-          <div class="form-item-description">
-            高质量模式会分析1秒内的多帧图像，选择最清晰的一张，效果接近Emby原生截图，但会增加CPU负担。
-          </div>
-        </el-form-item>
+          <el-tab-pane label="截图与缓存">
+            <el-form :model="localRefresherConfig" label-position="top" style="padding-top: 10px;">
+              <el-form-item label="截图功能 (仅“工具箱代理刷新”模式生效)">
+                <el-switch v-model="localRefresherConfig.screenshot_enabled" active-text="启用视频截图" :disabled="localRefresherConfig.refresh_mode !== 'toolbox'" />
+                <div class="form-item-description">
+                  当 TMDB 和 Emby 都没有分集图片时，尝试从视频文件（仅支持.strm）直接截图。需要 Docker 容器内已安装 ffmpeg。
+                </div>
+              </el-form-item>
 
-        <el-form-item label="本地截图缓存">
-              <el-switch 
-                v-model="localRefresherConfig.local_screenshot_caching_enabled" 
-                active-text="启用本地缓存"
-                :disabled="!localRefresherConfig.screenshot_enabled"
-              />
-              <div class="form-item-description">
-                开启后，新生成的截图会自动保存到本地。下次需要截图时会优先使用本地缓存，避免重复耗时操作。缓存将存放在您配置的豆瓣数据根目录下的 `EpisodeScreenshots` 文件夹内。
+              <div v-if="localRefresherConfig.screenshot_enabled" class="sub-options" style="margin-left: 0; padding-left: 10px;">
+                <el-form-item label="强制覆盖截图 (临时开关)">
+                  <el-switch v-model="localRefresherConfig.force_overwrite_screenshots" active-text="开启强制覆盖" />
+                  <div class="form-item-description">
+                    开启后将无视所有缓存，强制对范围内的所有分集重新截图。用于参数调整后更新不满意的图片。
+                  </div>
+                </el-form-item>
+                
+                <el-alert
+                  v-if="localRefresherConfig.force_overwrite_screenshots"
+                  title="强制覆盖模式已激活"
+                  type="warning"
+                  show-icon
+                  :closable="false"
+                  style="margin-bottom: 20px;"
+                >
+                  <p>所有缓存设置（远程和本地）将被临时忽略，任务将直接对每个分集进行实时截图。</p>
+                </el-alert>
+
+                <!-- 核心修改：在 label 中增加帮助按钮 -->
+                <el-form-item>
+                  <template #label>
+                    <span>截图与缓存模式</span>
+                    <el-tooltip content="点击查看模式详解" placement="top">
+                      <el-button 
+                        :icon="QuestionFilled" 
+                        circle 
+                        text 
+                        @click.stop.prevent="isCacheModeHelpVisible = true"
+                        class="help-button"
+                      />
+                    </el-tooltip>
+                  </template>
+                  <el-radio-group v-model="localRefresherConfig.screenshot_cache_mode" :disabled="localRefresherConfig.force_overwrite_screenshots">
+                    <el-radio value="none">无缓存</el-radio>
+                    <el-radio value="local">本地文件缓存优先</el-radio>
+                    <el-radio value="remote">远程图床优先 (GitHub)</el-radio>
+                  </el-radio-group>
+                </el-form-item>
+
+                <div v-if="localRefresherConfig.screenshot_cache_mode === 'remote'" class="github-config-section">
+                  <el-form-item label="GitHub 仓库 URL">
+                    <el-input v-model="localRefresherConfig.github_config.repo_url" placeholder="例如: https://github.com/user/repo" :disabled="localRefresherConfig.force_overwrite_screenshots" @input="parseRepoUrl" />
+                    <div v-if="parsedRepoInfo" class="form-item-description">
+                      已解析: {{ parsedRepoInfo }} <br>
+                      数据库地址: <a :href="dbRawUrl" target="_blank">{{ dbRawUrl }}</a>
+                    </div>
+                  </el-form-item>
+                  <el-form-item label="GitHub 个人访问令牌 (PAT)">
+                    <el-input v-model="localRefresherConfig.github_config.personal_access_token" type="password" show-password placeholder="仅在备份到GitHub时需要" :disabled="localRefresherConfig.force_overwrite_screenshots" />
+                  </el-form-item>
+                  <el-form-item label="远程图床降级策略">
+                    <el-switch v-model="localRefresherConfig.github_config.allow_fallback" active-text="远程找不到时，允许降级为实时截图" :disabled="localRefresherConfig.force_overwrite_screenshots" />
+                  </el-form-item>
+                </div>
+
+                <el-divider>截图参数</el-divider>
+                <el-form-item label="截图位置百分比">
+                  <el-slider v-model="localRefresherConfig.screenshot_percentage" :min="1" :max="99" show-input />
+                  <div class="form-item-description">
+                    在视频总时长的哪个位置进行截图。例如，10% 表示在视频开头十分之一处。
+                  </div>
+                </el-form-item>
+                <el-form-item label="保底截图秒数">
+                  <el-input-number v-model="localRefresherConfig.screenshot_fallback_seconds" :min="1" />
+                  <div class="form-item-description">
+                    如果无法获取到视频总时长（例如网络问题），则直接在视频的这个秒数进行截图。
+                  </div>
+                </el-form-item>
+                <el-form-item label="截图操作冷却时间 (秒)">
+                  <el-input-number v-model="localRefresherConfig.screenshot_cooldown" :min="0" :step="0.5" :precision="1" />
+                  <div class="form-item-description">
+                    每次截图（调用ffmpeg）之间的等待时间，用于保护视频源服务器（如网盘）。设为0则不等待。
+                  </div>
+                </el-form-item>
+                <el-form-item label="宽屏截图处理">
+                  <el-switch v-model="localRefresherConfig.crop_widescreen_to_16_9" active-text="裁剪为 16:9" />
+                  <div class="form-item-description">
+                    开启后，会将超宽屏（如 21:9）的截图从两侧裁剪，使其变为 16:9，以优化在 Emby 中的显示效果。
+                  </div>
+                </el-form-item>
+                <el-form-item label="截图质量模式">
+                  <el-switch v-model="localRefresherConfig.use_smart_screenshot" active-text="高质量(消耗CPU)" inactive-text="快速(单帧)" />
+                  <div class="form-item-description">
+                    高质量模式会分析1秒内的多帧图像，选择最清晰的一张，效果接近Emby原生截图，但会增加CPU负担。
+                  </div>
+                </el-form-item>
               </div>
-            </el-form-item>
-          </div>
-        </el-form>
-        <el-divider />
-        <div class="backup-section">
-          <h4><el-icon><Finished /></el-icon> 存量数据处理工具</h4>
-          <p class="form-item-description">
-            如果您是从旧版本升级，或之前未开启本地缓存，可以使用此工具将 Emby 中已存在的截图一次性备份到本地，以备不时之需。
-          </p>
-          <el-form-item label="备份时覆盖本地已有文件">
-            <el-switch v-model="localRefresherConfig.backup_overwrite_local" />
-          </el-form-item>
-          <el-button 
-            type="success" 
-            plain 
-            @click="handleBackupScreenshots"
-            :loading="isBackuping"
-          >
-            使用通用目标范围立即备份
-          </el-button>
-        </div>
+            </el-form>
+          </el-tab-pane>
+
+          <el-tab-pane label="备份与恢复">
+            <div class="backup-section">
+              <h4><el-icon><Finished /></el-icon> 从 Emby 备份到本地</h4>
+              <p class="form-item-description">
+                如果您是从旧版本升级，或之前未开启本地缓存，可以使用此工具将 Emby 中已存在的截图一次性备份到本地，以备不时之需。
+              </p>
+              <el-form-item label="备份时覆盖本地已有文件">
+                <el-switch v-model="localRefresherConfig.backup_overwrite_local" />
+              </el-form-item>
+              <el-button 
+                type="success" 
+                plain 
+                @click="handleBackupScreenshots"
+                :loading="isBackuping"
+              >
+                使用通用目标范围立即备份
+              </el-button>
+            </div>
+            <div class="backup-section">
+              <h4><el-icon><Upload /></el-icon> 从本地备份到 GitHub</h4>
+              <p class="form-item-description">
+                此工具会将您本地 `EpisodeScreenshots` 文件夹中的所有截图，增量上传到您配置的 GitHub 仓库。仅限已配置 PAT 的维护者使用。
+              </p>
+              <el-form-item label="备份时覆盖远程同名文件">
+                <el-switch v-model="localRefresherConfig.github_config.overwrite_remote" />
+              </el-form-item>
+              <el-button 
+                type="primary" 
+                plain 
+                @click="handleBackupToGithub"
+                :loading="isGithubBackuping"
+                :disabled="!localRefresherConfig.github_config.personal_access_token"
+              >
+                开始备份到 GitHub
+              </el-button>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
       </div>
       <template #footer>
         <el-button @click="isRefresherDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
 
-    <!-- 剧集重命名设置与撤销工具对话框 (新) -->
+    <!-- 新增：缓存模式帮助说明对话框 -->
+    <el-dialog
+      v-model="isCacheModeHelpVisible"
+      title="截图与缓存模式详解"
+      width="650px"
+    >
+      <div class="help-content">
+        <h4>无缓存</h4>
+        <p>不使用任何缓存。每次需要图片时，都会直接从视频文件实时截图。适用于测试或不希望在本地留下任何文件的场景。</p>
+        
+        <el-divider />
+
+        <h4>本地文件缓存优先</h4>
+        <p><strong>推荐“生产者”或纯本地用户使用。</strong></p>
+        <ul>
+          <li><strong>工作流</strong>: 优先在本地 `EpisodeScreenshots` 文件夹中查找截图。如果找不到，则进行实时截图，并将新截图**保存到本地**。</li>
+          <li><strong>优点</strong>: 截图生成和读取速度快，不依赖网络。适合系统性地为剧集制作截图，并为后续备份到 GitHub 做准备。</li>
+          <li><strong>缺点</strong>: 会占用本地磁盘空间。</li>
+        </ul>
+
+        <el-divider />
+
+        <h4>远程图床优先 (GitHub)</h4>
+        <p><strong>推荐“消费者”或希望节省本地空间的维护者使用。</strong></p>
+        <ul>
+          <li><strong>工作流</strong>: 优先从您配置的 GitHub 仓库查找图片。如果找不到，会降级查找**本地缓存**。如果本地也找不到，最终会进行**实时截图**。</li>
+          <li><strong>作为普通用户 (未填写PAT)</strong>: 新生成的截图仅上传至 Emby，**不会**在本地保存任何文件，实现零空间占用。</li>
+          <li><strong>作为维护者 (已填写PAT)</strong>: 新生成的截图会被**暂存到本地**，方便您后续统一使用“备份到GitHub”功能进行同步。</li>
+        </ul>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="isCacheModeHelpVisible = false">我明白了</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 剧集重命名设置与撤销工具对话框 -->
     <el-dialog
       v-model="isRenamerSettingsDialogVisible"
       title="剧集文件重命名 - 设置"
@@ -427,7 +517,7 @@ services:
       </template>
     </el-dialog>
 
-    <!-- 撤销重命名列表对话框 (新) -->
+    <!-- 撤销重命名列表对话框 -->
     <el-dialog
       v-model="isUndoDialogVisible"
       title="撤销本地文件重命名"
@@ -499,12 +589,12 @@ services:
 </template>
 
 <script setup>
-import { ref, onMounted, watch, reactive, nextTick } from 'vue';
+import { ref, onMounted, watch, reactive, nextTick, computed } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
 import { useEpisodeRenamerStore } from '@/stores/episodeRenamer';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Setting, ArrowDown, Finished } from '@element-plus/icons-vue'; 
+import { Setting, ArrowDown, Finished, Upload, QuestionFilled } from '@element-plus/icons-vue';
 import cronstrue from 'cronstrue/i18n';
 import _ from 'lodash';
 import { API_BASE_URL } from '@/config/apiConfig';
@@ -527,6 +617,7 @@ const localPosterConfig = ref(null);
 const localWebhookConfig = ref(null);
 const localRefresherConfig = ref(null);
 const isBackuping = ref(false); 
+const isGithubBackuping = ref(false);
 const isSaving = ref(false);
 const isTriggering = reactive({});
 const isPosterDialogVisible = ref(false);
@@ -534,11 +625,14 @@ const isWebhookDialogVisible = ref(false);
 const isRefresherDialogVisible = ref(false);
 const isSearchDialogVisible = ref(false);
 const isRenamerSettingsDialogVisible = ref(false);
+const isCacheModeHelpVisible = ref(false);
 const isUndoDialogVisible = ref(false);
 const selectedUndoLogs = ref([]);
 const searchQuery = ref('');
 const searchDialogTableRef = ref(null);
 const dialogSelection = ref([]);
+const parsedRepoInfo = ref('');
+const dbRawUrl = ref('');
 
 definedTasks.value.forEach(taskDef => {
   localTaskStates[taskDef.id] = {
@@ -579,8 +673,9 @@ function updateStateFromConfig() {
   localPosterConfig.value = _.cloneDeep(configStore.appConfig.douban_poster_updater_config);
   localWebhookConfig.value = _.cloneDeep(configStore.appConfig.webhook_config);
   localRefresherConfig.value = _.cloneDeep(configStore.appConfig.episode_refresher_config);
-  if (typeof localRefresherConfig.value.backup_overwrite_local === 'undefined') {
-    localRefresherConfig.value.backup_overwrite_local = false;
+  
+  if (localRefresherConfig.value.github_config?.repo_url) {
+    parseRepoUrl();
   }
 
   if (localWebhookConfig.value && !localWebhookConfig.value.url_override) {
@@ -682,13 +777,11 @@ const handleBackupScreenshots = async () => {
     
     isBackuping.value = true;
     
-    const scope = localScope.value;
     const payload = {
-        scope: scope,
+        scope: localScope.value,
         config: localRefresherConfig.value
     };
 
-    // 修正：直接调用新API
     const response = await fetch(`${API_BASE_URL}/api/episode-refresher/backup-screenshots`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -703,9 +796,45 @@ const handleBackupScreenshots = async () => {
     if (error && error.message) {
       ElMessage.error(`启动备份失败: ${error.message}`);
     }
-    // 用户点击取消时，error为'cancel'，不显示消息
   } finally {
     isBackuping.value = false;
+  }
+};
+
+const handleBackupToGithub = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '即将开始备份本地截图到 GitHub。此操作会扫描本地所有截图，与远程数据库对比，并上传差异文件。此过程可能消耗大量时间和网络流量，是否继续？',
+      '确认备份到 GitHub',
+      {
+        confirmButtonText: '开始备份',
+        cancelButtonText: '取消',
+        type: 'info',
+      }
+    );
+    
+    isGithubBackuping.value = true;
+    
+    const payload = {
+        config: localRefresherConfig.value
+    };
+
+    const response = await fetch(`${API_BASE_URL}/api/episode-refresher/backup-to-github`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || '启动备份任务失败');
+    
+    ElMessage.success(data.message);
+
+  } catch (error) {
+    if (error && error.message) {
+      ElMessage.error(`启动备份失败: ${error.message}`);
+    }
+  } finally {
+    isGithubBackuping.value = false;
   }
 };
 
@@ -783,6 +912,20 @@ const handleUndo = async () => {
 const getBaseName = (path) => {
   if (!path) return '';
   return path.split(/[\\/]/).pop();
+};
+
+const parseRepoUrl = () => {
+  const url = localRefresherConfig.value.github_config.repo_url;
+  const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
+  if (match) {
+    const owner = match[1];
+    const repo = match[2].replace(/\.git$/, '');
+    parsedRepoInfo.value = `${owner}/${repo}`;
+    dbRawUrl.value = `https://raw.githubusercontent.com/${owner}/${repo}/main/database.json`;
+  } else {
+    parsedRepoInfo.value = '';
+    dbRawUrl.value = '';
+  }
 };
 </script>
 
@@ -1077,5 +1220,34 @@ const getBaseName = (path) => {
 }
 .backup-section .el-form-item {
   margin-bottom: 15px;
+}
+.github-config-section {
+  padding: 15px;
+  margin-top: 15px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+}
+
+.help-button {
+  margin-left: 8px;
+  color: var(--el-text-color-placeholder);
+}
+.help-content h4 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  color: var(--el-text-color-primary);
+}
+.help-content p {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+  line-height: 1.7;
+  margin: 0 0 10px 0;
+}
+.help-content ul {
+  padding-left: 20px;
+  margin: 0;
+}
+.help-content li {
+  margin-bottom: 8px;
 }
 </style>

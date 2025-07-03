@@ -1,4 +1,3 @@
-
 import logging
 import threading
 import time
@@ -9,11 +8,12 @@ import subprocess
 import json
 import os
 import shutil
-from typing import List, Iterable, Optional, Dict
+from typing import List, Iterable, Optional, Dict, Tuple
 from collections import defaultdict
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from filelock import FileLock, Timeout
 
-# --- 新增导入 ---
 try:
     import cv2
     import numpy as np
@@ -27,6 +27,10 @@ from log_manager import ui_logger
 from models import AppConfig, EpisodeRefresherConfig
 from task_manager import TaskManager
 from tmdb_logic import TmdbLogic
+
+# --- 新增常量 ---
+GITHUB_DB_CACHE_FILE = os.path.join('/app/data', 'github_database_cache.json')
+GITHUB_DB_CACHE_DURATION = 3600  # 缓存1小时
 
 class EpisodeRefresherLogic:
     @staticmethod
@@ -46,7 +50,6 @@ class EpisodeRefresherLogic:
         if not os.path.isdir(base_cache_dir):
             return None
 
-        # 正则表达式，用于从 "任意标题 [12345]" 中提取出数字 12345
         id_pattern = re.compile(r'\[(\d+)\]$')
 
         try:
@@ -57,7 +60,6 @@ class EpisodeRefresherLogic:
                     if match and match.group(1) == str(series_tmdb_id):
                         return dirpath
         except OSError as e:
-            # 使用 ui_logger 记录底层文件系统错误
             ui_logger.error(f"【截图缓存】扫描缓存目录时出错: {e}", task_category="截图缓存")
         
         return None
@@ -88,7 +90,6 @@ class EpisodeRefresherLogic:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
-            # 这个错误主要给后端看，保留 logging
             logging.error(f"【剧集刷新】获取媒体详情 (ID: {item_id}) 失败: {e}")
             return None
 
@@ -99,21 +100,21 @@ class EpisodeRefresherLogic:
             details_resp.raise_for_status()
             item_details = details_resp.json()
             if item_details.get("LockedFields") and len(item_details["LockedFields"]) > 0:
-                ui_logger.debug(f"     - 检测到锁定的字段: {item_details['LockedFields']}，正在解锁...", task_category=task_category)
+                ui_logger.debug(f"     - [解锁] 检测到锁定的字段: {item_details['LockedFields']}，正在解锁...", task_category=task_category)
                 item_details["LockedFields"] = []
                 update_url = f"{self.base_url}/Items/{item_id}"
                 headers = {'Content-Type': 'application/json'}
                 update_resp = self.session.post(update_url, params=self.params, json=item_details, headers=headers, timeout=20)
                 update_resp.raise_for_status()
-                ui_logger.debug(f"     - 媒体项 (ID: {item_id}) 已成功解锁。", task_category=task_category)
+                ui_logger.debug(f"     - [解锁] 媒体项 (ID: {item_id}) 已成功解锁。", task_category=task_category)
             else:
-                ui_logger.debug(f"     - 媒体项 (ID: {item_id}) 无需解锁。", task_category=task_category)
+                ui_logger.debug(f"     - [解锁] 媒体项 (ID: {item_id}) 无需解锁。", task_category=task_category)
             return True
         except requests.RequestException as e:
-            ui_logger.error(f"     - 解锁媒体项 (ID: {item_id}) 时发生网络错误: {e}", task_category=task_category)
+            ui_logger.error(f"     - [解锁] 解锁媒体项 (ID: {item_id}) 时发生网络错误: {e}", task_category=task_category)
             return False
         except Exception as e:
-            ui_logger.error(f"     - 解锁媒体项 (ID: {item_id}) 时发生未知错误: {e}", task_category=task_category, exc_info=True)
+            ui_logger.error(f"     - [解锁] 解锁媒体项 (ID: {item_id}) 时发生未知错误: {e}", task_category=task_category, exc_info=True)
             return False
 
     def _refresh_single_episode_by_emby(self, episode_id: str, config: EpisodeRefresherConfig, task_category: str) -> bool:
@@ -148,7 +149,7 @@ class EpisodeRefresherLogic:
 
     def _upload_image_from_url(self, item_id: str, image_url: str, task_category: str) -> bool:
         try:
-            ui_logger.debug(f"     - 正在从URL下载图片: {image_url}", task_category=task_category)
+            ui_logger.debug(f"     - [执行] 正在从URL下载图片: {image_url}", task_category=task_category)
             proxies = self.tmdb_logic.proxy_manager.get_proxies(image_url)
             image_response = self.tmdb_logic.session.get(image_url, timeout=30, proxies=proxies)
             image_response.raise_for_status()
@@ -156,7 +157,7 @@ class EpisodeRefresherLogic:
             content_type = image_response.headers.get('Content-Type', 'image/jpeg')
             return self._upload_image_bytes(item_id, image_data, content_type, task_category)
         except Exception as e:
-            ui_logger.error(f"     - 从URL下载并上传图片到 Emby (ID: {item_id}) 失败: {e}", task_category=task_category, exc_info=True)
+            ui_logger.error(f"     - [失败❌] 从URL下载并上传图片到 Emby (ID: {item_id}) 失败: {e}", task_category=task_category, exc_info=True)
             return False
 
     def _upload_image_bytes(self, item_id: str, image_data: bytes, content_type: str, task_category: str) -> bool:
@@ -166,12 +167,13 @@ class EpisodeRefresherLogic:
             try:
                 self.session.delete(upload_url, params=self.params, timeout=20)
             except requests.RequestException as e:
-                ui_logger.warning(f"     - 删除旧主图时发生错误（可能是正常的）: {e}", task_category=task_category)
+                ui_logger.debug(f"     - [执行] 删除旧主图时发生错误（可能是正常的）: {e}", task_category=task_category)
 
             base64_encoded_data = base64.b64encode(image_data).decode('utf-8')
             
             headers = {'Content-Type': content_type}
             
+            ui_logger.debug(f"     - [执行] 正在上传图片二进制数据到 Emby...", task_category=task_category)
             upload_response = self.session.post(
                 upload_url, 
                 params=self.params, 
@@ -182,7 +184,7 @@ class EpisodeRefresherLogic:
             upload_response.raise_for_status()
             return True
         except Exception as e:
-            ui_logger.error(f"     - 上传图片二进制数据到 Emby (ID: {item_id}) 失败: {e}", task_category=task_category, exc_info=True)
+            ui_logger.error(f"     - [失败❌] 上传图片二进制数据到 Emby (ID: {item_id}) 失败: {e}", task_category=task_category, exc_info=True)
             return False
 
     def _get_video_url_from_item(self, episode_id: str, task_category: str) -> Optional[str]:
@@ -225,7 +227,7 @@ class EpisodeRefresherLogic:
                 '-show_format',
                 '-i', video_url
             ]
-            ui_logger.debug(f"     - [截图] 执行 ffprobe 命令获取时长...", task_category=task_category)
+            ui_logger.debug(f"     - [截图] 正在执行 ffprobe 命令获取视频时长...", task_category=task_category)
             result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=60)
             format_info = json.loads(result.stdout).get('format', {})
             duration_str = format_info.get('duration')
@@ -256,36 +258,27 @@ class EpisodeRefresherLogic:
 
     def _save_screenshot_to_local(self, image_bytes: bytes, series_tmdb_id: str, season_number: int, episode_number: int, series_name: str, task_category: str) -> bool:
         """将截图二进制数据保存到本地缓存，并智能处理文件夹重命名。"""
-        # 1. 构建理论上的新文件路径
         new_filepath = self._get_local_screenshot_path(series_tmdb_id, season_number, episode_number, series_name)
         if not new_filepath:
             return False
         
         new_dir = os.path.dirname(new_filepath)
-
-        # 2. 查找基于TMDB ID的旧目录
         old_dir = self._find_screenshot_cache_dir_by_tmdbid(series_tmdb_id)
-        
         final_dir = new_dir
         
         try:
-            # 3. 处理目录重命名和创建
             if old_dir:
-                # 如果找到了旧目录
                 if old_dir != new_dir:
-                    # 且旧目录名和新目录名不一致（意味着标题变了），则重命名
                     ui_logger.info(f"     - [本地缓存] 检测到剧集标题变更，正在重命名缓存文件夹: '{os.path.basename(old_dir)}' -> '{os.path.basename(new_dir)}'", task_category=task_category)
                     os.rename(old_dir, new_dir)
-                final_dir = new_dir # 最终目录就是新目录
+                final_dir = new_dir
             else:
-                # 如果没找到旧目录，直接创建新目录
                 os.makedirs(new_dir, exist_ok=True)
             
-            # 4. 在最终确定的目录中写入文件
             final_filepath = os.path.join(final_dir, os.path.basename(new_filepath))
             with open(final_filepath, 'wb') as f:
                 f.write(image_bytes)
-            ui_logger.info(f"     - [本地缓存] 成功将截图保存到: {final_filepath}", task_category=task_category)
+            ui_logger.debug(f"     - [本地缓存] 成功将截图保存到: {final_filepath}", task_category=task_category)
             return True
             
         except OSError as e:
@@ -297,12 +290,10 @@ class EpisodeRefresherLogic:
 
     def _read_screenshot_from_local(self, series_tmdb_id: str, season_number: int, episode_number: int, task_category: str) -> Optional[bytes]:
         """从本地缓存读取截图二进制数据 (通过TMDB ID查找)"""
-        # 1. 通过TMDB ID查找文件夹
         cache_dir = self._find_screenshot_cache_dir_by_tmdbid(series_tmdb_id)
         if not cache_dir:
             return None
         
-        # 2. 构建文件路径
         filename = f"season-{season_number}-episode-{episode_number}.jpg"
         filepath = os.path.join(cache_dir, filename)
 
@@ -311,22 +302,18 @@ class EpisodeRefresherLogic:
         
         try:
             with open(filepath, 'rb') as f:
-                image_bytes = f.read()
-            ui_logger.info(f"     - [本地缓存] 命中缓存！成功从本地读取截图: {filepath}", task_category=task_category)
-            return image_bytes
+                return f.read()
         except Exception as e:
             ui_logger.error(f"     - [本地缓存] 从本地读取截图失败: {e}", task_category=task_category, exc_info=True)
             return None
 
     def _delete_local_screenshot(self, series_tmdb_id: str, season_number: int, episode_number: int, task_category: str) -> bool:
         """从本地缓存中删除指定的截图文件 (通过TMDB ID查找)"""
-        # 1. 通过TMDB ID查找文件夹
         cache_dir = self._find_screenshot_cache_dir_by_tmdbid(series_tmdb_id)
         if not cache_dir:
             ui_logger.debug(f"     - [本地缓存] 无需删除，未找到TMDB ID为 {series_tmdb_id} 的缓存目录。", task_category=task_category)
             return True
 
-        # 2. 构建文件路径
         filename = f"season-{season_number}-episode-{episode_number}.jpg"
         filepath = os.path.join(cache_dir, filename)
 
@@ -342,22 +329,18 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - [本地缓存] 删除本地截图失败: {e}", task_category=task_category, exc_info=True)
             return False
     
-
-    
     def _split_image_stream(self, stream: bytes) -> List[bytes]:
         """将 ffmpeg image2pipe 输出的二进制流分割成独立的图片列表"""
         images = []
-        start_marker = b'\xff\xd8' # JPEG start
-        end_marker = b'\xff\xd9'   # JPEG end
+        start_marker = b'\xff\xd8'
+        end_marker = b'\xff\xd9'
         
         start = 0
         while True:
             start_pos = stream.find(start_marker, start)
-            if start_pos == -1:
-                break
+            if start_pos == -1: break
             end_pos = stream.find(end_marker, start_pos)
-            if end_pos == -1:
-                break
+            if end_pos == -1: break
             
             images.append(stream[start_pos:end_pos+2])
             start = end_pos + 2
@@ -369,7 +352,7 @@ class EpisodeRefresherLogic:
             return None
         if not OPENCV_AVAILABLE:
             ui_logger.warning("     - [截图-智能模式] OpenCV 未加载，将随机选择一张图片。", task_category=task_category)
-            return images[len(images) // 2] # 返回中间一张
+            return images[len(images) // 2]
 
         max_variance = -1
         best_image = None
@@ -392,7 +375,6 @@ class EpisodeRefresherLogic:
     def _capture_screenshot(self, video_url: str, seek_time: float, config: EpisodeRefresherConfig, task_category: str) -> Optional[bytes]:
         """使用 ffmpeg 从视频流截图，并根据配置处理黑边和比例"""
         try:
-            # 步骤 1: 对原始视频流进行黑边检测
             crop_filter = ""
             try:
                 detect_seek_time = max(0, seek_time - 3)
@@ -401,14 +383,14 @@ class EpisodeRefresherLogic:
                     '-i', video_url, '-t', '2', '-vf', 'cropdetect',
                     '-f', 'null', '-'
                 ]
-                ui_logger.debug(f"     - [截图-检测] 执行 cropdetect 命令...", task_category=task_category)
+                ui_logger.debug(f"     - [截图] 正在执行 cropdetect 命令检测黑边...", task_category=task_category)
                 detect_result = subprocess.run(detect_cmd, capture_output=True, text=True, timeout=60)
                 
                 crop_match = re.search(r'crop=(\d+:\d+:\d+:\d+)', detect_result.stderr)
                 if crop_match:
                     detected_crop_params = crop_match.group(1)
                     w, h, x, y = map(int, detected_crop_params.split(':'))
-                    ui_logger.debug(f"     - [截图-检测] 检测到有效画面区域: {detected_crop_params}", task_category=task_category)
+                    ui_logger.debug(f"     - [截图] 检测到有效画面区域: {detected_crop_params}", task_category=task_category)
 
                     crop_filter = f"crop={detected_crop_params}"
                     if config.crop_widescreen_to_16_9 and w / h > 1.8:
@@ -416,16 +398,14 @@ class EpisodeRefresherLogic:
                         if target_w < w:
                             offset_x = round((w - target_w) / 2)
                             crop_filter += f",crop={target_w}:{h}:{offset_x}:0"
-                            ui_logger.info(f"     - [截图-裁剪] 将应用宽屏裁剪，最终滤镜: {crop_filter}", task_category=task_category)
+                            ui_logger.info(f"     - [截图] 将应用宽屏裁剪，最终滤镜: {crop_filter}", task_category=task_category)
                 else:
-                    ui_logger.warning("     - [截图-检测] 未能检测到黑边信息，将不进行裁剪。", task_category=task_category)
+                    ui_logger.warning("     - [截图] 未能检测到黑边信息，将不进行裁剪。", task_category=task_category)
             except Exception as e:
-                ui_logger.warning(f"     - [截图-检测] 黑边检测失败，将不进行裁剪。原因: {e}", task_category=task_category)
+                ui_logger.warning(f"     - [截图] 黑边检测失败，将不进行裁剪。原因: {e}", task_category=task_category)
 
-            # 步骤 2: 根据配置选择截图模式
             if config.use_smart_screenshot:
-                # 智能模式：获取1秒内的所有帧
-                ui_logger.info("     - [截图-智能模式] 启动，将获取1秒内多帧进行筛选...", task_category=task_category)
+                ui_logger.info("     - [截图] 启动智能截图模式，将获取1秒内多帧进行筛选...", task_category=task_category)
                 capture_cmd = [
                     'ffmpeg', '-ss', str(seek_time),
                     '-i', video_url, '-t', '1',
@@ -439,8 +419,7 @@ class EpisodeRefresherLogic:
                 all_frames = self._split_image_stream(capture_result.stdout)
                 return self._get_best_image_by_variance(all_frames, task_category)
             else:
-                # 传统模式：只获取1帧
-                ui_logger.info("     - [截图-传统模式] 启动，将截取单帧图片...", task_category=task_category)
+                ui_logger.info("     - [截图] 启动快速截图模式，将截取单帧图片...", task_category=task_category)
                 capture_cmd = [
                     'ffmpeg', '-ss', str(seek_time),
                     '-i', video_url, '-vframes', '1',
@@ -454,64 +433,168 @@ class EpisodeRefresherLogic:
                 return capture_result.stdout
 
         except Exception as e:
-            ui_logger.error(f"     - [截图] 截图过程中发生未知错误: {e}", task_category=task_category, exc_info=True)
+            ui_logger.error(f"     - [失败❌] 截图过程中发生未知错误: {e}", task_category=task_category, exc_info=True)
             return None
 
+    # --- 新增：获取远程图床数据库 ---
+    def _get_remote_db(self, config: EpisodeRefresherConfig, force_refresh: bool = False) -> Tuple[Optional[Dict], Optional[str]]:
+        task_cat = "远程图床"
+        github_conf = config.github_config
+        if not github_conf.repo_url:
+            return None, None
 
+        lock_path = GITHUB_DB_CACHE_FILE + ".lock"
+        try:
+            with FileLock(lock_path, timeout=5):
+                if not force_refresh and os.path.exists(GITHUB_DB_CACHE_FILE):
+                    mtime = os.path.getmtime(GITHUB_DB_CACHE_FILE)
+                    if time.time() - mtime < GITHUB_DB_CACHE_DURATION:
+                        with open(GITHUB_DB_CACHE_FILE, 'r', encoding='utf-8') as f:
+                            ui_logger.debug("     - [远程图床] 命中本地的数据库文件缓存。", task_category=task_cat)
+                            return json.load(f), None # 从缓存加载时，sha为None
+        except (Timeout, IOError, json.JSONDecodeError) as e:
+            ui_logger.warning(f"     - [远程图床] 读取本地数据库缓存文件失败: {e}，将强制从远程获取。", task_category=task_cat)
+
+        try:
+            match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
+            if not match:
+                raise ValueError("无效的 GitHub 仓库 URL 格式。")
+            owner, repo = match.groups()
+            
+            # 优先尝试 Raw URL
+            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{github_conf.branch}/database.json"
+            ui_logger.debug(f"     - [远程图床] 正在从 Raw URL 下载数据库: {raw_url}", task_category=task_cat)
+            proxies = self.tmdb_logic.proxy_manager.get_proxies(raw_url)
+            response = self.session.get(raw_url, timeout=30, proxies=proxies)
+            
+            if response.status_code == 200:
+                db_content = response.json()
+                with FileLock(lock_path, timeout=5):
+                    with open(GITHUB_DB_CACHE_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(db_content, f, ensure_ascii=False)
+                return db_content, None # 通过 Raw URL 获取时，无法得到 sha
+            
+            ui_logger.warning(f"     - [远程图床] 从 Raw URL 下载失败 (状态码: {response.status_code})，将尝试使用 API 获取...", task_category=task_cat)
+            
+            # 使用 API 作为备用方案
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/database.json?ref={github_conf.branch}"
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            if github_conf.personal_access_token:
+                headers["Authorization"] = f"token {github_conf.personal_access_token}"
+            
+            proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+            api_response = self.session.get(api_url, headers=headers, timeout=30, proxies=proxies)
+            api_response.raise_for_status()
+            
+            api_data = api_response.json()
+            content = base64.b64decode(api_data['content']).decode('utf-8')
+            db_content = json.loads(content)
+            sha = api_data.get('sha')
+
+            with FileLock(lock_path, timeout=5):
+                with open(GITHUB_DB_CACHE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(db_content, f, ensure_ascii=False)
+            
+            return db_content, sha
+
+        except Exception as e:
+            ui_logger.error(f"     - [失败❌] 获取远程图床数据库失败: {e}", task_category=task_cat)
+            return None, None
+
+    # --- 核心重构：_handle_screenshot_flow ---
     def _handle_screenshot_flow(self, series_tmdb_id: str, episode_id: str, episode_details: Dict, config: EpisodeRefresherConfig, task_category: str) -> bool:
+        log_prefix = f"     - S{episode_details.get('ParentIndexNumber', 0):02d}E{episode_details.get('IndexNumber', 0):02d}:"
+        
         if not self.ffmpeg_available:
-            ui_logger.warning("     - [截图] ffmpeg 或 ffprobe 未安装，跳过截图功能。", task_category=task_category)
+            ui_logger.warning(f"{log_prefix} [跳过] ffmpeg 或 ffprobe 未安装，无法执行截图功能。", task_category=task_category)
             return False
 
-        season_number = episode_details.get("ParentIndexNumber")
-        episode_number = episode_details.get("IndexNumber")
-        series_name = episode_details.get("SeriesName", "Unknown Series")
+        if config.force_overwrite_screenshots:
+            ui_logger.info(f"{log_prefix} [警告⚠️] 用户开启强制覆盖模式！将跳过所有缓存，直接进行实时截图...", task_category=task_category)
+            return self._trigger_realtime_screenshot(series_tmdb_id, episode_id, episode_details, config, task_category, log_prefix)
 
-        # 步骤 1: 检查本地缓存 (仅在非强制覆盖模式下)
-        if config.local_screenshot_caching_enabled and not config.force_overwrite_screenshots:
-            cached_image_bytes = self._read_screenshot_from_local(series_tmdb_id, season_number, episode_number, task_category)
+        # 检查远程图床缓存
+        if config.screenshot_cache_mode == 'remote':
+            ui_logger.debug(f"{log_prefix} [决策] 检查缓存 (模式: 远程图床优先)...", task_category=task_category)
+            remote_db, _ = self._get_remote_db(config)
+            if remote_db:
+                s_key = str(episode_details.get("ParentIndexNumber"))
+                e_key = str(episode_details.get("IndexNumber"))
+                series_data = remote_db.get("series", {}).get(str(series_tmdb_id), {})
+                image_url = series_data.get(f"{s_key}-{e_key}")
+                
+                if image_url:
+                    ui_logger.info(f"{log_prefix} [命中✅] 发现远程图床缓存，准备更新。", task_category=task_category)
+                    if self._upload_image_from_url(episode_id, image_url, task_category):
+                        return True
+                    else:
+                        ui_logger.warning(f"{log_prefix} [警告⚠️] 远程图床图片下载或上传失败，将继续降级检查。", task_category=task_category)
+                else:
+                    ui_logger.debug(f"{log_prefix} [跳过] 远程图床无缓存。", task_category=task_category)
+            else:
+                ui_logger.warning(f"{log_prefix} [警告⚠️] 获取远程图床数据库失败，无法检查远程缓存。", task_category=task_category)
+
+        # 降级检查本地文件缓存
+        if config.screenshot_cache_mode in ['remote', 'local']:
+            ui_logger.debug(f"{log_prefix} [决策] 降级或优先检查本地文件缓存...", task_category=task_category)
+            cached_image_bytes = self._read_screenshot_from_local(series_tmdb_id, episode_details.get("ParentIndexNumber"), episode_details.get("IndexNumber"), task_category)
             if cached_image_bytes:
-                return self._upload_image_bytes(episode_id, cached_image_bytes, 'image/jpeg', task_category)
+                ui_logger.info(f"{log_prefix} [命中✅] 发现本地文件缓存，准备更新。", task_category=task_category)
+                if self._upload_image_bytes(episode_id, cached_image_bytes, 'image/jpeg', task_category):
+                    return True
+                else:
+                     ui_logger.warning(f"{log_prefix} [警告⚠️] 本地缓存图片上传失败，将继续降级检查。", task_category=task_category)
+            else:
+                ui_logger.debug(f"{log_prefix} [跳过] 本地无缓存。", task_category=task_category)
 
-        # 步骤 2: 如果缓存未命中或需要强制覆盖，则执行截图流程
-        duration = None
-        runtime_ticks = episode_details.get("RunTimeTicks")
-        if runtime_ticks and runtime_ticks > 0:
-            duration = runtime_ticks / 10_000_000
-            ui_logger.debug(f"     - [截图] 从 Emby 元数据中直接获取到时长: {duration:.2f}s", task_category=task_category)
-        
-        video_url = None
-        if duration is None:
-            ui_logger.debug("     - [截图] Emby元数据中无时长，尝试调用 ffprobe 获取...", task_category=task_category)
-            video_url = self._get_video_url_from_item(episode_id, task_category)
-            if video_url:
-                duration = self._get_video_duration(video_url, task_category)
+        # 降级到实时截图
+        return self._trigger_realtime_screenshot(series_tmdb_id, episode_id, episode_details, config, task_category, log_prefix)
 
-        if duration:
-            seek_time = duration * (config.screenshot_percentage / 100)
-        else:
-            ui_logger.warning(f"     - [截图] 所有方式均获取视频时长失败，将使用保底秒数: {config.screenshot_fallback_seconds}s", task_category=task_category)
-            seek_time = config.screenshot_fallback_seconds
-        
-        if not video_url:
-            video_url = self._get_video_url_from_item(episode_id, task_category)
-
-        if not video_url:
-            ui_logger.error(f"     - [截图] 最终未能获取到视频流 URL，无法截图。", task_category=task_category)
+    # --- 新增：实时截图的独立触发函数 ---
+    def _trigger_realtime_screenshot(self, series_tmdb_id: str, episode_id: str, episode_details: Dict, config: EpisodeRefresherConfig, task_category: str, log_prefix: str) -> bool:
+        if config.screenshot_cache_mode == 'remote' and not config.github_config.allow_fallback:
+            ui_logger.info(f"{log_prefix} [跳过] 所有缓存均未命中，且用户禁止降级为实时截图，截图流程中止。", task_category=task_category)
             return False
+
+        ui_logger.info(f"{log_prefix} [决策] 所有缓存均未命中或被跳过，准备实时截图...", task_category=task_category)
+        
+        duration = None
+        if (runtime_ticks := episode_details.get("RunTimeTicks")) and runtime_ticks > 0:
+            duration = runtime_ticks / 10_000_000
+            ui_logger.debug(f"     - [截图] 视频时长: {duration:.2f}s (来自Emby元数据)。", task_category=task_category)
+        
+        video_url = self._get_video_url_from_item(episode_id, task_category)
+        if not video_url:
+            ui_logger.error(f"{log_prefix} [失败❌] 未能获取到视频流 URL，无法截图。", task_category=task_category)
+            return False
+            
+        if duration is None:
+            duration = self._get_video_duration(video_url, task_category)
+
+        seek_time = duration * (config.screenshot_percentage / 100) if duration else config.screenshot_fallback_seconds
+        if duration:
+            ui_logger.debug(f"     - [截图] 截图位置: {seek_time:.2f}s (基于 {config.screenshot_percentage}%)。", task_category=task_category)
+        else:
+            ui_logger.warning(f"     - [截图] 获取视频时长失败，将使用保底秒数进行截图: {seek_time}s。", task_category=task_category)
 
         image_bytes = self._capture_screenshot(video_url, seek_time, config, task_category)
         
         if image_bytes:
-            # 步骤 3: 上传到 Emby
-            upload_success = self._upload_image_bytes(episode_id, image_bytes, 'image/jpeg', task_category)
-            
-            # 步骤 4: 如果上传成功且缓存开启，则保存到本地
-            if upload_success and config.local_screenshot_caching_enabled:
-                self._save_screenshot_to_local(image_bytes, series_tmdb_id, season_number, episode_number, series_name, task_category)
-            
-            return upload_success
+            if self._upload_image_bytes(episode_id, image_bytes, 'image/jpeg', task_category):
+                ui_logger.info(f"{log_prefix} [成功🎉] 截图生成并上传成功！", task_category=task_category)
+                
+                # 回写缓存
+                if config.screenshot_cache_mode == 'local':
+                    self._save_screenshot_to_local(image_bytes, series_tmdb_id, episode_details.get("ParentIndexNumber"), episode_details.get("IndexNumber"), episode_details.get("SeriesName"), task_category)
+                    ui_logger.info(f"{log_prefix} [回写] 新截图已保存至本地缓存。", task_category=task_category)
+                elif config.screenshot_cache_mode == 'remote' and config.github_config.personal_access_token:
+                    self._save_screenshot_to_local(image_bytes, series_tmdb_id, episode_details.get("ParentIndexNumber"), episode_details.get("IndexNumber"), episode_details.get("SeriesName"), task_category)
+                    ui_logger.info(f"{log_prefix} [回写] 新截图已暂存至本地 (等待手动备份)。", task_category=task_category)
+
+                self._set_image_source_tag(episode_id, "screenshot", task_category)
+                return True
         
+        ui_logger.error(f"{log_prefix} [失败❌] 实时截图失败。", task_category=task_category)
         return False
 
     def _set_image_source_tag(self, item_id: str, source: str, task_category: str):
@@ -524,12 +607,11 @@ class EpisodeRefresherLogic:
             update_url = f"{self.base_url}/Items/{item_id}"
             headers = {'Content-Type': 'application/json'}
             self.session.post(update_url, params=self.params, json=item_details, headers=headers, timeout=20).raise_for_status()
-            ui_logger.debug(f"     - 成功将图片来源标记 '{source}' 写入 Emby (ID: {item_id})。", task_category=task_category)
+            ui_logger.debug(f"     - [标记] 成功将图片来源标记 '{source}' 写入 Emby (ID: {item_id})。", task_category=task_category)
         except Exception as e:
-            ui_logger.error(f"     - 写入图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
+            ui_logger.error(f"     - [失败❌] 写入图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
 
     def _clear_image_source_tag(self, item_id: str, task_category: str):
-        # ... (此函数无变化) ...
         try:
             item_details = self.tmdb_logic._get_emby_item_details(item_id, fields="ProviderIds")
             if not item_details: return
@@ -540,10 +622,9 @@ class EpisodeRefresherLogic:
                 update_url = f"{self.base_url}/Items/{item_id}"
                 headers = {'Content-Type': 'application/json'}
                 self.session.post(update_url, params=self.params, json=item_details, headers=headers, timeout=20).raise_for_status()
-                ui_logger.debug(f"     - 成功从 Emby (ID: {item_id}) 移除图片来源标记。", task_category=task_category)
+                ui_logger.debug(f"     - [标记] 成功从 Emby (ID: {item_id}) 移除图片来源标记。", task_category=task_category)
         except Exception as e:
-            ui_logger.error(f"     - 移除图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
-
+            ui_logger.error(f"     - [失败❌] 移除图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
 
     def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str) -> int:
         updated_count = 0
@@ -563,17 +644,14 @@ class EpisodeRefresherLogic:
                 if episode_num is None:
                     continue
                 
-                log_prefix = f"     - 《{series_name_for_log}》S{season_number:02d}E{episode_num:02d}:"
+                log_prefix = f"     - S{season_number:02d}E{episode_num:02d}:"
+                ui_logger.info(f"➡️ 开始处理《{series_name_for_log}》S{season_number:02d}E{episode_num:02d}: {emby_episode.get('Name')}", task_category=task_category)
 
                 tmdb_episode = tmdb_episodes_map.get(episode_num)
                 
-                # --- 核心逻辑重构开始 ---
-                
                 potential_changes = {}
-                reasons_to_skip = []
-                image_update_action = None # ('tmdb', 'screenshot', None)
+                image_update_action = None
                 
-                # 1. 元数据变更检查 (与之前相同)
                 emby_name = emby_episode.get("Name", "")
                 tmdb_name = tmdb_episode.get("name") if tmdb_episode else None
                 if tmdb_name and not self._is_generic_episode_title(tmdb_name) and tmdb_name != emby_name:
@@ -590,31 +668,28 @@ class EpisodeRefresherLogic:
                     if not emby_premiere_date or tmdb_air_date != emby_premiere_date[:10]:
                         potential_changes["PremiereDate"] = tmdb_air_date + "T00:00:00.000Z"
 
-                # 2. 图片变更决策
                 current_image_source = emby_episode.get("ProviderIds", {}).get("ToolboxImageSource")
                 emby_has_image = bool(emby_episode.get("ImageTags", {}).get("Primary"))
                 tmdb_still_path = tmdb_episode.get("still_path") if tmdb_episode else None
 
                 if tmdb_still_path:
-                    # TMDB有图，这是最高优先级
+                    ui_logger.debug(f"{log_prefix} [决策] 检查外部数据源...")
                     if not emby_has_image or current_image_source == "screenshot":
                         image_update_action = "tmdb"
+                    else:
+                        ui_logger.info(f"{log_prefix} [保护🛡️] Emby 已有用户自定义图片，跳过图片更新。", task_category=task_category)
                 elif config.screenshot_enabled:
-                    # TMDB无图，进入截图逻辑
-                    if not emby_has_image:
+                    if not emby_has_image or current_image_source == "screenshot":
                         image_update_action = "screenshot"
-                    elif current_image_source == "screenshot" and config.force_overwrite_screenshots:
-                        image_update_action = "screenshot"
+                    else:
+                        ui_logger.info(f"{log_prefix} [保护🛡️] Emby 已有用户自定义图片，跳过截图。", task_category=task_category)
 
-                # 3. 汇总决策
                 if not potential_changes and not image_update_action:
-                    ui_logger.info(f"{log_prefix} 无需更新 (元数据和图片均无需变动)", task_category=task_category)
+                    ui_logger.info(f"{log_prefix} [跳过] 元数据和图片均无需更新。", task_category=task_category)
                     continue
 
-                # 4. 执行变更
                 final_changes_log = []
                 
-                # 4a. 更新元数据
                 if potential_changes:
                     if self._unlock_item(emby_episode["Id"], task_category):
                         update_payload = emby_episode.copy()
@@ -627,40 +702,35 @@ class EpisodeRefresherLogic:
                             for key in potential_changes.keys():
                                 final_changes_log.append(field_map.get(key, key))
                         except Exception as e:
-                            ui_logger.error(f"{log_prefix} 应用元数据更新时失败: {e}", task_category=task_category)
+                            ui_logger.error(f"{log_prefix} [失败❌] 应用元数据更新时失败: {e}", task_category=task_category)
                     else:
-                        ui_logger.error(f"{log_prefix} 解锁失败，跳过元数据更新。", task_category=task_category)
+                        ui_logger.error(f"{log_prefix} [失败❌] 解锁失败，跳过元数据更新。", task_category=task_category)
 
-                # 4b. 更新图片
                 if image_update_action == "tmdb":
+                    ui_logger.info(f"{log_prefix} [命中✅] 发现 TMDB 官方图，准备更新。", task_category=task_category)
                     image_url = f"https://image.tmdb.org/t/p/original{tmdb_still_path}"
                     if self._upload_image_from_url(emby_episode["Id"], image_url, task_category):
                         final_changes_log.append("图片(TMDB)")
-                        # 清理标记和作废的本地缓存
                         if current_image_source == "screenshot":
                             self._clear_image_source_tag(emby_episode["Id"], task_category)
-                            if config.local_screenshot_caching_enabled:
+                            if config.screenshot_cache_mode != 'none':
                                 self._delete_local_screenshot(series_tmdb_id, season_number, episode_num, task_category)
                 
                 elif image_update_action == "screenshot":
                     if self._handle_screenshot_flow(series_tmdb_id, emby_episode["Id"], emby_episode, config, task_category):
                         final_changes_log.append("图片(截图)")
-                        self._set_image_source_tag(emby_episode["Id"], "screenshot", task_category)
                         if config.screenshot_cooldown > 0:
-                            ui_logger.debug(f"     - [截图-冷却] 等待 {config.screenshot_cooldown} 秒...", task_category=task_category)
+                            ui_logger.debug(f"     - [截图] 操作冷却，等待 {config.screenshot_cooldown} 秒...", task_category=task_category)
                             time.sleep(config.screenshot_cooldown)
 
-                # 5. 最终日志
                 if final_changes_log:
-                    ui_logger.info(f"{log_prefix} 成功更新到Emby，内容: [{', '.join(final_changes_log)}]", task_category=task_category)
+                    ui_logger.info(f"{log_prefix} [成功🎉] 本次更新内容: [{', '.join(final_changes_log)}]", task_category=task_category)
                     updated_count += 1
                 else:
-                    ui_logger.warning(f"{log_prefix} 检测到需要更新，但所有更新操作均失败。", task_category=task_category)
-                
-                # --- 核心逻辑重构结束 ---
+                    ui_logger.warning(f"{log_prefix} [警告⚠️] 检测到需要更新，但所有更新操作均失败。", task_category=task_category)
 
         except Exception as e:
-            ui_logger.error(f"     - 处理 S{season_number:02d} 时发生错误: {e}", task_category=task_category, exc_info=True)
+            ui_logger.error(f"     - [失败❌] 处理 S{season_number:02d} 时发生严重错误: {e}", task_category=task_category, exc_info=True)
         
         return updated_count
 
@@ -676,6 +746,8 @@ class EpisodeRefresherLogic:
         else:
             ui_logger.info(f"  - 截图功能: {'开启' if config.screenshot_enabled else '关闭'}", task_category=task_category)
             if config.screenshot_enabled:
+                mode_map = {'none': '无缓存', 'local': '本地文件缓存', 'remote': '远程图床优先'}
+                ui_logger.info(f"  - 截图缓存模式: {mode_map.get(config.screenshot_cache_mode, '未知')}", task_category=task_category)
                 ui_logger.info(f"  - 智能截图: {'开启' if config.use_smart_screenshot else '关闭'}", task_category=task_category)
         ui_logger.info(f"  - 智能跳过: {'开启' if config.skip_if_complete else '关闭'}", task_category=task_category)
         
@@ -695,11 +767,9 @@ class EpisodeRefresherLogic:
                 task_manager.update_task_progress(task_id, index + 1, total_episodes)
             try:
                 fields_to_get = "SeriesId,SeriesName,Name,Overview,ImageTags,IndexNumber,ParentIndexNumber,PremiereDate,ProviderIds,LockedFields,RunTimeTicks"
-                details_url = f"{self.base_url}/Users/{self.user_id}/Items/{episode_id}"
-                details_params = {**self.params, "Fields": fields_to_get}
-                details_resp = self.session.get(details_url, params=details_params, timeout=15)
-                details_resp.raise_for_status()
-                all_episode_details.append(details_resp.json())
+                details = self._get_emby_item_details(episode_id, fields_to_get)
+                if details:
+                    all_episode_details.append(details)
             except requests.RequestException as e:
                 logging.error(f"【剧集刷新】获取分集详情 (ID: {episode_id}) 失败: {e}，跳过此分集。")
         
@@ -790,7 +860,6 @@ class EpisodeRefresherLogic:
         ui_logger.info(f"【{task_cat}】任务启动，开始从 {len(series_ids)} 个剧集中查找并备份已有截图...", task_category=task_cat)
         ui_logger.info(f"  - 备份配置：覆盖本地文件={'开启' if config.backup_overwrite_local else '关闭'}", task_category=task_cat)
 
-        # 步骤1: 获取所有分集ID
         all_episode_ids = []
         if task_manager and task_id:
             task_manager.update_task_progress(task_id, 0, len(series_ids))
@@ -813,7 +882,6 @@ class EpisodeRefresherLogic:
         
         ui_logger.info(f"【{task_cat}】分集列表获取完毕，共找到 {len(all_episode_ids)} 个分集需要检查。", task_category=task_cat)
 
-        # 步骤2: 遍历所有分集并执行备份
         backed_up_count = 0
         skipped_count = 0
         failed_count = 0
@@ -829,7 +897,6 @@ class EpisodeRefresherLogic:
                 break
             
             try:
-                # 获取分集详细信息
                 ep_details = self._get_emby_item_details(episode_id, fields="ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,Name,SeriesName")
                 if not ep_details:
                     ui_logger.warning(f"  -> 无法获取分集 {episode_id} 的详情，跳过。", task_category=task_cat)
@@ -838,14 +905,12 @@ class EpisodeRefresherLogic:
 
                 log_prefix = f"  -> 正在处理《{ep_details.get('SeriesName', '未知剧集')}》S{ep_details.get('ParentIndexNumber', 0):02d}E{ep_details.get('IndexNumber', 0):02d}:"
 
-                # 检查是否是工具箱生成的截图
                 provider_ids = ep_details.get("ProviderIds", {})
                 if provider_ids.get("ToolboxImageSource") != "screenshot":
                     ui_logger.debug(f"{log_prefix} 非工具箱截图，跳过。", task_category=task_cat)
                     skipped_count += 1
                     continue
 
-                # 获取剧集的TMDB ID
                 series_id = ep_details.get("SeriesId")
                 series_tmdb_id = series_tmdb_id_cache.get(series_id)
                 if not series_tmdb_id:
@@ -857,7 +922,6 @@ class EpisodeRefresherLogic:
                         continue
                     series_tmdb_id_cache[series_id] = series_tmdb_id
                 
-                # 构建本地路径并检查是否需要覆盖
                 local_path = self._get_local_screenshot_path(
                     series_tmdb_id, 
                     ep_details.get("ParentIndexNumber"), 
@@ -873,13 +937,11 @@ class EpisodeRefresherLogic:
                     skipped_count += 1
                     continue
 
-                # 下载图片
                 image_url = f"{self.base_url}/Items/{episode_id}/Images/Primary?api_key={self.api_key}"
                 image_resp = self.session.get(image_url, timeout=30)
                 image_resp.raise_for_status()
                 image_bytes = image_resp.content
 
-                # 保存到本地
                 if self._save_screenshot_to_local(image_bytes, series_tmdb_id, ep_details.get("ParentIndexNumber"), ep_details.get("IndexNumber"), ep_details.get("SeriesName"), task_cat):
                     ui_logger.info(f"{log_prefix} 成功备份到本地。", task_category=task_cat)
                     backed_up_count += 1
@@ -896,3 +958,201 @@ class EpisodeRefresherLogic:
 
         ui_logger.info(f"【{task_cat}】任务执行完毕。成功备份: {backed_up_count} 张, 跳过: {skipped_count} 张, 失败: {failed_count} 张。", task_category=task_cat)
         return {"backed_up_count": backed_up_count, "skipped_count": skipped_count, "failed_count": failed_count}
+
+    # --- 新增：备份到 GitHub 的任务 ---
+    def backup_screenshots_to_github_task(self, config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        task_cat = "备份到GitHub"
+        github_conf = config.github_config
+        
+        ui_logger.info(f"【{task_cat}】任务启动...", task_category=task_cat)
+        
+        if not github_conf.repo_url or not github_conf.personal_access_token:
+            ui_logger.error(f"【{task_cat}】[失败❌] 未配置完整的 GitHub 仓库 URL 和个人访问令牌 (PAT)，任务中止。", task_category=task_cat)
+            raise ValueError("GitHub 仓库 URL 和 PAT 不能为空。")
+
+        douban_data_root = self.app_config.douban_config.directory
+        if not douban_data_root:
+            ui_logger.error(f"【{task_cat}】[失败❌] 未配置豆瓣数据根目录，无法找到本地截图文件夹，任务中止。", task_category=task_cat)
+            raise ValueError("豆瓣数据根目录未配置。")
+
+        local_screenshots_dir = os.path.join(douban_data_root, "EpisodeScreenshots")
+        if not os.path.isdir(local_screenshots_dir):
+            ui_logger.warning(f"【{task_cat}】[跳过] 本地截图目录 '{local_screenshots_dir}' 不存在，没有可备份的文件。", task_category=task_cat)
+            return {"uploaded_count": 0, "skipped_count": 0, "failed_count": 0}
+
+        # 步骤 1: 获取远程状态
+        ui_logger.info(f"【{task_cat}】[步骤 1/5] 正在从 GitHub 获取最新的远程数据库...", task_category=task_cat)
+        remote_db, remote_sha = self._get_remote_db(config, force_refresh=True)
+        if remote_db is None:
+            ui_logger.info(f"【{task_cat}】远程仓库似乎没有 'database.json' 文件，将创建一个新的。", task_category=task_cat)
+            remote_db = {"version": 2, "last_updated": "", "series": {}}
+            remote_sha = None # 新建文件没有 sha
+
+        # 步骤 2: 扫描本地文件
+        ui_logger.info(f"【{task_cat}】[步骤 2/5] 正在扫描本地截图文件夹...", task_category=task_cat)
+        upload_queue = []
+        id_pattern = re.compile(r'\[(\d+)\]$')
+        file_pattern = re.compile(r'season-(\d+)-episode-(\d+)\.jpg')
+
+        for series_dir_name in os.listdir(local_screenshots_dir):
+            series_dir_path = os.path.join(local_screenshots_dir, series_dir_name)
+            if not os.path.isdir(series_dir_path): continue
+            
+            match_id = id_pattern.search(series_dir_name)
+            if not match_id: continue
+            tmdb_id = match_id.group(1)
+
+            for filename in os.listdir(series_dir_path):
+                match_file = file_pattern.match(filename)
+                if not match_file: continue
+                
+                s_num, e_num = match_file.groups()
+                episode_key = f"{s_num}-{e_num}"
+                
+                remote_series_data = remote_db.get("series", {}).get(tmdb_id, {})
+                
+                if episode_key not in remote_series_data or github_conf.overwrite_remote:
+                    upload_queue.append({
+                        "local_path": os.path.join(series_dir_path, filename),
+                        "github_path": f"EpisodeScreenshots/{tmdb_id}/{filename}",
+                        "tmdb_id": tmdb_id,
+                        "episode_key": episode_key
+                    })
+        
+        total_to_upload = len(upload_queue)
+        ui_logger.info(f"【{task_cat}】[步骤 2/5] 本地扫描完成，共发现 {total_to_upload} 个需要上传或更新的截图。", task_category=task_cat)
+        if total_to_upload == 0:
+            ui_logger.info(f"【{task_cat}】本地与远程没有差异，任务完成。", task_category=task_cat)
+            return {"uploaded_count": 0, "skipped_count": 0, "failed_count": 0}
+
+        # 步骤 3: 并发上传
+        ui_logger.info(f"【{task_cat}】[步骤 3/5] 开始并发上传截图，请稍候...", task_category=task_cat)
+        task_manager.update_task_progress(task_id, 0, total_to_upload)
+        
+        successful_uploads = []
+        failed_uploads = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_item = {executor.submit(self._upload_file_to_github, item, github_conf): item for item in upload_queue}
+            for i, future in enumerate(as_completed(future_to_item)):
+                if cancellation_event.is_set():
+                    ui_logger.warning(f"【{task_cat}】任务在上传阶段被用户取消。", task_category=task_cat)
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    return
+                
+                item = future_to_item[future]
+                try:
+                    download_url = future.result()
+                    if download_url:
+                        item["download_url"] = download_url
+                        successful_uploads.append(item)
+                    else:
+                        failed_uploads.append(item)
+                except Exception as e:
+                    ui_logger.error(f"【{task_cat}】上传文件 '{item['local_path']}' 失败: {e}", task_category=task_cat)
+                    failed_uploads.append(item)
+                
+                task_manager.update_task_progress(task_id, i + 1, total_to_upload)
+
+        ui_logger.info(f"【{task_cat}】[步骤 3/5] 截图上传完成。成功: {len(successful_uploads)}, 失败: {len(failed_uploads)}。", task_category=task_cat)
+        if failed_uploads:
+            ui_logger.error(f"【{task_cat}】由于存在上传失败的截图，任务中止，索引文件将不会更新。", task_category=task_cat)
+            return {"uploaded_count": len(successful_uploads), "skipped_count": 0, "failed_count": len(failed_uploads)}
+
+        # 步骤 4: 合并索引
+        ui_logger.info(f"【{task_cat}】[步骤 4/5] 正在合并索引文件...", task_category=task_cat)
+        final_db = remote_db
+        for item in successful_uploads:
+            tmdb_id = item["tmdb_id"]
+            episode_key = item["episode_key"]
+            if tmdb_id not in final_db["series"]:
+                final_db["series"][tmdb_id] = {}
+            final_db["series"][tmdb_id][episode_key] = item["download_url"]
+        
+        final_db["last_updated"] = datetime.utcnow().isoformat() + "Z"
+
+        # 步骤 5: 提交索引
+        ui_logger.info(f"【{task_cat}】[步骤 5/5] 正在将更新后的索引提交到 GitHub...", task_category=task_cat)
+        if self._upload_db_to_github(final_db, remote_sha, github_conf):
+            ui_logger.info(f"【{task_cat}】[成功🎉] 索引文件成功更新！备份任务全部完成。", task_category=task_cat)
+        else:
+            ui_logger.error(f"【{task_cat}】[失败❌] 索引文件提交失败！图片已上传但未记录，请重新运行备份任务以修复索引。", task_category=task_cat)
+            return {"uploaded_count": len(successful_uploads), "skipped_count": 0, "failed_count": len(failed_uploads) + 1}
+
+        return {"uploaded_count": len(successful_uploads), "skipped_count": 0, "failed_count": 0}
+
+    def _upload_file_to_github(self, item: Dict, github_conf) -> Optional[str]:
+        task_cat = "备份到GitHub"
+        try:
+            with open(item["local_path"], "rb") as f:
+                content = base64.b64encode(f.read()).decode('utf-8')
+            
+            match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
+            owner, repo = match.groups()
+            
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{item['github_path']}"
+            headers = {
+                "Accept": "application/vnd.github.v3+json",
+                "Authorization": f"token {github_conf.personal_access_token}"
+            }
+            
+            # 先获取文件sha（如果存在）
+            sha = None
+            try:
+                proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+                get_resp = self.session.get(api_url, headers=headers, timeout=20, proxies=proxies)
+                if get_resp.status_code == 200:
+                    sha = get_resp.json().get('sha')
+            except Exception:
+                pass # 获取失败也没关系，说明是新文件
+
+            payload = {
+                "message": f"feat: Add screenshot for {item['github_path']}",
+                "content": content,
+                "branch": github_conf.branch
+            }
+            if sha:
+                payload["sha"] = sha
+
+            proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+            put_resp = self.session.put(api_url, headers=headers, json=payload, timeout=60, proxies=proxies)
+            
+            if put_resp.status_code not in [200, 201]:
+                raise Exception(f"GitHub API 返回错误: {put_resp.status_code} - {put_resp.text}")
+            
+            return put_resp.json()["content"]["download_url"]
+        except Exception as e:
+            ui_logger.error(f"【{task_cat}】上传文件 '{item['local_path']}' 时发生错误: {e}", task_category=task_cat)
+            return None
+
+    def _upload_db_to_github(self, db_content: Dict, sha: Optional[str], github_conf) -> bool:
+        task_cat = "备份到GitHub"
+        try:
+            content = base64.b64encode(json.dumps(db_content, indent=2, ensure_ascii=False).encode('utf-8')).decode('utf-8')
+            
+            match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
+            owner, repo = match.groups()
+            
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/database.json"
+            headers = {
+                "Accept": "application/vnd.github.v3+json",
+                "Authorization": f"token {github_conf.personal_access_token}"
+            }
+            
+            payload = {
+                "message": f"feat: Update database.json - {datetime.utcnow().isoformat()}",
+                "content": content,
+                "branch": github_conf.branch
+            }
+            if sha:
+                payload["sha"] = sha
+
+            proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+            put_resp = self.session.put(api_url, headers=headers, json=payload, timeout=60, proxies=proxies)
+            
+            if put_resp.status_code not in [200, 201]:
+                raise Exception(f"GitHub API 返回错误: {put_resp.status_code} - {put_resp.text}")
+            
+            return True
+        except Exception as e:
+            ui_logger.error(f"【{task_cat}】上传 database.json 时发生错误: {e}", task_category=task_cat)
+            return False
