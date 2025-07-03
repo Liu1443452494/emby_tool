@@ -626,6 +626,8 @@ class EpisodeRefresherLogic:
         except Exception as e:
             ui_logger.error(f"     - [失败❌] 移除图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
 
+    # 在 backend/episode_refresher_logic.py 文件中
+
     def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str) -> int:
         updated_count = 0
         try:
@@ -644,6 +646,7 @@ class EpisodeRefresherLogic:
                 if episode_num is None:
                     continue
                 
+                # --- 日志优化：将集数信息放到 log_prefix 中 ---
                 log_prefix = f"     - S{season_number:02d}E{episode_num:02d}:"
                 ui_logger.info(f"➡️ 开始处理《{series_name_for_log}》S{season_number:02d}E{episode_num:02d}: {emby_episode.get('Name')}", task_category=task_category)
 
@@ -672,17 +675,23 @@ class EpisodeRefresherLogic:
                 emby_has_image = bool(emby_episode.get("ImageTags", {}).get("Primary"))
                 tmdb_still_path = tmdb_episode.get("still_path") if tmdb_episode else None
 
+                # --- 核心 Bug 修复：重构图片更新决策逻辑 ---
+                ui_logger.debug(f"{log_prefix} [决策] 检查外部数据源...")
                 if tmdb_still_path:
-                    ui_logger.debug(f"{log_prefix} [决策] 检查外部数据源...")
                     if not emby_has_image or current_image_source == "screenshot":
                         image_update_action = "tmdb"
                     else:
                         ui_logger.info(f"{log_prefix} [保护🛡️] Emby 已有用户自定义图片，跳过图片更新。", task_category=task_category)
                 elif config.screenshot_enabled:
-                    if not emby_has_image or current_image_source == "screenshot":
+                    # 只有在 Emby 没图，或者有图但用户要求强制覆盖时，才考虑截图
+                    if not emby_has_image:
+                        image_update_action = "screenshot"
+                    elif current_image_source == "screenshot" and config.force_overwrite_screenshots:
                         image_update_action = "screenshot"
                     else:
-                        ui_logger.info(f"{log_prefix} [保护🛡️] Emby 已有用户自定义图片，跳过截图。", task_category=task_category)
+                        # 包含了“有用户图”和“有截图但未强制覆盖”两种情况
+                        ui_logger.info(f"{log_prefix} [跳过] Emby 中已有图片且未开启强制覆盖，无需截图。", task_category=task_category)
+                # --- 修复结束 ---
 
                 if not potential_changes and not image_update_action:
                     ui_logger.info(f"{log_prefix} [跳过] 元数据和图片均无需更新。", task_category=task_category)
