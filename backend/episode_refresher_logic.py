@@ -444,9 +444,16 @@ class EpisodeRefresherLogic:
         if not github_conf.repo_url:
             return None, None
 
-        lock_path = GITHUB_DB_CACHE_FILE + ".lock"
+        # --- 核心修改：定义锁文件目录和路径 ---
+        lock_dir = os.path.join(os.path.dirname(GITHUB_DB_CACHE_FILE), "locks")
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_path = os.path.join(lock_dir, os.path.basename(GITHUB_DB_CACHE_FILE) + ".lock")
+        # --- 结束修改 ---
+
         try:
+            # --- 核心修改：使用新的 lock_path ---
             with FileLock(lock_path, timeout=5):
+            # --- 结束修改 ---
                 if not force_refresh and os.path.exists(GITHUB_DB_CACHE_FILE):
                     mtime = os.path.getmtime(GITHUB_DB_CACHE_FILE)
                     if time.time() - mtime < GITHUB_DB_CACHE_DURATION:
@@ -462,13 +469,10 @@ class EpisodeRefresherLogic:
                 raise ValueError("无效的 GitHub 仓库 URL 格式。")
             owner, repo = match.groups()
             
-            # --- 新增：下载冷却 ---
             if github_conf.download_cooldown > 0:
                 ui_logger.debug(f"     - [远程图床] ⏱️ 下载冷却 {github_conf.download_cooldown} 秒...", task_category=task_cat)
                 time.sleep(github_conf.download_cooldown)
-            # --- 结束新增 ---
 
-            # 优先尝试 Raw URL
             raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{github_conf.branch}/database.json"
             ui_logger.debug(f"     - [远程图床] 正在从 Raw URL 下载数据库: {raw_url}", task_category=task_cat)
             proxies = self.tmdb_logic.proxy_manager.get_proxies(raw_url)
@@ -476,14 +480,15 @@ class EpisodeRefresherLogic:
             
             if response.status_code == 200:
                 db_content = response.json()
+                # --- 核心修改：使用新的 lock_path ---
                 with FileLock(lock_path, timeout=5):
+                # --- 结束修改 ---
                     with open(GITHUB_DB_CACHE_FILE, 'w', encoding='utf-8') as f:
                         json.dump(db_content, f, ensure_ascii=False)
-                return db_content, None # 通过 Raw URL 获取时，无法得到 sha
+                return db_content, None 
             
             ui_logger.warning(f"     - [远程图床] 从 Raw URL 下载失败 (状态码: {response.status_code})，将尝试使用 API 获取...", task_category=task_cat)
             
-            # 使用 API 作为备用方案
             api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/database.json?ref={github_conf.branch}"
             headers = {"Accept": "application/vnd.github.v3+json"}
             if github_conf.personal_access_token:
@@ -498,7 +503,9 @@ class EpisodeRefresherLogic:
             db_content = json.loads(content)
             sha = api_data.get('sha')
 
+            # --- 核心修改：使用新的 lock_path ---
             with FileLock(lock_path, timeout=5):
+            # --- 结束修改 ---
                 with open(GITHUB_DB_CACHE_FILE, 'w', encoding='utf-8') as f:
                     json.dump(db_content, f, ensure_ascii=False)
             
@@ -1137,23 +1144,27 @@ class EpisodeRefresherLogic:
             api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{item['github_path']}"
             
             sha = None
-            try:
-                get_headers = {
-                    "Accept": "application/vnd.github.v3+json",
-                    "Authorization": f"token {github_conf.personal_access_token}"
-                }
-                proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
-                get_resp = self.session.get(api_url, headers=get_headers, timeout=20, proxies=proxies)
-                if get_resp.status_code == 200:
-                    sha = get_resp.json().get('sha')
-            except Exception:
-                pass
+            # --- 核心修改：只有在非覆盖模式下才获取 SHA ---
+            if not github_conf.overwrite_remote:
+                try:
+                    get_headers = {
+                        "Accept": "application/vnd.github.v3+json",
+                        "Authorization": f"token {github_conf.personal_access_token}"
+                    }
+                    proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+                    get_resp = self.session.get(api_url, headers=get_headers, timeout=20, proxies=proxies)
+                    if get_resp.status_code == 200:
+                        sha = get_resp.json().get('sha')
+                except Exception:
+                    # 获取SHA失败是正常的（比如文件第一次上传），静默处理
+                    pass
 
             payload_dict = {
                 "message": f"feat: Add screenshot for {item['github_path']}",
                 "content": content_b64,
                 "branch": github_conf.branch
             }
+            # --- 核心修改：只有在获取到 SHA 的情况下才附带它 ---
             if sha:
                 payload_dict["sha"] = sha
 
@@ -1180,9 +1191,17 @@ class EpisodeRefresherLogic:
             try:
                 response_data = json.loads(result.stdout)
             except json.JSONDecodeError:
+                # --- 核心修改：当cURL返回非JSON时，检查stderr是否有明确的GitHub错误 ---
+                # 这种情况通常发生在API返回错误HTML页面时
+                if "409 Conflict" in result.stderr:
+                     raise Exception(f"GitHub API 返回 409 Conflict 错误，这通常是并发写入冲突导致的。请稍后重试。")
                 raise Exception(f"cURL 返回了非JSON响应: {result.stdout} | 错误: {result.stderr}")
 
-            if result.returncode != 0 or 'download_url' not in response_data.get('content', {}):
+            # --- 核心修改：更健壮的错误判断 ---
+            if result.returncode != 0 or 'content' not in response_data or 'download_url' not in response_data.get('content', {}):
+                 # 检查是否有来自GitHub API的明确错误消息
+                 if "message" in response_data and "documentation_url" in response_data:
+                     raise Exception(f"GitHub API 错误: {response_data['message']} (状态码: {response_data.get('status', '未知')})")
                  raise Exception(f"cURL 上传失败。返回码: {result.returncode}, 输出: {result.stdout}, 错误: {result.stderr}")
 
             return response_data["content"]["download_url"]

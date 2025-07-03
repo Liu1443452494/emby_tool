@@ -222,16 +222,22 @@ class EpisodeRenamerLogic:
             "status": "pending_clouddrive_rename"
         }
 
-        lock_path = RENAME_LOG_FILE + ".lock"
+        # --- 核心修改：定义锁文件目录和路径 ---
+        lock_dir = os.path.join(os.path.dirname(RENAME_LOG_FILE), "locks")
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_path = os.path.join(lock_dir, os.path.basename(RENAME_LOG_FILE) + ".lock")
+        # --- 结束修改 ---
+
         try:
+            # --- 核心修改：使用新的 lock_path ---
             with FileLock(lock_path, timeout=10):
+            # --- 结束修改 ---
                 if os.path.exists(RENAME_LOG_FILE):
                     with open(RENAME_LOG_FILE, 'r', encoding='utf-8') as f:
                         logs = json.load(f)
                 else:
                     logs = []
                 
-                # 检查是否已存在相同的待处理任务
                 pending_exists = any(
                     log.get('series_id') == series_id and
                     log.get('season_number') == season_number and
@@ -392,6 +398,12 @@ class EpisodeRenamerLogic:
         updated_count = 0
         failed_logs = []
 
+        # --- 核心修改：定义锁文件目录和路径 ---
+        lock_dir = os.path.join(os.path.dirname(RENAME_LOG_FILE), "locks")
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_path = os.path.join(lock_dir, os.path.basename(RENAME_LOG_FILE) + ".lock")
+        # --- 结束修改 ---
+
         for index, log_entry in enumerate(log_entries):
             if cancellation_event.is_set():
                 ui_logger.warning(f"【{task_cat}】任务被用户取消。", task_category=task_cat)
@@ -413,14 +425,12 @@ class EpisodeRenamerLogic:
                 failed_logs.append(log_entry)
                 continue
 
-            # 从最新的分集详情中获取旧的URL，这是我们操作的起点
             old_strm_url = latest_episode_details.get("MediaSources", [{}])[0].get("Path")
             if not old_strm_url:
                 log_entry['error'] = "在MediaSources中未找到URL"
                 failed_logs.append(log_entry)
                 continue
 
-            # 1. 解析旧URL，分离出前缀和旧文件名
             try:
                 last_q_mark = old_strm_url.rfind('?')
                 last_slash = old_strm_url.rfind('/')
@@ -434,7 +444,6 @@ class EpisodeRenamerLogic:
                 failed_logs.append(log_entry)
                 continue
 
-            # 2. 计算网盘文件路径
             emby_root = self.renamer_config.emby_path_root
             clouddrive_root = self.renamer_config.clouddrive_path_root
             if not old_base_path.startswith(emby_root):
@@ -446,24 +455,20 @@ class EpisodeRenamerLogic:
             clouddrive_dir = os.path.join(clouddrive_root, relative_dir)
             old_clouddrive_path = os.path.join(clouddrive_dir, old_clouddrive_filename_from_url)
 
-            # 3. 检查旧文件是否存在
             if not os.path.exists(old_clouddrive_path):
                 ui_logger.error(f"     - 网盘文件不存在: {old_clouddrive_path}", task_category=task_cat)
                 log_entry['error'] = "网盘文件不存在"
                 failed_logs.append(log_entry)
                 continue
 
-            # 4. 计算新文件名和新路径
             _, old_ext = os.path.splitext(old_clouddrive_filename_from_url)
             new_clouddrive_filename = os.path.basename(new_base_path) + old_ext
             new_clouddrive_path = os.path.join(clouddrive_dir, new_clouddrive_filename)
 
             try:
-                # 5. 重命名网盘文件
                 os.rename(old_clouddrive_path, new_clouddrive_path)
                 ui_logger.info(f"     - 成功重命名网盘文件 -> {new_clouddrive_filename}", task_category=task_cat)
 
-                # 6. 回写本地 .strm 文件
                 local_strm_path = f"{new_base_path}.strm"
                 if os.path.exists(local_strm_path):
                     new_strm_url = f"{url_prefix}{new_clouddrive_filename}"
@@ -473,10 +478,10 @@ class EpisodeRenamerLogic:
                 else:
                     ui_logger.warning(f"     - 未找到本地 .strm 文件进行更新: {local_strm_path}", task_category=task_cat)
 
-                # 7. 更新日志状态
                 updated_count += 1
-                lock_path = RENAME_LOG_FILE + ".lock"
+                # --- 核心修改：使用新的 lock_path ---
                 with FileLock(lock_path, timeout=10):
+                # --- 结束修改 ---
                     if os.path.exists(RENAME_LOG_FILE):
                         with open(RENAME_LOG_FILE, 'r', encoding='utf-8') as f: all_logs = json.load(f)
                         for log in all_logs:
@@ -490,12 +495,9 @@ class EpisodeRenamerLogic:
                 failed_logs.append(log_entry)
 
             if self.renamer_config.clouddrive_rename_cooldown > 0:
-            
                 ui_logger.debug(f"     - [网盘重命名-冷却] 等待 {self.renamer_config.clouddrive_rename_cooldown} 秒...", task_category=task_cat)
+                time.sleep(self.renamer_config.clouddrive_rename_cooldown)
             
-            time.sleep(self.renamer_config.clouddrive_rename_cooldown)
-            
-
         ui_logger.info(f"【{task_cat}】任务执行完毕。成功: {updated_count}, 失败: {len(failed_logs)}", task_category=task_cat)
         return {"updated_count": updated_count, "failed_logs": failed_logs}
     
@@ -511,6 +513,12 @@ class EpisodeRenamerLogic:
         failed_logs = []
         series_to_refresh = set()
 
+        # --- 核心修改：定义锁文件目录和路径 ---
+        lock_dir = os.path.join(os.path.dirname(RENAME_LOG_FILE), "locks")
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_path = os.path.join(lock_dir, os.path.basename(RENAME_LOG_FILE) + ".lock")
+        # --- 结束修改 ---
+
         for index, log_entry in enumerate(log_entries):
             if cancellation_event.is_set():
                 ui_logger.warning(f"【{task_cat}】任务被用户取消。", task_category=task_cat)
@@ -525,16 +533,14 @@ class EpisodeRenamerLogic:
             ui_logger.info(f"  -> 正在撤销: {os.path.basename(new_base_path)} -> {os.path.basename(old_base_path)}", task_category=task_cat)
 
             try:
-                # --- 核心修正：将错误的变量名 task_category 改为正确的 task_cat ---
                 if self._rename_associated_files(new_base_path, old_base_path, task_cat):
-                # --- 修正结束 ---
                     undone_count += 1
                     if series_id:
                         series_to_refresh.add(series_id)
                     
-                    # 从日志文件中移除该条记录
-                    lock_path = RENAME_LOG_FILE + ".lock"
+                    # --- 核心修改：使用新的 lock_path ---
                     with FileLock(lock_path, timeout=10):
+                    # --- 结束修改 ---
                         if os.path.exists(RENAME_LOG_FILE):
                             with open(RENAME_LOG_FILE, 'r', encoding='utf-8') as f:
                                 all_logs = json.load(f)
@@ -568,7 +574,6 @@ class EpisodeRenamerLogic:
 
         import requests
         try:
-            # 同时获取剧集详情和分集列表
             series_details = self._get_episode_details(series_id, fields="Name,ProductionYear")
             if not series_details:
                 ui_logger.error(f"【{task_cat}】获取剧集 {series_id} 的详情失败，无法继续。", task_category=task_cat)
@@ -621,8 +626,15 @@ class EpisodeRenamerLogic:
         ui_logger.info(f"【{task_cat}】扫描完成，共发现 {len(results)} 个可重命名的项目。", task_category=task_cat)
         
         if results:
-            lock_path = RENAME_LOG_FILE + ".lock"
+            # --- 核心修改：定义锁文件目录和路径 ---
+            lock_dir = os.path.join(os.path.dirname(RENAME_LOG_FILE), "locks")
+            os.makedirs(lock_dir, exist_ok=True)
+            lock_path = os.path.join(lock_dir, os.path.basename(RENAME_LOG_FILE) + ".lock")
+            # --- 结束修改 ---
+            
+            # --- 核心修改：使用新的 lock_path ---
             with FileLock(lock_path, timeout=10):
+            # --- 结束修改 ---
                 if os.path.exists(RENAME_LOG_FILE):
                     with open(RENAME_LOG_FILE, 'r', encoding='utf-8') as f:
                         all_logs = json.load(f)

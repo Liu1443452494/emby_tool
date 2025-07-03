@@ -75,15 +75,22 @@ class WebhookLogic:
         except (IOError, json.JSONDecodeError) as e:
             logging.error(f"【Webhook-快速检查】读取主缓存文件失败: {e}")
             return False
-    # --- 结束新增 ---
+    
 
     def _update_douban_cache_incrementally(self, douban_id: str, media_type: str) -> bool:
         logging.info(f"【Webhook-数据同步】开始为豆瓣ID {douban_id} 执行增量缓存更新...")
         
         try:
             from filelock import FileLock, Timeout
-            lock_path = DOUBAN_CACHE_FILE + ".lock"
+            # --- 核心修改：定义锁文件目录和路径 ---
+            lock_dir = os.path.join(os.path.dirname(DOUBAN_CACHE_FILE), "locks")
+            os.makedirs(lock_dir, exist_ok=True)
+            lock_path = os.path.join(lock_dir, os.path.basename(DOUBAN_CACHE_FILE) + ".lock")
+            # --- 结束修改 ---
+
+            # --- 核心修改：使用新的 lock_path ---
             lock = FileLock(lock_path, timeout=10)
+            # --- 结束修改 ---
             with lock:
                 if os.path.exists(DOUBAN_CACHE_FILE):
                     with open(DOUBAN_CACHE_FILE, 'r', encoding='utf-8') as f:
@@ -167,7 +174,6 @@ class WebhookLogic:
             logging.error(f"【Webhook-数据同步】处理或写入新豆瓣数据时失败: {e}", exc_info=True)
             return False
 
-    # backend/webhook_logic.py (修改 process_new_media_task 函数)
 
     def process_new_media_task(self, item_id: str, cancellation_event: threading.Event):
         item_details_pre = self._get_emby_item_details(item_id)
