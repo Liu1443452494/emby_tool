@@ -1214,14 +1214,15 @@ class EpisodeRefresherLogic:
             return None
 
 
+    # === 文件: backend/episode_refresher_logic.py === #
+# 请使用下面的完整函数代码覆盖源文件中的 _upload_db_to_github 函数
+
     def _upload_db_to_github(self, db_content: Dict, sha: Optional[str], github_conf) -> bool:
         task_cat = "备份到GitHub"
         try:
-            # --- 新增：上传冷却 ---
             if github_conf.upload_cooldown > 0:
                 ui_logger.debug(f"     - [GitHub上传] ⏱️ 上传冷却 {github_conf.upload_cooldown} 秒...", task_category=task_cat)
                 time.sleep(github_conf.upload_cooldown)
-            # --- 结束新增 ---
 
             content_b64 = base64.b64encode(json.dumps(db_content, indent=2, ensure_ascii=False).encode('utf-8')).decode('utf-8')
             
@@ -1230,13 +1231,33 @@ class EpisodeRefresherLogic:
             
             api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/database.json"
             
+            # --- 核心修改：在上传前，重新获取一次最新的 SHA ---
+            latest_sha = None
+            try:
+                ui_logger.debug(f"     - [GitHub上传] 正在为 'database.json' 查询最新的 SHA...", task_category=task_cat)
+                get_headers = {
+                    "Accept": "application/vnd.github.v3+json",
+                    "Authorization": f"token {github_conf.personal_access_token}"
+                }
+                proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+                get_resp = self.session.get(api_url, headers=get_headers, timeout=20, proxies=proxies)
+                if get_resp.status_code == 200:
+                    latest_sha = get_resp.json().get('sha')
+                    ui_logger.debug(f"     - [GitHub上传] 成功获取到 'database.json' 的最新 SHA: {latest_sha}", task_category=task_cat)
+                else:
+                    ui_logger.debug(f"     - [GitHub上传] 'database.json' 在远程不存在，将作为新文件创建。", task_category=task_cat)
+            except Exception as e:
+                ui_logger.debug(f"     - [GitHub上传] 查询 'database.json' 的 SHA 时发生异常: {e}", task_category=task_cat)
+            # --- 结束核心修改 ---
+
             payload_dict = {
                 "message": f"feat: Update database.json - {datetime.utcnow().isoformat()}",
                 "content": content_b64,
                 "branch": github_conf.branch
             }
-            if sha:
-                payload_dict["sha"] = sha
+            # --- 核心修改：使用最新获取的 SHA ---
+            if latest_sha:
+                payload_dict["sha"] = latest_sha
 
             payload_json_str = json.dumps(payload_dict)
 
