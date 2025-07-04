@@ -449,7 +449,7 @@
               <el-button 
                 type="danger" 
                 plain 
-                @click="isPreciseUpdateDialogVisible = true"
+                @click="openPreciseUpdateDialog"
                 :disabled="!localRefresherConfig.github_config.personal_access_token"
               >
                 打开精准覆盖工具
@@ -715,11 +715,6 @@ services:
       </template>
     </el-dialog>
 <DeletionReviewDialog v-model:visible="isReviewDialogVisible" />
-<PreciseUpdateDialog 
-  v-if="isPreciseUpdateDialogVisible"
-  v-model:visible="isPreciseUpdateDialogVisible" 
-  :config="localRefresherConfig"
-/>
 <!-- --- 新增结束 --- -->
   </div>
 </template>
@@ -730,9 +725,8 @@ import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
 import { useEpisodeRenamerStore } from '@/stores/episodeRenamer';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Setting, ArrowDown, Finished, Upload, QuestionFilled, Delete } from '@element-plus/icons-vue';
-import DeletionReviewDialog from '@/components/DeletionReviewDialog.vue';
-import PreciseUpdateDialog from '@/components/PreciseUpdateDialog.vue';
+import { Setting, ArrowDown, Finished, Upload, QuestionFilled, Aim, Delete } from '@element-plus/icons-vue';
+import DeletionReviewDialog from '@/components/DeletionReviewDialog.vue'; 
 import cronstrue from 'cronstrue/i18n';
 import _ from 'lodash';
 import { API_BASE_URL } from '@/config/apiConfig';
@@ -773,9 +767,15 @@ const dialogSelection = ref([]);
 const parsedRepoInfo = ref('');
 const dbRawUrl = ref('');
 
-// --- 核心修改：只保留一个状态来控制新组件的显示 ---
+// 新增：精准覆盖功能相关状态
 const isPreciseUpdateDialogVisible = ref(false);
-const isGithubCleanupRunning = ref(false);
+const preciseSearchQuery = ref('');
+const selectedSeriesForPreciseUpdate = ref(null);
+const isFetchingEpisodes = ref(false);
+const episodesForSelection = ref([]);
+const selectedEpisodes = ref([]);
+const isPreciseUpdating = ref(false);
+const isGithubCleanupRunning = ref(false); 
 
 
 definedTasks.value.forEach(taskDef => {
@@ -1072,6 +1072,23 @@ const parseRepoUrl = () => {
   }
 };
 
+const getProviderId = (row, providerName) => {
+  if (!row.ProviderIds) return null;
+  const lowerProviderName = providerName.toLowerCase();
+  const providerKey = Object.keys(row.ProviderIds).find(key => key.toLowerCase() === lowerProviderName);
+  return providerKey ? row.ProviderIds[providerKey] : null;
+};
+
+// --- 新增：精准覆盖相关函数 ---
+const openPreciseUpdateDialog = () => {
+  isPreciseUpdateDialogVisible.value = true;
+  preciseSearchQuery.value = '';
+  mediaStore.searchResults = [];
+  selectedSeriesForPreciseUpdate.value = null;
+  episodesForSelection.value = [];
+  selectedEpisodes.value = [];
+};
+
 const handleCleanupGithub = async () => {
   try {
     await ElMessageBox.confirm(
@@ -1102,6 +1119,92 @@ const handleCleanupGithub = async () => {
     isGithubCleanupRunning.value = false;
   }
 };
+
+const handlePreciseSearch = () => {
+  mediaStore.searchMedia(preciseSearchQuery.value);
+};
+
+const handlePreciseSeriesSelection = async (series) => {
+  if (!series) {
+    selectedSeriesForPreciseUpdate.value = null;
+    episodesForSelection.value = [];
+    return;
+  }
+  
+  const tmdbId = getProviderId(series, 'tmdb');
+  if (!tmdbId) {
+    ElMessage.warning('该剧集缺少 TMDB ID，无法进行后续操作。');
+    selectedSeriesForPreciseUpdate.value = null;
+    episodesForSelection.value = [];
+    return;
+  }
+
+  selectedSeriesForPreciseUpdate.value = series;
+  isFetchingEpisodes.value = true;
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/episodes/${series.Id}`);
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.detail || '获取分集列表失败');
+    }
+    const episodes = await response.json();
+    episodesForSelection.value = _.sortBy(episodes, ['ParentIndexNumber', 'IndexNumber']);
+  } catch (error) {
+    ElMessage.error(`获取分集列表失败: ${error.message}`);
+    episodesForSelection.value = [];
+  } finally {
+    isFetchingEpisodes.value = false;
+  }
+};
+
+const handlePreciseEpisodeSelection = (selection) => {
+  selectedEpisodes.value = selection;
+};
+
+const handlePreciseUpdate = async () => {
+  if (selectedEpisodes.value.length === 0) {
+    ElMessage.warning('请至少选择一个分集进行更新。');
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `即将为您选中的 ${selectedEpisodes.value.length} 个分集，从本地查找新截图并上传覆盖到 GitHub。请确保您已在本地准备好了新的截图文件。是否继续？`,
+      '确认精准覆盖操作',
+      { confirmButtonText: '开始更新', cancelButtonText: '取消', type: 'info' }
+    );
+
+    isPreciseUpdating.value = true;
+    const payload = {
+      series_tmdb_id: getProviderId(selectedSeriesForPreciseUpdate.value, 'tmdb'),
+      series_name: selectedSeriesForPreciseUpdate.value.Name,
+      episodes: selectedEpisodes.value.map(ep => ({
+        season_number: ep.ParentIndexNumber,
+        episode_number: ep.IndexNumber
+      })),
+      config: localRefresherConfig.value
+    };
+
+    const response = await fetch(`${API_BASE_URL}/api/episode-refresher/precise-upload-from-local`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || '启动任务失败');
+    
+    ElMessage.success(data.message);
+    isPreciseUpdateDialogVisible.value = false;
+
+  } catch (error) {
+    if (error && error.message) {
+      ElMessage.error(`启动任务失败: ${error.message}`);
+    }
+  } finally {
+    isPreciseUpdating.value = false;
+  }
+};
+
 </script>
 
 <style scoped>

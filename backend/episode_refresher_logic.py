@@ -1303,94 +1303,6 @@ class EpisodeRefresherLogic:
             return False
         
 
-    def get_local_screenshots_for_update(self) -> List[Dict]:
-        """扫描本地截图目录，并匹配Emby信息，返回可供精准覆盖的列表"""
-        task_cat = "精准覆盖-扫描"
-        ui_logger.info(f"【{task_cat}】任务启动，开始扫描本地截图目录...", task_category=task_cat)
-
-        douban_data_root = self.app_config.douban_config.directory
-        if not douban_data_root:
-            ui_logger.error(f"【{task_cat}】❌ 未配置豆瓣数据根目录，无法查找本地截图。", task_category=task_cat)
-            return []
-
-        local_screenshots_dir = os.path.join(douban_data_root, "EpisodeScreenshots")
-        if not os.path.isdir(local_screenshots_dir):
-            ui_logger.warning(f"【{task_cat}】⚠️ 本地截图目录 '{local_screenshots_dir}' 不存在，没有可操作的文件。", task_category=task_cat)
-            return []
-
-        # 1. 扫描本地文件
-        ui_logger.info(f"【{task_cat}】[步骤 1/3] 正在扫描本地文件...", task_category=task_cat)
-        local_files_map = defaultdict(list)
-        id_pattern = re.compile(r'\[(\d+)\]$')
-        file_pattern = re.compile(r'season-(\d+)-episode-(\d+)\.jpg', re.IGNORECASE)
-
-        for series_dir_name in os.listdir(local_screenshots_dir):
-            series_dir_path = os.path.join(local_screenshots_dir, series_dir_name)
-            if not os.path.isdir(series_dir_path): continue
-            
-            match_id = id_pattern.search(series_dir_name)
-            if not match_id: continue
-            tmdb_id = match_id.group(1)
-
-            for filename in os.listdir(series_dir_path):
-                match_file = file_pattern.match(filename)
-                if not match_file: continue
-                s_num, e_num = map(int, match_file.groups())
-                local_files_map[tmdb_id].append({"season": s_num, "episode": e_num})
-        
-        ui_logger.info(f"【{task_cat}】[步骤 1/3] 本地扫描完成，发现 {len(local_files_map)} 个剧集的截图。", task_category=task_cat)
-
-        # 2. 匹配Emby信息
-        ui_logger.info(f"【{task_cat}】[步骤 2/3] 正在从Emby匹配分集信息...", task_category=task_cat)
-        
-        # 2a. 构建 TMDB ID -> Emby Series ID 的映射
-        all_series_url = f"{self.base_url}/Items"
-        all_series_params = {**self.params, "IncludeItemTypes": "Series", "Recursive": "true", "Fields": "ProviderIds,Name"}
-        all_series_resp = self.session.get(all_series_url, params=all_series_params, timeout=60)
-        all_series_resp.raise_for_status()
-        
-        tmdb_to_emby_map = {}
-        for series in all_series_resp.json().get("Items", []):
-            provider_ids = series.get("ProviderIds", {})
-            s_tmdb_id = next((v for k, v in provider_ids.items() if k.lower() == 'tmdb'), None)
-            if s_tmdb_id:
-                tmdb_to_emby_map[s_tmdb_id] = {"id": series["Id"], "name": series["Name"]}
-
-        # 2b. 批量获取分集并聚合
-        results = []
-        for tmdb_id, episodes in local_files_map.items():
-            if tmdb_id not in tmdb_to_emby_map:
-                ui_logger.warning(f"【{task_cat}】⚠️ 在Emby中未找到TMDB ID为 {tmdb_id} 的剧集，跳过。", task_category=task_cat)
-                continue
-            
-            emby_series_info = tmdb_to_emby_map[tmdb_id]
-            emby_series_id = emby_series_info["id"]
-            
-            episodes_url = f"{self.base_url}/Items"
-            episodes_params = {**self.params, "ParentId": emby_series_id, "IncludeItemTypes": "Episode", "Recursive": "true", "Fields": "Name,IndexNumber,ParentIndexNumber"}
-            episodes_resp = self.session.get(episodes_url, params=episodes_params, timeout=30)
-            
-            if not episodes_resp.ok:
-                ui_logger.warning(f"【{task_cat}】⚠️ 获取剧集 {emby_series_info['name']} 的分集列表失败，跳过。", task_category=task_cat)
-                continue
-            
-            emby_episodes_map = {(ep.get("ParentIndexNumber"), ep.get("IndexNumber")): ep.get("Name", "") for ep in episodes_resp.json().get("Items", [])}
-
-            for ep_info in episodes:
-                s_num, e_num = ep_info["season"], ep_info["episode"]
-                episode_name = emby_episodes_map.get((s_num, e_num), f"S{s_num:02d}E{e_num:02d} (Emby中未找到标题)")
-                results.append({
-                    "series_tmdb_id": tmdb_id,
-                    "series_name": emby_series_info["name"],
-                    "season_number": s_num,
-                    "episode_number": e_num,
-                    "episode_name": episode_name
-                })
-        
-        ui_logger.info(f"【{task_cat}】[步骤 3/3] 信息匹配完成，共找到 {len(results)} 个可操作的分集。", task_category=task_cat)
-        return results
-        
-
     def precise_upload_from_local_task(self, series_tmdb_id: str, series_name: str, episodes: List[Dict], config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
         根据前端指令，从本地读取已有的新截图，并精准上传覆盖到 GitHub。
@@ -1532,8 +1444,6 @@ class EpisodeRefresherLogic:
         except Exception as e:
             ui_logger.error(f"{log_prefix} ❌ 写入待删除日志时发生错误: {e}", task_category=task_cat, exc_info=True)
 
-
-
     def get_github_delete_log(self) -> List[Dict]:
         task_cat = "远程清理-审核"
         if not os.path.exists(GITHUB_DELETE_LOG_FILE):
@@ -1612,6 +1522,7 @@ class EpisodeRefresherLogic:
                     "github_info": {"image_url": github_url}
                 })
         return results
+
     def save_github_delete_log(self, new_log_data: Dict):
         task_cat = "远程清理-审核"
         lock_dir = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks")

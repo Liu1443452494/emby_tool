@@ -426,14 +426,6 @@ class PreciseScreenshotUpdateRequest(BaseModel):
     episodes: List[Dict[str, Any]] # 包含 season_number, episode_number 的字典列表
     config: "EpisodeRefresherConfig"
 
-class LocalScreenshot(BaseModel):
-    """用于精准覆盖列表的本地截图信息模型"""
-    series_tmdb_id: str
-    series_name: str
-    season_number: int
-    episode_number: int
-    episode_name: str
-    
 class EmbyWebhookPayload(BaseModel):
     Event: str
     User: Optional[Dict[str, Any]] = None
