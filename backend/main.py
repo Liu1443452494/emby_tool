@@ -1286,6 +1286,17 @@ def cleanup_github_screenshots_api():
     )
     return {"status": "success", "message": "清理任务已启动。", "task_id": task_id}
 
+@app.get("/api/episode-refresher/local-screenshots-for-update", response_model=List[LocalScreenshot])
+def get_local_screenshots_for_update_api():
+    """扫描本地截图并匹配Emby信息，返回可供精准覆盖的列表"""
+    try:
+        config = app_config.load_app_config()
+        logic = EpisodeRefresherLogic(config)
+        return logic.get_local_screenshots_for_update()
+    except Exception as e:
+        ui_logger.error(f"获取本地可更新截图列表失败: {e}", task_category="API-精准覆盖", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     try:
