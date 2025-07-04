@@ -221,8 +221,8 @@ const handleBatchDownload = () => {
 };
 
 const handleSingleDownload = (row) => {
-  const singleDownloadTypes = ['poster', 'logo', 'backdrop', 'nfo'];
-  mediaStore.downloadSingleItem(row.Id, singleDownloadTypes);
+  // --- 核心修改：不再使用硬编码的列表，而是直接使用复选框的状态 ---
+  mediaStore.downloadSingleItem(row.Id, downloadContentTypes.value);
 };
 
 const handleStopBatchDownload = async () => {
