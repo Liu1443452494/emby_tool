@@ -706,6 +706,8 @@ def force_refresh_douban_data_api():
     return {"status": "success", "message": "强制刷新任务已启动，请在“运行任务”页面查看进度。", "task_id": task_id}
 LOG_FILE = os.path.join('/app/data', "app.log")
 
+# 文件路径: backend/main.py
+
 @app.get("/api/logs")
 def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1), level: str = Query("INFO")):
     if not os.path.exists(LOG_FILE):
@@ -722,18 +724,41 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1),
             r"(?P<message>.*)$"
         )
 
-        filtered_lines = []
-        if level != "ALL":
-            level_pattern_filter = re.compile(r"^" + level.upper() + r":")
-            all_lines = [line for line in all_lines if level_pattern_filter.match(line)]
+        # --- 核心修改开始 ---
+        parsed_logs = []
+        current_log_entry = None
 
         for line in all_lines:
             match = log_pattern.match(line.strip())
             if match:
-                filtered_lines.append(match.groupdict())
+                # 如果匹配成功，说明这是一个新的日志条目的开始
+                # 先将上一个条目（如果存在）存入列表
+                if current_log_entry:
+                    parsed_logs.append(current_log_entry)
+                
+                # 创建新的日志条目
+                current_log_entry = match.groupdict()
+            elif current_log_entry:
+                # 如果不匹配，并且当前有一个正在处理的日志条目，
+                # 那么这一行就是上一条日志消息的延续部分
+                current_log_entry['message'] += '\n' + line.strip()
         
-        total_logs = len(filtered_lines)
-        # --- 核心修改：这里的 page_size 会自动使用 Query 中定义的值，所以逻辑不用变 ---
+        # 不要忘记添加最后一个日志条目
+        if current_log_entry:
+            parsed_logs.append(current_log_entry)
+
+        # 根据日志级别进行过滤
+        filtered_logs = []
+        if level != "ALL":
+            level_to_match = level.upper()
+            for log in parsed_logs:
+                if log.get('level', '').upper() == level_to_match:
+                    filtered_logs.append(log)
+        else:
+            filtered_logs = parsed_logs
+        # --- 核心修改结束 ---
+        
+        total_logs = len(filtered_logs)
         start_index = total_logs - ((page - 1) * page_size) - 1
         end_index = start_index - page_size
         
@@ -741,7 +766,7 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1),
         for i in range(start_index, end_index, -1):
             if i < 0:
                 break
-            paginated_logs.append(filtered_lines[i])
+            paginated_logs.append(filtered_logs[i])
             
         return {"total": total_logs, "logs": paginated_logs}
     except Exception as e:
