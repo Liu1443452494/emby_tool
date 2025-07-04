@@ -68,6 +68,7 @@ export const useConfigStore = defineStore('config', () => {
         overwrite_remote: false,
         download_cooldown: 0.5,
         upload_cooldown: 1.0,
+        delete_cooldown: 1.5,
       }
     },
     episode_renamer_config: {

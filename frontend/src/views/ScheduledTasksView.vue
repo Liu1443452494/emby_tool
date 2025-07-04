@@ -455,6 +455,36 @@
                 打开精准覆盖工具
               </el-button>
             </div>
+            <div class="backup-section">
+          <h4><el-icon><Delete /></el-icon> 清理远程作废截图</h4>
+          <p class="form-item-description">
+            当 TMDB 提供了官方图后，之前备份到 GitHub 的社区截图就成了作废文件。此功能可以安全地清理这些文件。
+          </p>
+          <el-form-item label="删除冷却时间 (秒)">
+            <el-input-number v-model="localRefresherConfig.github_config.delete_cooldown" :min="0" :step="0.1" :precision="1" />
+            <div class="form-item-description">
+              每次从 GitHub 删除文件前的等待时间，以避免API速率限制。
+            </div>
+          </el-form-item>
+          <div style="display: flex; gap: 15px;">
+            <el-button 
+              type="primary" 
+              plain 
+              @click="isReviewDialogVisible = true"
+            >
+              审核待删除列表
+            </el-button>
+            <el-button 
+              type="danger" 
+              plain 
+              @click="handleCleanupGithub"
+              :loading="isGithubCleanupRunning"
+              :disabled="!localRefresherConfig.github_config.personal_access_token"
+            >
+              开始清理
+            </el-button>
+          </div>
+        </div>
           </el-tab-pane>
         </el-tabs>
       </div>
@@ -684,7 +714,8 @@ services:
         </el-button>
       </template>
     </el-dialog>
-
+<DeletionReviewDialog v-model:visible="isReviewDialogVisible" />
+<!-- --- 新增结束 --- -->
   </div>
 </template>
 
@@ -694,7 +725,8 @@ import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
 import { useEpisodeRenamerStore } from '@/stores/episodeRenamer';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Setting, ArrowDown, Finished, Upload, QuestionFilled, Aim } from '@element-plus/icons-vue';
+import { Setting, ArrowDown, Finished, Upload, QuestionFilled, Aim, Delete } from '@element-plus/icons-vue';
+import DeletionReviewDialog from '@/components/DeletionReviewDialog.vue'; 
 import cronstrue from 'cronstrue/i18n';
 import _ from 'lodash';
 import { API_BASE_URL } from '@/config/apiConfig';
@@ -729,6 +761,7 @@ const isCacheModeHelpVisible = ref(false);
 const isUndoDialogVisible = ref(false);
 const selectedUndoLogs = ref([]);
 const searchQuery = ref('');
+const isReviewDialogVisible = ref(false);
 const searchDialogTableRef = ref(null);
 const dialogSelection = ref([]);
 const parsedRepoInfo = ref('');
@@ -742,6 +775,7 @@ const isFetchingEpisodes = ref(false);
 const episodesForSelection = ref([]);
 const selectedEpisodes = ref([]);
 const isPreciseUpdating = ref(false);
+const isGithubCleanupRunning = ref(false); 
 
 
 definedTasks.value.forEach(taskDef => {
@@ -1053,6 +1087,37 @@ const openPreciseUpdateDialog = () => {
   selectedSeriesForPreciseUpdate.value = null;
   episodesForSelection.value = [];
   selectedEpisodes.value = [];
+};
+
+const handleCleanupGithub = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '即将根据待删除列表，在后台清理远程文件。此操作不可逆，是否继续？',
+      '确认清理操作',
+      {
+        confirmButtonText: '开始清理',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    );
+    
+    isGithubCleanupRunning.value = true;
+    
+    const response = await fetch(`${API_BASE_URL}/api/episode-refresher/cleanup-github`, {
+        method: 'POST',
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || '启动清理任务失败');
+    
+    ElMessage.success(data.message);
+
+  } catch (error) {
+    if (error && error.message) {
+      ElMessage.error(`启动清理失败: ${error.message}`);
+    }
+  } finally {
+    isGithubCleanupRunning.value = false;
+  }
 };
 
 const handlePreciseSearch = () => {

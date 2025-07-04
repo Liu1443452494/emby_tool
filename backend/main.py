@@ -1242,6 +1242,50 @@ def precise_upload_from_local_api(req: PreciseScreenshotUpdateRequest):
     )
     return {"status": "success", "message": "精准覆盖任务已启动。", "task_id": task_id}
 
+@app.get("/api/episode-refresher/github-delete-log")
+def get_github_delete_log_api():
+    """获取待删除截图的日志，并聚合Emby信息"""
+    try:
+        config = app_config.load_app_config()
+        logic = EpisodeRefresherLogic(config)
+        return logic.get_github_delete_log()
+    except Exception as e:
+        ui_logger.error(f"获取待删除日志失败: {e}", task_category="API-远程清理", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/episode-refresher/github-delete-log")
+def save_github_delete_log_api(payload: Dict):
+    """保存用户审核后的待删除日志"""
+    try:
+        config = app_config.load_app_config()
+        logic = EpisodeRefresherLogic(config)
+        if logic.save_github_delete_log(payload):
+            return {"status": "success", "message": "审核状态已保存！"}
+        else:
+            raise HTTPException(status_code=500, detail="保存日志文件失败。")
+    except Exception as e:
+        ui_logger.error(f"保存待删除日志失败: {e}", task_category="API-远程清理", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/episode-refresher/cleanup-github")
+def cleanup_github_screenshots_api():
+    """启动一个任务，清理远程作废截图"""
+    task_cat = "API-远程清理"
+    ui_logger.info(f"收到清理远程作废截图的请求...", task_category=task_cat)
+    
+    config = app_config.load_app_config()
+    if not config.episode_refresher_config.github_config.personal_access_token:
+        raise HTTPException(status_code=400, detail="未配置 GitHub PAT，无法执行清理操作。")
+
+    logic = EpisodeRefresherLogic(config)
+    task_name = "清理远程作废截图"
+    task_id = task_manager.register_task(
+        logic.cleanup_github_screenshots_task,
+        task_name,
+        config=config.episode_refresher_config
+    )
+    return {"status": "success", "message": "清理任务已启动。", "task_id": task_id}
+
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     try:

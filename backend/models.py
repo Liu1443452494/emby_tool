@@ -141,6 +141,7 @@ class GitHubCacheConfig(BaseModel):
     overwrite_remote: bool = Field(default=False, description="备份时，是否覆盖远程已存在的同名文件")
     download_cooldown: float = Field(default=0.5, description="从GitHub下载文件（如索引）前的冷却时间（秒）", ge=0)
     upload_cooldown: float = Field(default=1.0, description="向GitHub上传文件（截图或索引）前的冷却时间（秒）", ge=0)
+    delete_cooldown: float = Field(default=1.5, description="从GitHub删除文件前的冷却时间（秒）", ge=0)
 
 class EpisodeRefresherConfig(BaseModel):
     """剧集元数据刷新器功能的配置"""
