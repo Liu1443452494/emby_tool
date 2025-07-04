@@ -1398,283 +1398,281 @@ class EpisodeRefresherLogic:
         ui_logger.info(f"【{task_cat}】任务执行完毕。成功: {len(successful_uploads)}, 失败: {len(failed_uploads)}, 跳过: {len(skipped_uploads)}", task_category=task_cat)
         return {"success": len(successful_uploads), "failed": len(failed_uploads), "skipped": len(skipped_uploads)}
     
-    # 文件路径: backend/episode_refresher_logic.py
-# 在 EpisodeRefresherLogic 类的末尾，添加以下新函数
 
-def _log_screenshot_for_deletion(self, series_tmdb_id: str, series_name: str, emby_series_id: str, season_number: int, episode_number: int):
-    task_cat = "远程清理-记录"
-    log_prefix = f"S{season_number:02d}E{episode_number:02d}:"
-    
-    lock_dir = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks")
-    os.makedirs(lock_dir, exist_ok=True)
-    lock_path = os.path.join(lock_dir, os.path.basename(GITHUB_DELETE_LOG_FILE) + ".lock")
+    def _log_screenshot_for_deletion(self, series_tmdb_id: str, series_name: str, emby_series_id: str, season_number: int, episode_number: int):
+        task_cat = "远程清理-记录"
+        log_prefix = f"S{season_number:02d}E{episode_number:02d}:"
+        
+        lock_dir = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks")
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_path = os.path.join(lock_dir, os.path.basename(GITHUB_DELETE_LOG_FILE) + ".lock")
 
-    try:
-        with FileLock(lock_path, timeout=10):
-            if os.path.exists(GITHUB_DELETE_LOG_FILE):
+        try:
+            with FileLock(lock_path, timeout=10):
+                if os.path.exists(GITHUB_DELETE_LOG_FILE):
+                    with open(GITHUB_DELETE_LOG_FILE, 'r', encoding='utf-8') as f:
+                        log_data = json.load(f)
+                else:
+                    log_data = {}
+
+                episode_key = f"{season_number}-{episode_number}"
+                
+                if series_tmdb_id not in log_data:
+                    log_data[series_tmdb_id] = {
+                        "series_name": series_name,
+                        "emby_series_id": emby_series_id,
+                        "episodes": {}
+                    }
+                
+                if episode_key in log_data[series_tmdb_id]["episodes"]:
+                    ui_logger.debug(f"{log_prefix} [跳过] 该分集已存在于待删除日志中。", task_category=task_cat)
+                    return
+
+                log_data[series_tmdb_id]["episodes"][episode_key] = {
+                    "github_path": f"EpisodeScreenshots/{series_tmdb_id}/season-{season_number}-episode-{episode_number}.jpg",
+                    "pending_deletion": True,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+                with open(GITHUB_DELETE_LOG_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(log_data, f, indent=2, ensure_ascii=False)
+                
+                ui_logger.info(f"{log_prefix} [成功] 已将分集信息记录到待删除日志。", task_category=task_cat)
+
+        except Timeout:
+            ui_logger.error(f"{log_prefix} ❌ 获取日志文件锁超时，无法记录待删除项！", task_category=task_cat)
+        except Exception as e:
+            ui_logger.error(f"{log_prefix} ❌ 写入待删除日志时发生错误: {e}", task_category=task_cat, exc_info=True)
+
+    def get_github_delete_log(self) -> List[Dict]:
+        task_cat = "远程清理-审核"
+        if not os.path.exists(GITHUB_DELETE_LOG_FILE):
+            return []
+
+        lock_dir = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks")
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_path = os.path.join(lock_dir, os.path.basename(GITHUB_DELETE_LOG_FILE) + ".lock")
+
+        try:
+            with FileLock(lock_path, timeout=5):
                 with open(GITHUB_DELETE_LOG_FILE, 'r', encoding='utf-8') as f:
                     log_data = json.load(f)
-            else:
-                log_data = {}
+        except (IOError, json.JSONDecodeError, Timeout) as e:
+            ui_logger.error(f"❌ 读取待删除日志文件失败: {e}", task_category=task_cat)
+            return []
 
-            episode_key = f"{season_number}-{episode_number}"
-            
-            if series_tmdb_id not in log_data:
-                log_data[series_tmdb_id] = {
-                    "series_name": series_name,
-                    "emby_series_id": emby_series_id,
-                    "episodes": {}
-                }
-            
-            if episode_key in log_data[series_tmdb_id]["episodes"]:
-                ui_logger.debug(f"{log_prefix} [跳过] 该分集已存在于待删除日志中。", task_category=task_cat)
-                return
+        # 获取所有剧集下的所有分集信息
+        series_episodes_map = {}
+        for tmdb_id, series_info in log_data.items():
+            emby_series_id = series_info.get("emby_series_id")
+            if not emby_series_id:
+                continue
+            try:
+                episodes_url = f"{self.base_url}/Items"
+                episodes_params = {**self.params, "ParentId": emby_series_id, "IncludeItemTypes": "Episode", "Recursive": "true", "Fields": "Id,Name,IndexNumber,ParentIndexNumber,ImageTags"}
+                episodes_resp = self.session.get(episodes_url, params=episodes_params, timeout=30)
+                episodes_resp.raise_for_status()
+                episodes = episodes_resp.json().get("Items", [])
+                
+                episode_map = {f"{ep.get('ParentIndexNumber')}-{ep.get('IndexNumber')}": ep for ep in episodes}
+                series_episodes_map[tmdb_id] = episode_map
+            except Exception as e:
+                ui_logger.warning(f"⚠️ 获取剧集 {series_info.get('series_name')} (ID: {emby_series_id}) 的分集信息失败: {e}", task_category=task_cat)
 
-            log_data[series_tmdb_id]["episodes"][episode_key] = {
-                "github_path": f"EpisodeScreenshots/{series_tmdb_id}/season-{season_number}-episode-{episode_number}.jpg",
-                "pending_deletion": True,
-                "timestamp": datetime.utcnow().isoformat() + "Z"
-            }
+        # 聚合最终结果
+        results = []
+        for tmdb_id, series_info in log_data.items():
+            for episode_key, log_item in series_info.get("episodes", {}).items():
+                emby_info = None
+                if tmdb_id in series_episodes_map and episode_key in series_episodes_map[tmdb_id]:
+                    emby_ep = series_episodes_map[tmdb_id][episode_key]
+                    emby_info = {
+                        "episode_id": emby_ep.get("Id"),
+                        "title": emby_ep.get("Name"),
+                        "image_url": f"{self.base_url}/Items/{emby_ep.get('Id')}/Images/Primary?api_key={self.api_key}" if emby_ep.get("ImageTags", {}).get("Primary") else None
+                    }
+                
+                github_conf = self.app_config.episode_refresher_config.github_config
+                github_url = ""
+                if github_conf.repo_url:
+                    match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
+                    if match:
+                        owner, repo = match.groups()
+                        github_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{github_conf.branch}/{log_item.get('github_path')}"
 
-            with open(GITHUB_DELETE_LOG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(log_data, f, indent=2, ensure_ascii=False)
-            
-            ui_logger.info(f"{log_prefix} [成功] 已将分集信息记录到待删除日志。", task_category=task_cat)
+                results.append({
+                    "log_item": {
+                        "tmdb_id": tmdb_id,
+                        "series_name": series_info.get("series_name"),
+                        "episode_key": episode_key,
+                        **log_item
+                    },
+                    "emby_info": emby_info,
+                    "github_info": {"image_url": github_url}
+                })
+        return results
 
-    except Timeout:
-        ui_logger.error(f"{log_prefix} ❌ 获取日志文件锁超时，无法记录待删除项！", task_category=task_cat)
-    except Exception as e:
-        ui_logger.error(f"{log_prefix} ❌ 写入待删除日志时发生错误: {e}", task_category=task_cat, exc_info=True)
-
-def get_github_delete_log(self) -> List[Dict]:
-    task_cat = "远程清理-审核"
-    if not os.path.exists(GITHUB_DELETE_LOG_FILE):
-        return []
-
-    lock_dir = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks")
-    os.makedirs(lock_dir, exist_ok=True)
-    lock_path = os.path.join(lock_dir, os.path.basename(GITHUB_DELETE_LOG_FILE) + ".lock")
-
-    try:
-        with FileLock(lock_path, timeout=5):
-            with open(GITHUB_DELETE_LOG_FILE, 'r', encoding='utf-8') as f:
-                log_data = json.load(f)
-    except (IOError, json.JSONDecodeError, Timeout) as e:
-        ui_logger.error(f"❌ 读取待删除日志文件失败: {e}", task_category=task_cat)
-        return []
-
-    # 获取所有剧集下的所有分集信息
-    series_episodes_map = {}
-    for tmdb_id, series_info in log_data.items():
-        emby_series_id = series_info.get("emby_series_id")
-        if not emby_series_id:
-            continue
+    def save_github_delete_log(self, new_log_data: Dict):
+        task_cat = "远程清理-审核"
+        lock_dir = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks")
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_path = os.path.join(lock_dir, os.path.basename(GITHUB_DELETE_LOG_FILE) + ".lock")
         try:
-            episodes_url = f"{self.base_url}/Items"
-            episodes_params = {**self.params, "ParentId": emby_series_id, "IncludeItemTypes": "Episode", "Recursive": "true", "Fields": "Id,Name,IndexNumber,ParentIndexNumber,ImageTags"}
-            episodes_resp = self.session.get(episodes_url, params=episodes_params, timeout=30)
-            episodes_resp.raise_for_status()
-            episodes = episodes_resp.json().get("Items", [])
-            
-            episode_map = {f"{ep.get('ParentIndexNumber')}-{ep.get('IndexNumber')}": ep for ep in episodes}
-            series_episodes_map[tmdb_id] = episode_map
+            with FileLock(lock_path, timeout=10):
+                with open(GITHUB_DELETE_LOG_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(new_log_data, f, indent=2, ensure_ascii=False)
+            ui_logger.info("✅ 成功保存审核后的待删除日志。", task_category=task_cat)
+            return True
         except Exception as e:
-            ui_logger.warning(f"⚠️ 获取剧集 {series_info.get('series_name')} (ID: {emby_series_id}) 的分集信息失败: {e}", task_category=task_cat)
+            ui_logger.error(f"❌ 保存待删除日志文件失败: {e}", task_category=task_cat)
+            return False
 
-    # 聚合最终结果
-    results = []
-    for tmdb_id, series_info in log_data.items():
-        for episode_key, log_item in series_info.get("episodes", {}).items():
-            emby_info = None
-            if tmdb_id in series_episodes_map and episode_key in series_episodes_map[tmdb_id]:
-                emby_ep = series_episodes_map[tmdb_id][episode_key]
-                emby_info = {
-                    "episode_id": emby_ep.get("Id"),
-                    "title": emby_ep.get("Name"),
-                    "image_url": f"{self.base_url}/Items/{emby_ep.get('Id')}/Images/Primary?api_key={self.api_key}" if emby_ep.get("ImageTags", {}).get("Primary") else None
-                }
+    def _delete_file_from_github(self, github_path: str, sha: str, github_conf) -> bool:
+        task_cat = "远程清理-执行"
+        try:
+            if github_conf.delete_cooldown > 0:
+                ui_logger.debug(f"     - [GitHub删除] ⏱️ 删除冷却 {github_conf.delete_cooldown} 秒...", task_category=task_cat)
+                time.sleep(github_conf.delete_cooldown)
+
+            match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
+            owner, repo = match.groups()
             
-            github_conf = self.app_config.episode_refresher_config.github_config
-            github_url = ""
-            if github_conf.repo_url:
-                match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
-                if match:
-                    owner, repo = match.groups()
-                    github_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{github_conf.branch}/{log_item.get('github_path')}"
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{github_path}"
+            
+            payload = {
+                "message": f"chore: Remove obsolete screenshot {github_path}",
+                "sha": sha,
+                "branch": github_conf.branch
+            }
+            
+            headers = {
+                "Accept": "application/vnd.github.v3+json",
+                "Authorization": f"token {github_conf.personal_access_token}"
+            }
+            proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+            
+            response = self.session.delete(api_url, headers=headers, json=payload, timeout=30, proxies=proxies)
+            response.raise_for_status()
+            
+            ui_logger.info(f"     - ✅ 成功从 GitHub 删除文件: {github_path}", task_category=task_cat)
+            return True
 
-            results.append({
-                "log_item": {
-                    "tmdb_id": tmdb_id,
-                    "series_name": series_info.get("series_name"),
-                    "episode_key": episode_key,
-                    **log_item
-                },
-                "emby_info": emby_info,
-                "github_info": {"image_url": github_url}
-            })
-    return results
+        except requests.HTTPError as e:
+            ui_logger.error(f"     - ❌ 从 GitHub 删除文件失败 (HTTP {e.response.status_code}): {e.response.text}", task_category=task_cat)
+            return False
+        except Exception as e:
+            ui_logger.error(f"     - ❌ 从 GitHub 删除文件时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+            return False
 
-def save_github_delete_log(self, new_log_data: Dict):
-    task_cat = "远程清理-审核"
-    lock_dir = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks")
-    os.makedirs(lock_dir, exist_ok=True)
-    lock_path = os.path.join(lock_dir, os.path.basename(GITHUB_DELETE_LOG_FILE) + ".lock")
-    try:
-        with FileLock(lock_path, timeout=10):
-            with open(GITHUB_DELETE_LOG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(new_log_data, f, indent=2, ensure_ascii=False)
-        ui_logger.info("✅ 成功保存审核后的待删除日志。", task_category=task_cat)
-        return True
-    except Exception as e:
-        ui_logger.error(f"❌ 保存待删除日志文件失败: {e}", task_category=task_cat)
-        return False
+    def cleanup_github_screenshots_task(self, config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        task_cat = "远程清理-执行"
+        ui_logger.info(f"【{task_cat}】任务启动...", task_category=task_cat)
+        
+        if not os.path.exists(GITHUB_DELETE_LOG_FILE):
+            ui_logger.info(f"【{task_cat}】[步骤 1/6] 待删除日志文件不存在，没有需要清理的项目。", task_category=task_cat)
+            return
 
-def _delete_file_from_github(self, github_path: str, sha: str, github_conf) -> bool:
-    task_cat = "远程清理-执行"
-    try:
-        if github_conf.delete_cooldown > 0:
-            ui_logger.debug(f"     - [GitHub删除] ⏱️ 删除冷却 {github_conf.delete_cooldown} 秒...", task_category=task_cat)
-            time.sleep(github_conf.delete_cooldown)
+        # 步骤 1: 读取并过滤
+        ui_logger.info(f"【{task_cat}】[步骤 1/6] 正在读取并筛选待办事项...", task_category=task_cat)
+        with open(GITHUB_DELETE_LOG_FILE, 'r', encoding='utf-8') as f:
+            log_data = json.load(f)
+        
+        delete_plan = []
+        for tmdb_id, series_info in log_data.items():
+            for episode_key, item in series_info.get("episodes", {}).items():
+                if item.get("pending_deletion"):
+                    delete_plan.append({
+                        "tmdb_id": tmdb_id,
+                        "episode_key": episode_key,
+                        "github_path": item.get("github_path")
+                    })
+        
+        if not delete_plan:
+            ui_logger.info(f"【{task_cat}】[步骤 1/6] 筛选完成，没有需要清理的项目。", task_category=task_cat)
+            return
+        
+        ui_logger.info(f"【{task_cat}】[步骤 1/6] 筛选完成，共生成 {len(delete_plan)} 项清理计划。", task_category=task_cat)
+        task_manager.update_task_progress(task_id, 0, len(delete_plan))
 
+        # 步骤 2: 获取远程状态
+        ui_logger.info(f"【{task_cat}】[步骤 2/6] 正在获取远程 GitHub 索引文件...", task_category=task_cat)
+        remote_db, remote_sha = self._get_remote_db(config, force_refresh=True)
+        if remote_db is None:
+            ui_logger.error(f"【{task_cat}】❌ 无法获取远程索引文件，任务中止。", task_category=task_cat)
+            raise Exception("无法获取远程索引文件")
+
+        # 步骤 3 & 4: 执行文件删除
+        ui_logger.info(f"【{task_cat}】[步骤 3/6] 开始逐个删除远程截图文件...", task_category=task_cat)
+        github_conf = config.github_config
         match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
         owner, repo = match.groups()
         
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{github_path}"
-        
-        payload = {
-            "message": f"chore: Remove obsolete screenshot {github_path}",
-            "sha": sha,
-            "branch": github_conf.branch
-        }
-        
-        headers = {
-            "Accept": "application/vnd.github.v3+json",
-            "Authorization": f"token {github_conf.personal_access_token}"
-        }
-        proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
-        
-        response = self.session.delete(api_url, headers=headers, json=payload, timeout=30, proxies=proxies)
-        response.raise_for_status()
-        
-        ui_logger.info(f"     - ✅ 成功从 GitHub 删除文件: {github_path}", task_category=task_cat)
-        return True
+        for i, item in enumerate(delete_plan):
+            if cancellation_event.is_set():
+                ui_logger.warning(f"【{task_cat}】任务在删除文件阶段被用户取消。", task_category=task_cat)
+                return
 
-    except requests.HTTPError as e:
-        ui_logger.error(f"     - ❌ 从 GitHub 删除文件失败 (HTTP {e.response.status_code}): {e.response.text}", task_category=task_cat)
-        return False
-    except Exception as e:
-        ui_logger.error(f"     - ❌ 从 GitHub 删除文件时发生未知错误: {e}", task_category=task_cat, exc_info=True)
-        return False
+            github_path = item["github_path"]
+            ui_logger.info(f"➡️ 正在处理第 {i + 1}/{len(delete_plan)} 项: {github_path}", task_category=task_cat)
+            
+            # 获取SHA
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{github_path}"
+            headers = {"Accept": "application/vnd.github.v3+json", "Authorization": f"token {github_conf.personal_access_token}"}
+            proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
+            
+            try:
+                get_resp = self.session.get(api_url, headers=headers, timeout=20, proxies=proxies)
+                if get_resp.status_code == 404:
+                    ui_logger.info(f"     - ⚠️ 文件在远程已不存在，跳过删除。", task_category=task_cat)
+                    task_manager.update_task_progress(task_id, i + 1, len(delete_plan))
+                    continue
+                get_resp.raise_for_status()
+                sha = get_resp.json().get('sha')
+                if not sha:
+                    raise ValueError("未能从API响应中获取SHA")
+            except Exception as e:
+                ui_logger.error(f"     - ❌ 获取文件SHA失败: {e}，任务中止！", task_category=task_cat)
+                raise e
 
-def cleanup_github_screenshots_task(self, config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-    task_cat = "远程清理-执行"
-    ui_logger.info(f"【{task_cat}】任务启动...", task_category=task_cat)
-    
-    if not os.path.exists(GITHUB_DELETE_LOG_FILE):
-        ui_logger.info(f"【{task_cat}】[步骤 1/6] 待删除日志文件不存在，没有需要清理的项目。", task_category=task_cat)
-        return
+            # 删除文件
+            if not self._delete_file_from_github(github_path, sha, github_conf):
+                ui_logger.error(f"     - ❌ 删除文件失败，任务中止！", task_category=task_cat)
+                raise Exception(f"删除文件 {github_path} 失败")
+            
+            task_manager.update_task_progress(task_id, i + 1, len(delete_plan))
 
-    # 步骤 1: 读取并过滤
-    ui_logger.info(f"【{task_cat}】[步骤 1/6] 正在读取并筛选待办事项...", task_category=task_cat)
-    with open(GITHUB_DELETE_LOG_FILE, 'r', encoding='utf-8') as f:
-        log_data = json.load(f)
-    
-    delete_plan = []
-    for tmdb_id, series_info in log_data.items():
-        for episode_key, item in series_info.get("episodes", {}).items():
-            if item.get("pending_deletion"):
-                delete_plan.append({
-                    "tmdb_id": tmdb_id,
-                    "episode_key": episode_key,
-                    "github_path": item.get("github_path")
-                })
-    
-    if not delete_plan:
-        ui_logger.info(f"【{task_cat}】[步骤 1/6] 筛选完成，没有需要清理的项目。", task_category=task_cat)
-        return
-    
-    ui_logger.info(f"【{task_cat}】[步骤 1/6] 筛选完成，共生成 {len(delete_plan)} 项清理计划。", task_category=task_cat)
-    task_manager.update_task_progress(task_id, 0, len(delete_plan))
-
-    # 步骤 2: 获取远程状态
-    ui_logger.info(f"【{task_cat}】[步骤 2/6] 正在获取远程 GitHub 索引文件...", task_category=task_cat)
-    remote_db, remote_sha = self._get_remote_db(config, force_refresh=True)
-    if remote_db is None:
-        ui_logger.error(f"【{task_cat}】❌ 无法获取远程索引文件，任务中止。", task_category=task_cat)
-        raise Exception("无法获取远程索引文件")
-
-    # 步骤 3 & 4: 执行文件删除
-    ui_logger.info(f"【{task_cat}】[步骤 3/6] 开始逐个删除远程截图文件...", task_category=task_cat)
-    github_conf = config.github_config
-    match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", github_conf.repo_url)
-    owner, repo = match.groups()
-    
-    for i, item in enumerate(delete_plan):
-        if cancellation_event.is_set():
-            ui_logger.warning(f"【{task_cat}】任务在删除文件阶段被用户取消。", task_category=task_cat)
-            return
-
-        github_path = item["github_path"]
-        ui_logger.info(f"➡️ 正在处理第 {i + 1}/{len(delete_plan)} 项: {github_path}", task_category=task_cat)
-        
-        # 获取SHA
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{github_path}"
-        headers = {"Accept": "application/vnd.github.v3+json", "Authorization": f"token {github_conf.personal_access_token}"}
-        proxies = self.tmdb_logic.proxy_manager.get_proxies(api_url)
-        
-        try:
-            get_resp = self.session.get(api_url, headers=headers, timeout=20, proxies=proxies)
-            if get_resp.status_code == 404:
-                ui_logger.info(f"     - ⚠️ 文件在远程已不存在，跳过删除。", task_category=task_cat)
-                task_manager.update_task_progress(task_id, i + 1, len(delete_plan))
-                continue
-            get_resp.raise_for_status()
-            sha = get_resp.json().get('sha')
-            if not sha:
-                raise ValueError("未能从API响应中获取SHA")
-        except Exception as e:
-            ui_logger.error(f"     - ❌ 获取文件SHA失败: {e}，任务中止！", task_category=task_cat)
-            raise e
-
-        # 删除文件
-        if not self._delete_file_from_github(github_path, sha, github_conf):
-            ui_logger.error(f"     - ❌ 删除文件失败，任务中止！", task_category=task_cat)
-            raise Exception(f"删除文件 {github_path} 失败")
-        
-        task_manager.update_task_progress(task_id, i + 1, len(delete_plan))
-
-    # 步骤 5: 更新索引
-    ui_logger.info(f"【{task_cat}】[步骤 4/6] 所有文件删除成功，正在更新远程索引...", task_category=task_cat)
-    for item in delete_plan:
-        tmdb_id = item["tmdb_id"]
-        episode_key = item["episode_key"]
-        if tmdb_id in remote_db.get("series", {}) and episode_key in remote_db["series"][tmdb_id]:
-            del remote_db["series"][tmdb_id][episode_key]
-            if not remote_db["series"][tmdb_id]: # 如果剧集下没有分集了，删除整个剧集条目
-                del remote_db["series"][tmdb_id]
-    
-    if not self._upload_db_to_github(remote_db, remote_sha, github_conf):
-        ui_logger.error(f"【{task_cat}】❌ 远程索引更新失败！任务中止，请重试。", task_category=task_cat)
-        raise Exception("远程索引更新失败")
-    
-    ui_logger.info(f"【{task_cat}】[步骤 5/6] 远程索引更新成功！", task_category=task_cat)
-
-    # 步骤 6: 清理本地日志
-    ui_logger.info(f"【{task_cat}】[步骤 6/6] 正在清理本地已处理的日志条目...", task_category=task_cat)
-    lock_path = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks", os.path.basename(GITHUB_DELETE_LOG_FILE) + ".lock")
-    with FileLock(lock_path, timeout=10):
-        with open(GITHUB_DELETE_LOG_FILE, 'r', encoding='utf-8') as f:
-            final_log_data = json.load(f)
-        
+        # 步骤 5: 更新索引
+        ui_logger.info(f"【{task_cat}】[步骤 4/6] 所有文件删除成功，正在更新远程索引...", task_category=task_cat)
         for item in delete_plan:
             tmdb_id = item["tmdb_id"]
             episode_key = item["episode_key"]
-            if tmdb_id in final_log_data and episode_key in final_log_data[tmdb_id]["episodes"]:
-                del final_log_data[tmdb_id]["episodes"][episode_key]
-                if not final_log_data[tmdb_id]["episodes"]:
-                    del final_log_data[tmdb_id]
+            if tmdb_id in remote_db.get("series", {}) and episode_key in remote_db["series"][tmdb_id]:
+                del remote_db["series"][tmdb_id][episode_key]
+                if not remote_db["series"][tmdb_id]: # 如果剧集下没有分集了，删除整个剧集条目
+                    del remote_db["series"][tmdb_id]
         
-        with open(GITHUB_DELETE_LOG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(final_log_data, f, indent=2, ensure_ascii=False)
-    
-    ui_logger.info(f"【{task_cat}】🎉 任务全部完成！", task_category=task_cat)
+        if not self._upload_db_to_github(remote_db, remote_sha, github_conf):
+            ui_logger.error(f"【{task_cat}】❌ 远程索引更新失败！任务中止，请重试。", task_category=task_cat)
+            raise Exception("远程索引更新失败")
+        
+        ui_logger.info(f"【{task_cat}】[步骤 5/6] 远程索引更新成功！", task_category=task_cat)
+
+        # 步骤 6: 清理本地日志
+        ui_logger.info(f"【{task_cat}】[步骤 6/6] 正在清理本地已处理的日志条目...", task_category=task_cat)
+        lock_path = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks", os.path.basename(GITHUB_DELETE_LOG_FILE) + ".lock")
+        with FileLock(lock_path, timeout=10):
+            with open(GITHUB_DELETE_LOG_FILE, 'r', encoding='utf-8') as f:
+                final_log_data = json.load(f)
+            
+            for item in delete_plan:
+                tmdb_id = item["tmdb_id"]
+                episode_key = item["episode_key"]
+                if tmdb_id in final_log_data and episode_key in final_log_data[tmdb_id]["episodes"]:
+                    del final_log_data[tmdb_id]["episodes"][episode_key]
+                    if not final_log_data[tmdb_id]["episodes"]:
+                        del final_log_data[tmdb_id]
+            
+            with open(GITHUB_DELETE_LOG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(final_log_data, f, indent=2, ensure_ascii=False)
+        
+        ui_logger.info(f"【{task_cat}】🎉 任务全部完成！", task_category=task_cat)
