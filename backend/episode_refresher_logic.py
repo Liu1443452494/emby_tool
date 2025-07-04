@@ -1532,6 +1532,8 @@ class EpisodeRefresherLogic:
         except Exception as e:
             ui_logger.error(f"{log_prefix} ❌ 写入待删除日志时发生错误: {e}", task_category=task_cat, exc_info=True)
 
+
+
     def get_github_delete_log(self) -> List[Dict]:
         task_cat = "远程清理-审核"
         if not os.path.exists(GITHUB_DELETE_LOG_FILE):
@@ -1574,11 +1576,21 @@ class EpisodeRefresherLogic:
                 emby_info = None
                 if tmdb_id in series_episodes_map and episode_key in series_episodes_map[tmdb_id]:
                     emby_ep = series_episodes_map[tmdb_id][episode_key]
+                    
+                    # --- 核心修改：生成相对路径的代理URL ---
+                    image_proxy_url = None
+                    if emby_ep.get("ImageTags", {}).get("Primary"):
+                        # 不再拼接完整的 http://... 地址
+                        # 而是生成一个符合 Nginx 代理规则的相对路径
+                        image_path = f"Items/{emby_ep.get('Id')}/Images/Primary?api_key={self.api_key}"
+                        image_proxy_url = f"/api/emby-image-proxy?path={image_path}"
+
                     emby_info = {
                         "episode_id": emby_ep.get("Id"),
                         "title": emby_ep.get("Name"),
-                        "image_url": f"{self.base_url}/Items/{emby_ep.get('Id')}/Images/Primary?api_key={self.api_key}" if emby_ep.get("ImageTags", {}).get("Primary") else None
+                        "image_url": image_proxy_url
                     }
+                    # --- 核心修改结束 ---
                 
                 github_conf = self.app_config.episode_refresher_config.github_config
                 github_url = ""
@@ -1592,6 +1604,7 @@ class EpisodeRefresherLogic:
                     "log_item": {
                         "tmdb_id": tmdb_id,
                         "series_name": series_info.get("series_name"),
+                        "emby_series_id": series_info.get("emby_series_id"), # 确保 emby_series_id 也被传递
                         "episode_key": episode_key,
                         **log_item
                     },
@@ -1599,7 +1612,6 @@ class EpisodeRefresherLogic:
                     "github_info": {"image_url": github_url}
                 })
         return results
-
     def save_github_delete_log(self, new_log_data: Dict):
         task_cat = "远程清理-审核"
         lock_dir = os.path.join(os.path.dirname(GITHUB_DELETE_LOG_FILE), "locks")
