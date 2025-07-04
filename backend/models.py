@@ -215,6 +215,31 @@ class EpisodeRenamerConfig(BaseModel):
     emby_path_root: str = Field(default="/media", description="Emby 容器内看到的媒体根路径")
     clouddrive_path_root: str = Field(default="/cd2", description="CloudDrive 挂载到本工具容器内的根路径")
     clouddrive_rename_cooldown: float = Field(default=1.0, description="每次重命名网盘文件之间的间隔时间（秒）", ge=0)
+
+
+# --- 新增代码块：将 PosterManager 相关的模型定义提前 ---
+class GitHubRepoState(BaseModel):
+    """记录单个GitHub仓库的状态"""
+    size_kb: int = Field(default=0, description="该仓库已用空间大小，单位KB")
+    last_checked: str = Field(default="", description="上次更新此状态的ISO 8601格式时间戳")
+
+class GitHubRepo(BaseModel):
+    """单个GitHub仓库的配置"""
+    repo_url: str = Field(..., description="仓库的HTTPS URL")
+    branch: str = Field(default="main", description="操作的目标分支名称")
+    personal_access_token: str = Field(default="", description="仓库级的PAT，覆盖全局PAT")
+    state: GitHubRepoState = Field(default_factory=GitHubRepoState)
+
+class PosterManagerConfig(BaseModel):
+    """海报管理器功能的完整配置"""
+    local_cache_path: str = Field(default="", description="本地图片缓存的根目录")
+    global_personal_access_token: str = Field(default="", description="全局GitHub PAT")
+    repository_size_threshold_mb: int = Field(default=900, description="单个仓库的容量上限阈值 (MB)")
+    image_download_cooldown_seconds: float = Field(default=0.5, description="从GitHub下载图片文件前的等待时间 (秒)")
+    file_upload_cooldown_seconds: float = Field(default=1.0, description="向GitHub上传文件（图片或索引）前的等待时间 (秒)")
+    overwrite_remote_files: bool = Field(default=False, description="全局开关，决定备份时是否覆盖GitHub上已存在的同名文件")
+    github_repos: List[GitHubRepo] = Field(default_factory=list, description="仓库列表，顺序即代表优先级")
+# --- 结束新增 ---
     
 
 class ScheduledTaskItem(BaseModel):
@@ -269,6 +294,7 @@ class AppConfig(BaseModel):
     webhook_config: WebhookConfig = Field(default_factory=WebhookConfig)
     episode_refresher_config: EpisodeRefresherConfig = Field(default_factory=EpisodeRefresherConfig)
     episode_renamer_config: EpisodeRenamerConfig = Field(default_factory=EpisodeRenamerConfig)
+    poster_manager_config: PosterManagerConfig = Field(default_factory=PosterManagerConfig)
 
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]
@@ -418,6 +444,8 @@ class EmbyWebhookItem(BaseModel):
     Name: str
     Id: str
     Type: str
+
+
 
 class PreciseScreenshotUpdateRequest(BaseModel):
     """精准截图更新请求模型"""

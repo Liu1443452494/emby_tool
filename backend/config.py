@@ -152,6 +152,9 @@ def load_app_config() -> AppConfig:
     if "episode_renamer_config" not in config_data:
         config_data["episode_renamer_config"] = {}
 
+    if "poster_manager_config" not in config_data:
+        config_data["poster_manager_config"] = {}
+
     if "subtitle_processor_config" in config_data:
         del config_data["subtitle_processor_config"]
 

@@ -41,6 +41,11 @@ const router = createRouter({
       component: () => import('../views/DoubanFixerView.vue')
     },
     {
+      path: '/poster-manager',
+      name: 'poster-manager',
+      component: () => import('../views/PosterManagerView.vue')
+    },
+    {
       path: '/episode-renamer',
       name: 'episode-renamer',
       component: () => import('../views/EpisodeRenamerView.vue')

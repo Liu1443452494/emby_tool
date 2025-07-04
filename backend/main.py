@@ -22,6 +22,7 @@ from apscheduler.triggers.cron import CronTrigger
 from task_manager import TaskManager, task_manager
 from models import EpisodeRenamerConfig
 from episode_renamer_router import router as episode_renamer_router
+from poster_manager_router import router as poster_manager_router
 
 from media_selector import MediaSelector
 from models import ScheduledTasksConfig, ScheduledTasksTargetScope
@@ -414,6 +415,7 @@ app.add_middleware(
 app.include_router(actor_gallery_router, prefix="/api/gallery")
 app.include_router(douban_fixer_router, prefix="/api/douban-fixer")
 app.include_router(episode_renamer_router, prefix="/api/episode-renamer")
+app.include_router(poster_manager_router, prefix="/api/poster-manager")
 
 # ... (其他路由保持不变) ...
 @app.get("/api/image-proxy")
