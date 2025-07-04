@@ -85,8 +85,7 @@
 <script setup>
 import { ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Refresh } from '@element-plus/icons-vue';
-import { Loading } from '@element-plus/icons-vue';
+import { Refresh, Loading } from '@element-plus/icons-vue';
 import { API_BASE_URL } from '@/config/apiConfig';
 import _ from 'lodash';
 
