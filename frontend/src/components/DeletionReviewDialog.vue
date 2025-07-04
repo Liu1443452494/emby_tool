@@ -31,7 +31,7 @@
               <div class="expand-content">
                 <div class="image-container">
                   <h4>Emby 当前图片 (官方图)</h4>
-                  <el-image :src="props.row.emby_info?.image_url" fit="contain" lazy>
+                  <el-image :src="props.row.emby_info?.image_url" fit="cover" lazy>
                     <template #error>
                       <div class="image-slot-error">无法加载Emby图片</div>
                     </template>
@@ -39,7 +39,14 @@
                 </div>
                 <div class="image-container">
                   <h4>待删除的 GitHub 截图</h4>
-                  <el-image :src="props.row.github_info.image_url" fit="contain" lazy>
+                  <el-image :src="props.row.github_info.image_url" fit="cover" lazy>
+                     <!-- --- 新增代码块：加载状态占位符 --- -->
+                     <template #placeholder>
+                       <div class="image-slot-loading">
+                         <el-icon class="is-loading"><Loading /></el-icon>
+                       </div>
+                     </template>
+                     <!-- --- 结束新增 --- -->
                      <template #error>
                       <div class="image-slot-error">无法加载GitHub图片</div>
                     </template>
@@ -79,6 +86,7 @@
 import { ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
+import { Loading } from '@element-plus/icons-vue';
 import { API_BASE_URL } from '@/config/apiConfig';
 import _ from 'lodash';
 
@@ -198,9 +206,11 @@ const handleSave = async () => {
 }
 .image-container .el-image {
   width: 100%;
-  height: 250px;
+  aspect-ratio: 16 / 9; /* 强制16:9的宽高比 */
+  height: auto; /* 高度自动，以适应宽度和比例 */
   background-color: #000;
   border-radius: 4px;
+  object-fit: cover; /* 确保图片内容也是覆盖模式 */
 }
 .image-slot-error {
   display: flex;
@@ -211,5 +221,16 @@ const handleSave = async () => {
   background: var(--el-fill-color-light);
   color: var(--el-text-color-secondary);
   font-size: 14px;
+}
+
+.image-slot-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  font-size: 30px;
 }
 </style>

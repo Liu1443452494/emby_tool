@@ -1223,8 +1223,6 @@ class EpisodeRefresherLogic:
             return None
 
 
-    # === 文件: backend/episode_refresher_logic.py === #
-# 请使用下面的完整函数代码覆盖源文件中的 _upload_db_to_github 函数
 
     def _upload_db_to_github(self, db_content: Dict, sha: Optional[str], github_conf) -> bool:
         task_cat = "备份到GitHub"
@@ -1301,6 +1299,67 @@ class EpisodeRefresherLogic:
         except Exception as e:
             ui_logger.error(f"【{task_cat}】上传 database.json 时发生错误: {e}", task_category=task_cat)
             return False
+        
+
+    def get_local_screenshots_for_series(self, series_id: str) -> List[Dict]:
+        """
+        扫描指定剧集的本地截图缓存目录，并返回存在截图文件的分集信息列表。
+        """
+        task_cat = f"精准覆盖扫描({series_id})"
+        ui_logger.info(f"➡️ 开始为剧集(ID: {series_id})扫描本地截图...", task_category=task_cat)
+
+        series_details = self._get_emby_item_details(series_id, fields="ProviderIds,Name")
+        if not series_details:
+            ui_logger.error(f"❌ 无法获取剧集 {series_id} 的详情，扫描中止。", task_category=task_cat)
+            return []
+
+        series_tmdb_id = next((v for k, v in series_details.get("ProviderIds", {}).items() if k.lower() == 'tmdb'), None)
+        if not series_tmdb_id:
+            ui_logger.error(f"❌ 剧集《{series_details.get('Name')}》缺少 TMDB ID，无法定位缓存目录。", task_category=task_cat)
+            return []
+
+        cache_dir = self._find_screenshot_cache_dir_by_tmdbid(series_tmdb_id)
+        if not cache_dir:
+            ui_logger.warning(f"⚠️ 未找到剧集《{series_details.get('Name')}》的本地截图缓存目录。", task_category=task_cat)
+            return []
+
+        ui_logger.info(f"🔍 找到缓存目录: {os.path.basename(cache_dir)}，开始扫描文件...", task_category=task_cat)
+        
+        file_pattern = re.compile(r'season-(\d+)-episode-(\d+)\.jpg', re.IGNORECASE)
+        found_episodes = set()
+
+        for filename in os.listdir(cache_dir):
+            match = file_pattern.match(filename)
+            if match:
+                season_num = int(match.group(1))
+                episode_num = int(match.group(2))
+                found_episodes.add((season_num, episode_num))
+        
+        if not found_episodes:
+            ui_logger.info("✅ 扫描完成，但未发现任何有效的截图文件。", task_category=task_cat)
+            return []
+
+        ui_logger.info(f"✅ 扫描完成，共找到 {len(found_episodes)} 个有效截图。正在匹配Emby分集信息...", task_category=task_cat)
+
+        try:
+            episodes_url = f"{self.base_url}/Items"
+            episodes_params = {**self.params, "ParentId": series_id, "IncludeItemTypes": "Episode", "Recursive": "true", "Fields": "Id,Name,IndexNumber,ParentIndexNumber,SeriesName,ProviderIds"}
+            episodes_resp = self.session.get(episodes_url, params=episodes_params, timeout=30)
+            episodes_resp.raise_for_status()
+            all_emby_episodes = episodes_resp.json().get("Items", [])
+            
+            result_list = []
+            for ep in all_emby_episodes:
+                key = (ep.get("ParentIndexNumber"), ep.get("IndexNumber"))
+                if key in found_episodes:
+                    result_list.append(ep)
+            
+            ui_logger.info(f"🎉 成功匹配到 {len(result_list)} 个可用于覆盖的分集。", task_category=task_cat)
+            return result_list
+
+        except Exception as e:
+            ui_logger.error(f"❌ 在获取或匹配Emby分集信息时出错: {e}", task_category=task_cat, exc_info=True)
+            return []
         
 
     def precise_upload_from_local_task(self, series_tmdb_id: str, series_name: str, episodes: List[Dict], config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):

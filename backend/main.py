@@ -1219,6 +1219,18 @@ def get_series_episodes(series_id: str):
     except Exception as e:
         ui_logger.error(f"获取剧集 {series_id} 的分集列表时失败: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/api/episode-refresher/series/{series_id}/local-screenshots")
+def get_local_screenshots_for_series_api(series_id: str):
+    """获取指定剧集在本地存在截图的分集列表"""
+    task_cat = "API-剧集刷新"
+    try:
+        config = app_config.load_app_config()
+        logic = EpisodeRefresherLogic(config)
+        return logic.get_local_screenshots_for_series(series_id)
+    except Exception as e:
+        ui_logger.error(f"获取剧集 {series_id} 的本地截图列表时失败: {e}", task_category=task_cat, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/episode-refresher/precise-upload-from-local")
 def precise_upload_from_local_api(req: PreciseScreenshotUpdateRequest):

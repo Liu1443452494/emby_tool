@@ -1142,6 +1142,37 @@ const handlePreciseSeriesSelection = async (series) => {
   selectedSeriesForPreciseUpdate.value = series;
   isFetchingEpisodes.value = true;
   try {
+    // --- 核心修改：调用新的、经过筛选的 API 接口 ---
+    const response = await fetch(`${API_BASE_URL}/api/episode-refresher/series/${series.Id}/local-screenshots`);
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.detail || '获取分集列表失败');
+    }
+    const episodes = await response.json();
+    // --- 新增：如果返回列表为空，给出提示 ---
+    if (episodes.length === 0) {
+      ElMessage.info('该剧集在本地没有找到任何可用于覆盖的截图文件。');
+    }
+    episodesForSelection.value = _.sortBy(episodes, ['ParentIndexNumber', 'IndexNumber']);
+  } catch (error) {
+    ElMessage.error(`获取分集列表失败: ${error.message}`);
+    episodesForSelection.value = [];
+  } finally {
+    isFetchingEpisodes.value = false;
+  }
+};
+  
+  const tmdbId = getProviderId(series, 'tmdb');
+  if (!tmdbId) {
+    ElMessage.warning('该剧集缺少 TMDB ID，无法进行后续操作。');
+    selectedSeriesForPreciseUpdate.value = null;
+    episodesForSelection.value = [];
+    return;
+  }
+
+  selectedSeriesForPreciseUpdate.value = series;
+  isFetchingEpisodes.value = true;
+  try {
     const response = await fetch(`${API_BASE_URL}/api/episodes/${series.Id}`);
     if (!response.ok) {
       const err = await response.json();
