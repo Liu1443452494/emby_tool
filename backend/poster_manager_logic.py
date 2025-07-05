@@ -46,6 +46,20 @@ class PosterManagerLogic:
         session.mount("https://", adapter)
         session.mount("http://", adapter)
         return session
+    
+    def _get_emby_item_details(self, item_id: str, fields: str) -> Dict:
+        """从 Emby 获取媒体项的详细信息"""
+        import requests
+        try:
+            url = f"{self.config.server_config.server}/Users/{self.config.server_config.user_id}/Items/{item_id}"
+            params = {"api_key": self.config.server_config.api_key, "Fields": fields}
+            proxies = self.proxy_manager.get_proxies(url)
+            response = self.session.get(url, params=params, timeout=15, proxies=proxies)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            logging.error(f"【海报管理】获取媒体项 {item_id} 的详情失败: {e}")
+            raise e
 
     def _get_tmdb_id(self, item_id: str) -> Optional[str]:
         """从 Emby 获取媒体项的 TMDB ID"""
@@ -625,13 +639,14 @@ class PosterManagerLogic:
     def get_single_item_details(self, item_id: str) -> Dict:
         """获取单个媒体项在 Emby 和 GitHub 两侧的图片详情"""
         # 1. 获取 Emby 侧信息
-        emby_details = self._get_emby_item_details(item_id, "ImageTags,Name,ProductionYear,ProviderIds")
+        emby_details = self._get_emby_item_details(item_id, "Name,ProductionYear,ProviderIds")
         emby_images = {}
-        image_tags = emby_details.get("ImageTags", {})
-        for img_type, emby_key in {"poster": "Primary", "logo": "Logo", "fanart": "Backdrop"}.items():
-            if image_tags.get(emby_key):
-                # 仅返回存在即可，具体URL由前端代理拼接
-                emby_images[img_type] = {"url": f"/api/emby-image-proxy?path=Items/{item_id}/Images/{emby_key}"}
+        
+        # 使用新方法获取 Emby 图片的详细信息
+        for img_type in ["poster", "logo", "fanart"]:
+            details = self._get_emby_image_details(item_id, img_type)
+            if details:
+                emby_images[img_type] = details
         
         # 2. 获取 GitHub 侧信息
         github_images = {}
@@ -641,7 +656,15 @@ class PosterManagerLogic:
             for img_type in ["poster", "logo", "fanart"]:
                 key = f"{tmdb_id}-{img_type}"
                 if key in remote_map:
-                    github_images[img_type] = remote_map[key]
+                    # 为 GitHub 侧也添加格式化的分辨率和大小
+                    gh_info = remote_map[key]
+                    size_bytes = gh_info.get("size", 0)
+                    # GitHub 索引中没有分辨率，所以我们只提供大小
+                    github_images[img_type] = {
+                        "url": gh_info.get("url"),
+                        "resolution": "未知分辨率",
+                        "size": f"{size_bytes / 1024 / 1024:.2f} MB" if size_bytes > 1024 * 1024 else f"{size_bytes / 1024:.1f} KB"
+                    }
 
         return {
             "emby": emby_images,

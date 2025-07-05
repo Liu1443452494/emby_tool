@@ -12,12 +12,16 @@
       <div class="left-panel">
         <el-card class="box-card action-card" shadow="never">
           <template #header>
-            <div class="card-header"><span>批量操作</span></div>
+            <!-- 核心修正 1: 将“目标范围”标题移到 header 中 -->
+            <div class="card-header">
+              <span>批量操作</span>
+              <el-tag type="info" effect="light" size="small">目标范围</el-tag>
+            </div>
           </template>
           <div class="action-form">
             <div class="scope-selector">
-              <p class="form-label">目标范围</p>
-              <el-radio-group v-model="batchScope.mode">
+              <!-- 移除此处的 <p class="form-label">目标范围</p> -->
+              <el-radio-group v-model="batchScope.mode" class="scope-radio-grid">
                 <el-radio value="latest">最新入库</el-radio>
                 <el-radio value="favorites">仅收藏</el-radio>
                 <el-radio value="all">所有媒体库</el-radio>
@@ -25,6 +29,42 @@
                 <el-radio value="by_library">按媒体库</el-radio>
                 <el-radio value="by_search">按搜索/ID</el-radio>
               </el-radio-group>
+
+              <div class="sub-options">
+                <div v-if="batchScope.mode === 'latest'" class="latest-options">
+                  <el-form-item label="获取最近">
+                    <el-input-number v-model="batchScope.days" :min="1" controls-position="right" />
+                    <span class="option-unit">天内</span>
+                  </el-form-item>
+                  <el-form-item label="最多处理">
+                    <el-input-number v-model="batchScope.limit" :min="1" :max="500" controls-position="right" />
+                    <span class="option-unit">条</span>
+                  </el-form-item>
+                </div>
+                <div v-if="batchScope.mode === 'by_type'">
+                  <el-radio-group v-model="batchScope.media_type">
+                    <el-radio value="Movie">仅电影</el-radio>
+                    <el-radio value="Series">仅电视剧</el-radio>
+                  </el-radio-group>
+                </div>
+                <div v-if="batchScope.mode === 'by_library'">
+                  <el-select v-model="batchScope.library_ids" multiple placeholder="请选择媒体库" style="width: 100%;"
+                    filterable>
+                    <el-option v-for="item in mediaStore.libraries" :key="item.id" :label="item.name"
+                      :value="item.id" />
+                  </el-select>
+                </div>
+                <div v-if="batchScope.mode === 'all'">
+                  <el-input v-model="batchScope.library_blacklist" type="textarea" :rows="2"
+                    placeholder="输入要排除的媒体库名称，用英文逗号(,)隔开" />
+                </div>
+                <div v-if="batchScope.mode === 'by_search'">
+                  <el-button @click="openSearchDialog">
+                    选择媒体项...
+                  </el-button>
+                  <span class="selection-count-text">已选择 {{ batchScope.item_ids.length }} 个项目</span>
+                </div>
+              </div>
             </div>
             <div class="content-selector">
               <p class="form-label">内容类型</p>
@@ -35,100 +75,160 @@
               </el-checkbox-group>
             </div>
             <div class="button-group">
-              <el-button type="primary" @click="handleBackup" :loading="isLoading">开始备份到 GitHub</el-button>
-              <el-button type="success" @click="handleRestore" :loading="isLoading">从 GitHub 恢复到 Emby</el-button>
+              <el-button @click="handleSaveScope" :loading="isSavingScope"
+                class="button-save-scope">保存范围与内容配置</el-button>
+              <el-button type="primary" @click="handleBackup" :loading="isLoading" class="button-backup">开始备份到
+                GitHub</el-button>
+              <el-button type="success" @click="handleRestore" :loading="isLoading" class="button-restore">从 GitHub 恢复到
+                Emby</el-button>
             </div>
           </div>
         </el-card>
       </div>
-      <div class="right-panel">
-        <div class="stats-cards-container" v-loading="store.isStatsLoading">
-          <el-card class="stat-card">
-            <div class="stat-title">已备份图片总数</div>
-            <div class="stat-value">{{ store.stats.total_images.toLocaleString() }}</div>
-          </el-card>
-          <el-card class="stat-card">
-            <div class="stat-title">总占用空间</div>
-            <div class="stat-value">{{ store.formatBytes(store.stats.total_size_bytes) }}</div>
-          </el-card>
-          <el-card class="stat-card">
-            <div class="stat-title">仓库总数</div>
-            <div class="stat-value">{{ store.stats.repo_count }}</div>
-          </el-card>
-          <el-card class="stat-card">
-            <div class="stat-title">总空间使用百分比</div>
-            <div class="stat-value" :class="percentColorClass">{{ store.totalSpaceUsedPercent }}%</div>
-            <div class="stat-subtitle">{{ store.totalSpaceUsedText }}</div>
-          </el-card>
+      <div 
+  class="right-panel loading-container" 
+  v-loading="store.isStatsLoading"
+  element-loading-text="正在加载状态..."
+  :element-loading-spinner="loadingSvg"
+  element-loading-svg-view-box="-10, -10, 50, 50"
+>
+  <div class="stats-cards-container">
+    <el-card class="stat-card">
+      <div class="stat-title">已备份图片总数</div>
+      <div class="stat-value">{{ store.stats.total_images.toLocaleString() }}</div>
+    </el-card>
+    <el-card class="stat-card">
+      <div class="stat-title">总占用空间</div>
+      <div class="stat-value">{{ store.formatBytes(store.stats.total_size_bytes) }}</div>
+    </el-card>
+    <el-card class="stat-card">
+      <div class="stat-title">仓库总数</div>
+      <div class="stat-value">{{ store.stats.repo_count }}</div>
+    </el-card>
+    <el-card class="stat-card">
+      <div class="stat-title">总空间使用百分比</div>
+      <div class="stat-value" :class="percentColorClass">{{ store.totalSpaceUsedPercent }}%</div>
+      <div class="stat-subtitle">{{ store.totalSpaceUsedText }}</div>
+    </el-card>
+  </div>
+  <div class="charts-container">
+    <el-card class="chart-card">
+      <template #header><div class="card-header"><el-icon><PieChart /></el-icon> 图片类型分布</div></template>
+      <div class="pie-charts-wrapper">
+        <div class="pie-chart-item">
+          <el-progress type="dashboard" :stroke-width="15" :percentage="typePercents.poster" color="#67C23A" />
+          <div class="pie-chart-label">海报 ({{ store.stats.type_counts.poster }})</div>
         </div>
-        <div class="charts-container" v-loading="store.isStatsLoading">
-          <el-card class="chart-card">
-            <template #header><div class="card-header"><el-icon><PieChart /></el-icon> 图片类型分布</div></template>
-            <div class="pie-charts-wrapper">
-              <div class="pie-chart-item">
-                <el-progress type="dashboard" :stroke-width="15" :percentage="typePercents.poster" color="#67C23A" />
-                <div class="pie-chart-label">海报 ({{ store.stats.type_counts.poster }})</div>
-              </div>
-              <div class="pie-chart-item">
-                <el-progress type="dashboard" :stroke-width="15" :percentage="typePercents.logo" color="#E6A23C" />
-                <div class="pie-chart-label">Logo ({{ store.stats.type_counts.logo }})</div>
-              </div>
-              <div class="pie-chart-item">
-                <el-progress type="dashboard" :stroke-width="15" :percentage="typePercents.fanart" color="#409EFF" />
-                <div class="pie-chart-label">背景图 ({{ store.stats.type_counts.fanart }})</div>
-              </div>
-            </div>
-          </el-card>
-          <el-card class="chart-card">
-            <template #header><div class="card-header"><el-icon><DataAnalysis /></el-icon> <span>仓库容量概览</span>
-                <!-- --- 新增代码块 --- -->
-                <el-button 
-                  :icon="Refresh" 
-                  circle 
-                  text 
-                  :loading="store.isStatsLoading"
-                  @click="store.fetchStats"
-                  style="margin-left: auto;"
-                  title="刷新状态"
-                /></div></template>
-            <div class="repo-list-wrapper">
-              <div v-for="(repo, index) in store.stats.repo_details" :key="index" class="repo-item">
-                <span class="repo-name">{{ repo.name }}</span>
-                <el-progress :percentage="getRepoPercent(repo)" :stroke-width="15" :show-text="false" :color="getRepoColor(repo)" class="repo-progress" />
-                <span class="repo-size">{{ store.formatBytes(repo.used_bytes) }}</span>
-              </div>
-            </div>
-          </el-card>
+        <div class="pie-chart-item">
+          <el-progress type="dashboard" :stroke-width="15" :percentage="typePercents.logo" color="#E6A23C" />
+          <div class="pie-chart-label">Logo ({{ store.stats.type_counts.logo }})</div>
+        </div>
+        <div class="pie-chart-item">
+          <el-progress type="dashboard" :stroke-width="15" :percentage="typePercents.fanart" color="#409EFF" />
+          <div class="pie-chart-label">背景图 ({{ store.stats.type_counts.fanart }})</div>
         </div>
       </div>
+    </el-card>
+    <el-card class="chart-card">
+      <template #header><div class="card-header"><el-icon><DataAnalysis /></el-icon> <span>仓库容量概览</span>
+          <el-button 
+            :icon="Refresh" 
+            circle 
+            text 
+            :loading="store.isStatsLoading"
+            @click="store.fetchStats"
+            style="margin-left: auto;"
+            title="刷新状态"
+          /></div></template>
+      <div class="repo-list-wrapper">
+        <div v-for="(repo, index) in store.stats.repo_details" :key="index" class="repo-item">
+          <span class="repo-name">{{ repo.name }}</span>
+          <el-progress :percentage="getRepoPercent(repo)" :stroke-width="15" :show-text="false" :color="getRepoColor(repo)" class="repo-progress" />
+          <span class="repo-size">{{ store.formatBytes(repo.used_bytes) }}</span>
+        </div>
+      </div>
+    </el-card>
+  </div>
+</div>
     </div>
 
     <PosterManagerConfigDialog v-model:visible="isConfigDialogVisible" />
     <PosterManagerSingleDialog v-model:visible="isSingleManageDialogVisible" />
   </div>
+  <!-- --- 新增：按搜索/ID 选择媒体对话框 --- -->
+  <el-dialog v-model="isSearchDialogVisible" title="选择媒体项" width="60%" top="5vh">
+    <div class="search-dialog-content">
+      <el-form @submit.prevent="handleSearch" class="search-form">
+        <el-input v-model="searchQuery" placeholder="输入标题或ItemID..." clearable />
+        <el-button type="primary" native-type="submit" :loading="mediaStore.isLoading">搜索</el-button>
+      </el-form>
+      <div class="search-results-table" v-loading="mediaStore.isLoading">
+        <el-table :data="mediaStore.searchResults" height="100%" @selection-change="handleDialogSelectionChange"
+          empty-text="请输入关键词搜索">
+          <el-table-column type="selection" width="45" />
+          <el-table-column prop="Name" label="标题" show-overflow-tooltip />
+          <el-table-column prop="ProductionYear" label="年份" width="70" />
+        </el-table>
+      </div>
+    </div>
+    <template #footer>
+      <span class="dialog-footer">
+        <el-button @click="isSearchDialogVisible = false">取消</el-button>
+        <el-button @click="confirmSearchSelection">
+          确认选择 ({{ dialogSelection.length }} 项)
+        </el-button>
+      </span>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { usePosterManagerStore } from '@/stores/posterManager';
-import { ElMessage } from 'element-plus';
+import { useMediaStore } from '@/stores/media'; import { useConfigStore } from '@/stores/config';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { useStorage } from '@vueuse/core';
 import { PieChart, DataAnalysis, Refresh } from '@element-plus/icons-vue';
 import PosterManagerConfigDialog from '@/components/PosterManagerConfigDialog.vue';
 import PosterManagerSingleDialog from '@/components/PosterManagerSingleDialog.vue';
+import _ from 'lodash';
 
 const store = usePosterManagerStore();
-
-const batchScope = ref({ mode: 'latest' });
-const selectedContentTypes = ref(['poster', 'logo', 'fanart']);
+const mediaStore = useMediaStore();
+const configStore = useConfigStore();
+const batchScope = ref({
+  mode: 'latest',
+  days: 7,
+  limit: 100,
+  media_type: 'Movie',
+  library_ids: [],
+  library_blacklist: '',
+  item_ids: []
+});
+const selectedContentTypes = useStorage('poster-manager-content-types', ['poster', 'logo', 'fanart']);
 const isLoading = ref(false);
+const isSavingScope = ref(false);
 
 const isConfigDialogVisible = ref(false);
 const isSingleManageDialogVisible = ref(false);
 
+const isSearchDialogVisible = ref(false);
+const searchQuery = ref('');
+const dialogSelection = ref([]);
+
 onMounted(() => {
   store.fetchConfig();
   store.fetchStats();
+  mediaStore.fetchLibraries();
 });
+
+// --- 核心修正 2: 监听 configStore 的变化，同步到本地状态 ---
+watch(() => configStore.appConfig.scheduled_tasks_config.target_scope, (newScope) => {
+  if (newScope) {
+    // 使用 cloneDeep 防止意外的引用修改
+    batchScope.value = _.cloneDeep(newScope);
+  }
+}, { deep: true, immediate: true });
 
 const percentColorClass = computed(() => {
   const p = store.totalSpaceUsedPercent;
@@ -147,6 +247,18 @@ const typePercents = computed(() => {
   };
 });
 
+// --- 新增：自定义加载图标 ---
+const loadingSvg = `
+  <path class="path" d="
+    M 30 15
+    L 28 17
+    M 25.61 25.61
+    A 15 15, 0, 0, 1, 15 30
+    A 15 15, 0, 1, 1, 27.99 7.5
+    L 15 15
+  " style="stroke-width: 4px; fill: rgba(0, 0, 0, 0);"/>
+`;
+
 const getRepoPercent = (repo) => {
   if (!repo.threshold_bytes) return 0;
   return Math.round((repo.used_bytes / repo.threshold_bytes) * 100);
@@ -164,6 +276,10 @@ const handleBackup = () => {
     ElMessage.warning('请至少选择一种内容类型进行备份。');
     return;
   }
+  if (batchScope.value.mode === 'by_search' && batchScope.value.item_ids.length === 0) {
+    ElMessage.warning('在“按搜索/ID”模式下，请先搜索并选择媒体项。');
+    return;
+  }
   store.startBackup(batchScope.value, selectedContentTypes.value, store.config.overwrite_remote_files);
 };
 
@@ -172,11 +288,62 @@ const handleRestore = () => {
     ElMessage.warning('请至少选择一种内容类型进行恢复。');
     return;
   }
+  if (batchScope.value.mode === 'by_search' && batchScope.value.item_ids.length === 0) {
+    ElMessage.warning('在“按搜索/ID”模式下，请先搜索并选择媒体项。');
+    return;
+  }
   store.startRestore(batchScope.value, selectedContentTypes.value);
 };
+
+const openSearchDialog = () => {
+  isSearchDialogVisible.value = true;
+  searchQuery.value = '';
+  mediaStore.searchResults = [];
+  dialogSelection.value = [];
+};
+
+const handleSearch = () => {
+  mediaStore.searchMedia(searchQuery.value);
+};
+
+const handleDialogSelectionChange = (selection) => {
+  dialogSelection.value = selection;
+};
+
+const confirmSearchSelection = () => {
+  batchScope.value.item_ids = dialogSelection.value.map(item => item.Id);
+  isSearchDialogVisible.value = false;
+};
+
+const handleSaveScope = async () => {
+  isSavingScope.value = true;
+  try {
+    const configToSave = {
+      target_scope: batchScope.value,
+      tasks: configStore.appConfig.scheduled_tasks_config.tasks
+    };
+    const result = await configStore.saveScheduledTasksConfig(configToSave);
+    if (result.success) {
+      ElMessage.success('通用目标范围配置已保存！');
+    } else {
+      ElMessage.error(`保存失败: ${result.message}`);
+    }
+  } catch (error) {
+    ElMessage.error(`保存配置时发生错误: ${error.message}`);
+  } finally {
+    isSavingScope.value = false;
+  }
+};
+
 </script>
 
 <style scoped>
+.poster-manager-page {
+  --custom-theme-color: #609e95;
+  --custom-theme-color-hover: #7fb8af;
+  --custom-theme-color-active: #4a8a7f;
+}
+
 .poster-manager-page {
   height: 100%;
   display: flex;
@@ -184,20 +351,26 @@ const handleRestore = () => {
   padding: 20px;
   box-sizing: border-box;
 }
+
 .page-header {
   padding: 20px 0;
   border-bottom: 1px solid var(--el-border-color-light);
   flex-shrink: 0;
   margin-bottom: 20px;
 }
-.page-header h2 { margin: 0 0 8px 0; }
-.page-header p { margin: 0; color: var(--el-text-color-secondary); }
+
+.page-header h2 {
+  margin: 0 0 8px 0;
+}
+
+.page-header p {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+}
 
 .top-actions {
   display: flex;
   gap: 15px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--el-border-color-light);
   margin-bottom: 20px;
   flex-shrink: 0;
 }
@@ -208,78 +381,344 @@ const handleRestore = () => {
   gap: 20px;
   overflow: hidden;
 }
-.left-panel { width: 350px; flex-shrink: 0; }
-.right-panel { flex-grow: 1; display: flex; flex-direction: column; gap: 20px; }
 
-.box-card, .chart-card, .stat-card { 
-  border: 1px solid var(--el-border-color-lighter); 
+.left-panel {
+  width: 350px;
+  flex-shrink: 0;
+}
+
+.right-panel {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.box-card,
+.chart-card,
+.stat-card {
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 12px;
 }
 
-.card-header { font-weight: bold; display: flex; align-items: center; gap: 8px; }
-.action-form { display: flex; flex-direction: column; gap: 20px; }
-.form-label { font-size: 14px; color: var(--el-text-color-secondary); margin-bottom: 8px; }
-.button-group { display: flex; flex-direction: column; gap: 10px; }
-.stats-cards-container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
-
-/* --- 核心修改：调整指标卡片内部样式 --- */
-.stat-card { 
-  text-align: center; 
-  padding: 20px; 
-}
-.stat-title { 
-  font-size: 1rem; 
-  color: var(--el-text-color-secondary); 
-  margin-bottom: 8px; /* 增加与数值的间距 */
-}
-.stat-value { 
-  font-size: 2.5rem; 
-  font-weight: bold; 
-}
-.stat-subtitle { 
-  font-size: 0.8rem; 
-  color: var(--el-text-color-placeholder); 
-  margin-top: 5px; 
-}
-/* --- 结束修改 --- */
-
-.color-green { color: #67C23A; }
-.color-yellow { color: #E6A23C; }
-.color-red { color: #F56C6C; }
-
-.charts-container { 
-  flex-grow: 1; 
-  display: grid; 
-  grid-template-columns: 1fr 1fr; 
-  gap: 20px; 
-  min-height: 0; /* 关键：让 flex/grid 子项能够正确地收缩 */
+.card-header {
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-/* --- 核心修改：确保图表卡片和其内容区占满高度 --- */
+.action-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.form-label {
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.button-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stats-cards-container {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.stat-card {
+  text-align: center;
+  padding: 20px;
+}
+
+.stat-title {
+  font-size: 1rem;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.stat-value {
+  font-size: 2.5rem;
+  font-weight: bold;
+}
+
+.stat-subtitle {
+  font-size: 0.8rem;
+  color: var(--el-text-color-placeholder);
+  margin-top: 5px;
+}
+
+.color-green {
+  color: #67C23A;
+}
+
+.color-yellow {
+  color: #E6A23C;
+}
+
+.color-red {
+  color: #F56C6C;
+}
+
+.charts-container {
+  flex-grow: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  min-height: 0;
+}
+
 .chart-card {
   display: flex;
   flex-direction: column;
 }
+
 .chart-card :deep(.el-card__body) {
   flex-grow: 1;
-  padding: 20px; /* 确保有内边距 */
-  display: flex; /* 让 body 也成为 flex 容器 */
-  flex-direction: column; /* 内部内容垂直排列 */
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
 }
-/* --- 结束修改 --- */
 
-.pie-charts-wrapper { 
-  display: flex; 
-  justify-content: space-around; 
+.pie-charts-wrapper {
+  display: flex;
+  justify-content: space-around;
   align-items: center;
-  height: 100%; 
+  height: 100%;
 }
-.pie-chart-item { text-align: center; }
-.pie-chart-label { margin-top: 10px; font-size: 14px; }
 
-.repo-list-wrapper { display: flex; flex-direction: column; gap: 15px; padding: 10px 0; }
-.repo-item { display: flex; align-items: center; gap: 15px; }
-.repo-name { width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.repo-progress { flex-grow: 1; }
-.repo-size { width: 100px; text-align: right; font-family: monospace; }
+.pie-chart-item {
+  text-align: center;
+}
+
+.pie-chart-label {
+  margin-top: 10px;
+  font-size: 14px;
+}
+
+.repo-list-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 10px 0;
+}
+
+.repo-item {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.repo-name {
+  width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.repo-progress {
+  flex-grow: 1;
+}
+
+.repo-size {
+  width: 100px;
+  text-align: right;
+  font-family: monospace;
+}
+
+.sub-options {
+  margin-top: 15px;
+  padding-left: 10px;
+  border-left: 2px solid var(--el-border-color-lighter);
+}
+
+.latest-options {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  align-items: flex-start;
+}
+
+.latest-options .el-form-item {
+  margin-bottom: 0;
+}
+
+.option-unit {
+  margin-left: 10px;
+  color: var(--el-text-color-regular);
+}
+
+.selection-count-text {
+  margin-left: 15px;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+}
+
+.search-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  height: 65vh;
+}
+
+.search-form {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.search-results-table {
+  flex-grow: 1;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.scope-radio-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.button-group {
+  margin-top: 10px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  padding-top: 20px;
+}
+
+/* --- 核心修正：全面覆盖主题色 --- */
+.poster-manager-page :deep(.el-button--primary) {
+  --el-button-bg-color: var(--custom-theme-color);
+  --el-button-border-color: var(--custom-theme-color);
+  --el-button-hover-bg-color: var(--custom-theme-color-hover);
+  --el-button-hover-border-color: var(--custom-theme-color-hover);
+  --el-button-active-bg-color: var(--custom-theme-color-active);
+  --el-button-active-border-color: var(--custom-theme-color-active);
+  --el-button-text-color: #ffffff;
+}
+
+/* 新增：为顶部按钮添加 hover 效果 */
+.top-actions .el-button:hover {
+  color: var(--custom-theme-color);
+  border-color: color-mix(in srgb, var(--custom-theme-color) 50%, transparent);
+  background-color: color-mix(in srgb, var(--custom-theme-color) 10%, transparent);
+}
+
+.poster-manager-page :deep(.themed-button-plain) {
+  --el-button-text-color: var(--custom-theme-color);
+  --el-button-bg-color: color-mix(in srgb, var(--custom-theme-color) 10%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--custom-theme-color) 40%, transparent);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: var(--custom-theme-color-hover);
+  --el-button-hover-border-color: var(--custom-theme-color-hover);
+}
+
+.poster-manager-page :deep(.el-radio__input.is-checked .el-radio__inner),
+.poster-manager-page :deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
+  border-color: var(--custom-theme-color);
+  background: var(--custom-theme-color);
+}
+
+.poster-manager-page :deep(.el-radio__input.is-checked+.el-radio__label),
+.poster-manager-page :deep(.el-checkbox__input.is-checked+.el-checkbox__label) {
+  color: var(--custom-theme-color);
+}
+
+.poster-manager-page :deep(.el-select .el-tag) {
+  --el-tag-bg-color: color-mix(in srgb, var(--custom-theme-color) 20%, transparent);
+  --el-tag-border-color: color-mix(in srgb, var(--custom-theme-color) 30%, transparent);
+  --el-tag-text-color: var(--custom-theme-color);
+}
+
+.poster-manager-page :deep(.el-select .el-tag .el-tag__close) {
+  color: var(--custom-theme-color);
+}
+
+.poster-manager-page :deep(.el-select .el-tag .el-tag__close:hover) {
+  background-color: var(--custom-theme-color);
+  color: white;
+}
+
+.poster-manager-page :deep(.el-dialog .el-button--primary) {
+  --el-button-bg-color: var(--custom-theme-color);
+  --el-button-border-color: var(--custom-theme-color);
+  --el-button-hover-bg-color: var(--custom-theme-color-hover);
+  --el-button-hover-border-color: var(--custom-theme-color-hover);
+  --el-button-active-bg-color: var(--custom-theme-color-active);
+  --el-button-active-border-color: var(--custom-theme-color-active);
+}
+
+/* --- 核心修正：按钮组样式重构 --- */
+.button-group {
+  margin-top: 10px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  padding-top: 20px;
+  display: flex;
+  /* 使用 flex 布局 */
+  flex-direction: column;
+  /* 垂直排列 */
+  gap: 10px;
+  /* 按钮间距 */
+}
+
+/* 统一按钮宽度 */
+.button-group .el-button {
+  width: 100%;
+  margin-left: 0 !important;
+  /* 覆盖 Element Plus 的默认 margin */
+}
+
+/* 保存范围按钮 - 浅色朴素样式 */
+.button-save-scope {
+  --el-button-text-color: var(--custom-theme-color);
+  --el-button-bg-color: color-mix(in srgb, var(--custom-theme-color) 10%, transparent);
+  --el-button-border-color: color-mix(in srgb, var(--custom-theme-color) 40%, transparent);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: var(--custom-theme-color-hover);
+  --el-button-hover-border-color: var(--custom-theme-color-hover);
+}
+
+/* 备份按钮 - 主题色实心样式 (继承自 .el-button--primary) */
+.button-backup {
+  --el-button-bg-color: var(--custom-theme-color);
+  --el-button-border-color: var(--custom-theme-color);
+  --el-button-hover-bg-color: var(--custom-theme-color-hover);
+  --el-button-hover-border-color: var(--custom-theme-color-hover);
+  --el-button-active-bg-color: var(--custom-theme-color-active);
+  --el-button-active-border-color: var(--custom-theme-color-active);
+  --el-button-text-color: #ffffff;
+}
+
+/* 恢复按钮 - 浅绿色实心样式 */
+.button-restore {
+  --el-button-bg-color: #8cc8c0;
+  /* 一个更浅的、协调的绿色 */
+  --el-button-border-color: #8cc8c0;
+  --el-button-hover-bg-color: #a1d4cd;
+  --el-button-hover-border-color: #a1d4cd;
+  --el-button-active-bg-color: #79b8b0;
+  --el-button-active-border-color: #79b8b0;
+  --el-button-text-color: #ffffff;
+}
+/* --- 新增：为加载容器添加毛玻璃效果 --- */
+.loading-container :deep(.el-loading-mask) {
+  background-color: rgba(var(--custom-bg-overlay-rgb), 0.5); /* 使用与卡片背景更接近的颜色作为遮罩底色 */
+  backdrop-filter: blur(2px); /* 添加背景模糊效果 */
+  border-radius: 12px; /* 确保遮罩也有圆角 */
+}
+
+.loading-container :deep(.el-loading-spinner .el-loading-text) {
+  color: var(--custom-theme-color);
+  font-weight: bold;
+}
+
+.loading-container :deep(.el-loading-spinner .path) {
+  stroke: var(--custom-theme-color);
+}
 </style>

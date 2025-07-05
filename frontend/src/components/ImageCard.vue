@@ -60,7 +60,7 @@ import { Loading, Picture } from '@element-plus/icons-vue';
 
 const props = defineProps({
   imageInfo: { type: Object, default: null },
-  type: { type: String, required: true }, // 'poster', 'backdrop', 'logo'
+  type: { type: String, required: true }, // 'poster', 'fanart', 'logo'
   isRemote: { type: Boolean, default: false },
   actionText: { type: String, default: '操作' },
   actionDisabled: { type: Boolean, default: false },
@@ -71,7 +71,7 @@ defineEmits(['action', 'delete']);
 const typeName = computed(() => {
   const names = {
     poster: '海报',
-    backdrop: '背景图',
+    fanart: '背景图', 
     logo: 'Logo',
   };
   return names[props.type] || '图片';

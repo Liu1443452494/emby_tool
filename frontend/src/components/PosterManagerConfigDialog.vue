@@ -1,13 +1,6 @@
 <template>
-  <el-dialog
-    :model-value="visible"
-    @update:model-value="$emit('update:visible', $event)"
-    title="配置中心 - 海报管理器"
-    width="80%"
-    top="5vh"
-    destroy-on-close
-    @open="handleOpen"
-  >
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="配置中心 - 海报管理器"
+    width="80%" top="5vh" destroy-on-close @open="handleOpen">
     <div class="config-dialog-content">
       <el-tabs v-model="activeTab">
         <el-tab-pane label="仓库管理" name="repos">
@@ -23,19 +16,24 @@
               <el-table-column label="状态" min-width="300">
                 <template #default="scope">
                   <div class="repo-status-cell">
-                    <el-progress :percentage="getRepoUsagePercent(scope.row)" :color="getRepoUsageColor(scope.row)" :stroke-width="15" :show-text="true" class="status-progress" />
+                    <el-progress :percentage="getRepoUsagePercent(scope.row)" :color="getRepoUsageColor(scope.row)"
+                      :stroke-width="15" :show-text="false" class="status-progress" />
                     <span class="progress-text">{{ getRepoUsageText(scope.row) }}</span>
                     <span class="update-time-text">{{ getRelativeTime(scope.row.state.last_checked) }}</span>
-                    <el-tag v-if="getRepoUsagePercent(scope.row) > 95" type="danger" size="small" effect="light" class="warning-tag">警告</el-tag>
+                    <el-tag v-if="getRepoUsagePercent(scope.row) > 95" type="danger" size="small" effect="light"
+                      class="warning-tag">警告</el-tag>
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="150" align="center">
+              <!-- 核心修正 1: 调整操作列宽度，并将按钮改为 size="small" 的实心按钮 -->
+              <el-table-column label="操作" width="220" align="center">
                 <template #default="scope">
                   <div class="action-buttons-cell">
-                    <el-button link type="primary" @click="moveRepo(scope.$index, -1)" :disabled="scope.$index === 0">上移</el-button>
-                    <el-button link type="primary" @click="moveRepo(scope.$index, 1)" :disabled="scope.$index === localConfig.github_repos.length - 1">下移</el-button>
-                    <el-button link type="primary" @click="editRepo(scope.row, scope.$index)">编辑</el-button>
+                    <el-button size="small" @click="moveRepo(scope.$index, -1)"
+                      :disabled="scope.$index === 0">上移</el-button>
+                    <el-button size="small" @click="moveRepo(scope.$index, 1)"
+                      :disabled="scope.$index === localConfig.github_repos.length - 1">下移</el-button>
+                    <el-button type="primary" size="small" @click="editRepo(scope.row, scope.$index)">编辑</el-button>
                   </div>
                 </template>
               </el-table-column>
@@ -46,21 +44,26 @@
         <el-tab-pane label="全局参数" name="params">
           <el-form :model="localConfig" label-position="top" class="global-params-form">
             <el-form-item label="全局个人访问令牌 (PAT)">
-              <el-input v-model="localConfig.global_personal_access_token" type="password" show-password placeholder="用于所有未单独配置PAT的仓库" />
+              <el-input v-model="localConfig.global_personal_access_token" type="password" show-password
+                placeholder="用于所有未单独配置PAT的仓库" />
             </el-form-item>
             <el-form-item label="仓库容量阈值 (MB)">
               <el-input-number v-model="localConfig.repository_size_threshold_mb" :min="100" :max="1000" />
-              <div class="form-item-description">建议值 900MB。系统将根据此阈值在本地预先规划文件分发，以避免上传时超容失败。不建议设置超过 1000MB，因为GitHub仓库的硬性限制为1GB。</div>
+              <div class="form-item-description">建议值 900MB。系统将根据此阈值在本地预先规划文件分发，以避免上传时超容失败。不建议设置超过
+                1000MB，因为GitHub仓库的硬性限制为1GB。
+              </div>
             </el-form-item>
             <el-form-item label="API 冷却时间 (秒)">
               <div class="cooldown-group">
                 <div class="cooldown-item">
                   <span>图片下载冷却:</span>
-                  <el-input-number v-model="localConfig.image_download_cooldown_seconds" :min="0" :step="0.1" :precision="1" />
+                  <el-input-number v-model="localConfig.image_download_cooldown_seconds" :min="0" :step="0.1"
+                    :precision="1" />
                 </div>
                 <div class="cooldown-item">
                   <span>文件上传冷却:</span>
-                  <el-input-number v-model="localConfig.file_upload_cooldown_seconds" :min="0" :step="0.1" :precision="1" />
+                  <el-input-number v-model="localConfig.file_upload_cooldown_seconds" :min="0" :step="0.1"
+                    :precision="1" />
                 </div>
               </div>
             </el-form-item>
@@ -76,7 +79,8 @@
               <div class="form-item-description">
                 <p>所有从 Emby 下载或待上传的图片都将存储在此目录。</p>
                 <p>路径结构约定: <code>{{ localConfig.local_cache_path || '{本地缓存路径}' }}/{TMDB_ID}/{图片类型}.{后缀}</code></p>
-                <p>文件命名约定: 系统将严格扫描和处理 <code>poster.jpg</code>, <code>clearlogo.png</code>, <code>fanart.jpg</code> 文件。</p>
+                <p>文件命名约定: 系统将严格扫描和处理 <code>poster.jpg</code>, <code>clearlogo.png</code>, <code>fanart.jpg</code> 文件。
+                </p>
               </div>
             </el-form-item>
           </el-form>
@@ -98,7 +102,8 @@
           <el-input v-model="editingRepo.branch" />
         </el-form-item>
         <el-form-item label="仓库级 PAT (可选)">
-          <el-input v-model="editingRepo.personal_access_token" type="password" show-password placeholder="留空则使用全局PAT" />
+          <el-input v-model="editingRepo.personal_access_token" type="password" show-password
+            placeholder="留空则使用全局PAT" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -224,40 +229,52 @@ const handleSave = async () => {
 .repo-toolbar { margin-bottom: 15px; }
 .repo-management .el-table { flex-grow: 1; }
 
-/* --- 核心修改：状态列最终样式 --- */
+/* --- 核心修正 2: 状态列自适应布局 --- */
 .repo-status-cell {
   display: flex;
   align-items: center;
-  gap: 8px; /* 减小元素间距 */
+  gap: 8px;
   width: 100%;
-  font-size: 12px; /* 统一基础字号 */
+  font-size: 12px;
 }
 .status-progress {
-  width: 160px; /* 给进度条一个固定宽度 */
-  flex-shrink: 0;
+  flex-grow: 1; /* 让进度条占据所有可用空间 */
+  min-width: 80px; /* 设置一个最小宽度，防止过窄 */
 }
-/* 隐藏 el-progress 自带的文字，因为我们用独立的 span 来展示 */
 .status-progress :deep(.el-progress__text) {
   display: none;
 }
 .progress-text { 
   color: var(--el-text-color-secondary); 
   font-family: monospace;
-  white-space: nowrap; /* 防止换行 */
+  white-space: nowrap;
+  flex-shrink: 0; /* 防止文本被压缩 */
 }
 .update-time-text { 
   color: var(--el-text-color-placeholder); 
-  white-space: nowrap; /* 防止换行 */
-  margin-left: auto; /* 将时间推到右边 */
+  white-space: nowrap;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .warning-tag {
   flex-shrink: 0;
   margin-left: 8px;
 }
-/* --- 结束修改 --- */
+
+/* --- 核心修正 3: 操作按钮单元格样式 --- */
+.action-buttons-cell {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
 
 .global-params-form { padding: 20px; max-width: 800px; }
 .form-item-description { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.5; margin-top: 4px; }
 .cooldown-group { display: flex; gap: 30px; }
 .cooldown-item { display: flex; align-items: center; gap: 10px; }
+
+/* --- 核心修正 4: 对话框圆角 --- */
+:deep(.el-dialog) {
+  border-radius: 12px;
+}
 </style>
