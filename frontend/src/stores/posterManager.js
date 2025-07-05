@@ -133,11 +133,31 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
     }
   }
 
+  // frontend/src/stores/posterManager.js (函数替换)
+
   async function fetchSingleItemDetails(itemId) {
     try {
       const response = await fetch(`${API_BASE_URL}/api/poster-manager/item-details/${itemId}`);
-      if (!response.ok) throw new Error('获取单项详情失败');
-      return await response.json();
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || '获取单项详情失败');
+      }
+      
+      const details = await response.json();
+
+      // --- 新增：处理 Emby 图片 URL ---
+      // 确保后端返回的相对路径在前端能被正确请求
+      if (details && details.emby) {
+        for (const imageType in details.emby) {
+          const imageInfo = details.emby[imageType];
+          if (imageInfo && imageInfo.url && imageInfo.url.startsWith('/api/')) {
+            imageInfo.url = `${API_BASE_URL}${imageInfo.url}`;
+          }
+        }
+      }
+      // --- 新增结束 ---
+
+      return details;
     } catch (error) {
       showMessage('error', error.message);
       return null;

@@ -1,0 +1,45 @@
+/* frontend/src/assets/css/custom-loading.css (新文件) */
+
+/* 
+  这是一个全局样式文件，用于定义可复用的“能量环”加载动画。
+  任何需要此动画的 v-loading 容器，只需添加 class="energy-ring-loading-container" 即可。
+*/
+
+.energy-ring-loading-container .el-loading-mask {
+  backdrop-filter: blur(4px);
+  border-radius: 4px;
+}
+
+.energy-ring-loading-container .el-loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+}
+
+.energy-ring-loading-container .el-loading-spinner .el-loading-text {
+  color: var(--custom-theme-color, #609e95);
+  font-weight: bold;
+  margin: 0;
+}
+
+/* 隐藏 Element Plus 默认的 SVG 动画 */
+.energy-ring-loading-container .el-loading-spinner .circular {
+  display: none;
+}
+
+/* 使用 ::before 伪元素创建我们的能量环 */
+.energy-ring-loading-container .el-loading-spinner::before {
+  content: '';
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: conic-gradient(var(--custom-theme-color, #609e95), transparent);
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

@@ -1,7 +1,17 @@
+<!-- frontend/src/components/ImageCard.vue (template部分替换) -->
 <template>
-  <div class="image-card" :class="`type-${type}`">
-    <div class="image-container">
-      <el-image v-if="imageInfo" :src="imageInfo.url" fit="cover" lazy class="main-image">
+  <div class="image-card">
+    <div 
+      class="image-container" 
+      :style="{ aspectRatio: type === 'poster' ? '333 / 500' : '320 / 180' }"
+    >
+      <el-image 
+        v-if="imageInfo" 
+        :src="imageInfo.url" 
+        :fit="type === 'logo' ? 'contain' : 'cover'" 
+        lazy 
+        class="main-image"
+      >
         <template #placeholder>
           <div class="image-slot-loading">
             <el-icon class="is-loading"><Loading /></el-icon>
@@ -27,7 +37,7 @@
     <div class="action-bar">
       <el-button
         v-if="!isRemote"
-        type="primary"
+        plain
         :disabled="actionDisabled"
         @click="$emit('action')"
       >
@@ -36,6 +46,7 @@
       <template v-else>
         <el-button
           type="success"
+          plain
           :disabled="!imageInfo"
           @click="$emit('action')"
         >
@@ -43,6 +54,7 @@
         </el-button>
         <el-button
           type="danger"
+          plain
           :disabled="!imageInfo"
           @click="$emit('delete')"
         >
@@ -78,12 +90,12 @@ const typeName = computed(() => {
 });
 </script>
 
+/* frontend/src/components/ImageCard.vue (style块替换) */
 <style scoped>
 .image-card {
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100%;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   overflow: hidden;
@@ -91,12 +103,16 @@ const typeName = computed(() => {
 }
 
 .image-container {
-  flex-grow: 1;
   position: relative;
   overflow: hidden;
+  width: 100%;
+  border-radius: 6px 6px 0 0;
 }
 
 .main-image, .image-placeholder, .image-slot-loading, .image-slot-error {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   display: flex;
@@ -104,11 +120,13 @@ const typeName = computed(() => {
   justify-content: center;
 }
 
-.image-placeholder {
-  border: 2px dashed var(--el-border-color-light);
-  border-radius: 4px;
-  margin: 10px;
+/* --- 新增：为 contain 模式的 logo 图片增加内边距 --- */
+.main-image:deep(img[style*="contain"]) {
+  padding: 10px;
   box-sizing: border-box;
+}
+
+.image-placeholder {
   color: var(--el-text-color-placeholder);
   font-size: 14px;
 }
@@ -145,8 +163,19 @@ const typeName = computed(() => {
   display: flex;
   justify-content: center;
   gap: 10px;
+  border-top: 1px solid var(--el-border-color-lighter);
 }
 .action-bar .el-button {
   width: 100%;
+}
+
+/* --- 新增：为 plain 按钮定义颜色变量 --- */
+.action-bar .el-button--default.is-plain {
+  --el-button-text-color: var(--el-text-color-regular);
+  --el-button-bg-color: var(--el-fill-color);
+  --el-button-border-color: var(--el-border-color-light);
+  --el-button-hover-text-color: var(--el-color-primary);
+  --el-button-hover-bg-color: var(--el-color-primary-light-9);
+  --el-button-hover-border-color: var(--el-color-primary-light-7);
 }
 </style>

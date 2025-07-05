@@ -455,24 +455,58 @@ async def websocket_tasks_endpoint(websocket: WebSocket):
         task_manager.broadcaster.disconnect(websocket)
         logging.info("任务 WebSocket 客户端断开连接。")
 
+# backend/main.py (函数替换 - 修正代理调用)
+
 @app.get("/api/emby-image-proxy")
 async def emby_image_proxy(path: str):
+    task_cat = "Emby图片代理"
+    ui_logger.debug(f"➡️ [调试] 代理接口收到请求，原始 path 参数: {path}", task_category=task_cat)
     try:
         config = app_config.load_app_config()
         server_conf = config.server_config
         if not server_conf.server:
-            raise HTTPException(status_code=400, detail="Emby server not configured.")
-        full_url = f"{server_conf.server}/{path}"
-        logging.info(f"【Emby图片代理】正在代理请求: {full_url}")
-        req = requests.get(full_url, stream=True, timeout=20)
+            raise HTTPException(status_code=400, detail="Emby服务器未配置。")
+
+        # 智能判断并追加 api_key
+        if 'api_key=' not in path.lower():
+            separator = '&' if '?' in path else '?'
+            path_with_auth = f"{path}{separator}api_key={server_conf.api_key}"
+        else:
+            path_with_auth = path
+
+        full_url = f"{server_conf.server}/{path_with_auth}"
+        
+        # --- 核心修复：实例化并使用 ProxyManager ---
+        proxy_manager = ProxyManager(config)
+        proxies = proxy_manager.get_proxies(full_url)
+        # --- 修复结束 ---
+
+        ui_logger.debug(f"   - [调试] 准备请求的最终 URL: {full_url}", task_category=task_cat)
+        if proxies:
+            ui_logger.debug(f"   - [调试] 将通过代理: {proxies.get('http')}", task_category=task_cat)
+        else:
+            ui_logger.debug(f"   - [调试] 将直接连接，不使用代理。", task_category=task_cat)
+
+        # --- 核心修复：在请求时传入 proxies 参数 ---
+        req = requests.get(full_url, stream=True, timeout=20, proxies=proxies)
+        # --- 修复结束 ---
+        
+        ui_logger.debug(f"   - [调试] Emby 服务器返回状态码: {req.status_code}", task_category=task_cat)
+
         req.raise_for_status()
+        
         content_type = req.headers.get('Content-Type', 'image/jpeg')
+        if not content_type.startswith('image/'):
+            ui_logger.warning(f"⚠️ 代理请求返回的 Content-Type 不是图片: {content_type}。URL: {full_url}", task_category=task_cat)
+            raise HTTPException(status_code=400, detail="代理目标返回的不是有效的图片内容。")
+
         return Response(content=req.content, media_type=content_type)
+        
     except requests.exceptions.RequestException as e:
-        logging.error(f"【Emby图片代理】请求 Emby 图片失败: {e}")
-        raise HTTPException(status_code=502, detail="Failed to fetch image from Emby server.")
+        ui_logger.error(f"❌ [调试] 请求 Emby 图片时发生网络异常: {e}", task_category=task_cat, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"请求 Emby 服务器失败: {e}")
     except Exception as e:
-        logging.error(f"【Emby图片代理】发生未知错误: {e}")
+        ui_logger.error(f"❌ [调试] 代理 Emby 图片时发生未知错误: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")

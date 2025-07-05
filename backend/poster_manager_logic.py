@@ -636,17 +636,93 @@ class PosterManagerLogic:
             "repo_details": repo_details
         }
 
+    # backend/poster_manager_logic.py (函数替换 - 终极修复)
+
+    def _get_emby_image_details(self, item_id: str) -> Dict[str, Dict]:
+        """
+        一次性获取 Emby 媒体项所有类型图片（海报、Logo、背景图）的详细信息。
+        返回一个以图片类型为键的字典。
+        """
+        import requests
+        from urllib.parse import quote, urlencode
+        
+        task_cat = f"海报管理-调试({item_id})"
+        emby_images = {}
+        api_key = self.config.server_config.api_key
+
+        try:
+            url = f"{self.config.server_config.server}/Items/{item_id}/Images"
+            params = {"api_key": api_key}
+            proxies = self.proxy_manager.get_proxies(url)
+            
+            ui_logger.debug(f"➡️ [调试] 正在请求图片元数据: {url}", task_category=task_cat)
+            response = self.session.get(url, params=params, timeout=15, proxies=proxies)
+            response.raise_for_status()
+            
+            all_image_metadata = response.json()
+            if not all_image_metadata:
+                ui_logger.debug(f"   - [调试] 未找到任何图片元数据。", task_category=task_cat)
+                return {}
+
+            ui_logger.debug(f"   - [调试] 成功获取到 {len(all_image_metadata)} 条图片元数据。", task_category=task_cat)
+
+            for image_info in all_image_metadata:
+                image_type_from_api = image_info.get("ImageType")
+                
+                type_map = {
+                    "Primary": "poster",
+                    "Logo": "logo",
+                    "Backdrop": "fanart"
+                }
+                standard_type = type_map.get(image_type_from_api)
+                
+                if not standard_type:
+                    continue
+
+                image_tag = image_info.get("ImageTag")
+                base_path = f"Items/{item_id}/Images/{image_type_from_api}"
+                
+                # --- 核心修复：添加必要的图片处理参数以获取二进制流 ---
+                query_params = {
+                    'api_key': api_key,
+                    'quality': 100  # 请求最高质量的图片
+                }
+                if image_tag:
+                    query_params['tag'] = image_tag
+                # --- 修复结束 ---
+                
+                image_path_to_emby = f"{base_path}?{urlencode(query_params)}"
+                
+                proxy_url = f"/api/emby-image-proxy?path={quote(image_path_to_emby)}"
+                
+                ui_logger.debug(f"   - [调试] 为类型 '{standard_type}' 生成的代理 URL: {proxy_url}", task_category=task_cat)
+
+                width = image_info.get('Width', 0)
+                height = image_info.get('Height', 0)
+                size_bytes = image_info.get('Size', 0)
+                
+                resolution = f"{width}x{height}" if width and height else "未知分辨率"
+                size_str = f"{size_bytes / 1024 / 1024:.2f} MB" if size_bytes > 1024 * 1024 else f"{size_bytes / 1024:.1f} KB"
+
+                emby_images[standard_type] = {
+                    "url": proxy_url,
+                    "resolution": resolution,
+                    "size": size_str
+                }
+            
+            return emby_images
+
+        except requests.RequestException as e:
+            ui_logger.error(f"❌ [调试] 获取 Emby 图片元数据列表失败: {e}", task_category=task_cat)
+            return {}
+        except Exception as e:
+            ui_logger.error(f"❌ [调试] 处理 Emby 图片元数据时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+            return {}
     def get_single_item_details(self, item_id: str) -> Dict:
         """获取单个媒体项在 Emby 和 GitHub 两侧的图片详情"""
         # 1. 获取 Emby 侧信息
         emby_details = self._get_emby_item_details(item_id, "Name,ProductionYear,ProviderIds")
-        emby_images = {}
-        
-        # 使用新方法获取 Emby 图片的详细信息
-        for img_type in ["poster", "logo", "fanart"]:
-            details = self._get_emby_image_details(item_id, img_type)
-            if details:
-                emby_images[img_type] = details
+        emby_images = self._get_emby_image_details(item_id)
         
         # 2. 获取 GitHub 侧信息
         github_images = {}
@@ -656,10 +732,8 @@ class PosterManagerLogic:
             for img_type in ["poster", "logo", "fanart"]:
                 key = f"{tmdb_id}-{img_type}"
                 if key in remote_map:
-                    # 为 GitHub 侧也添加格式化的分辨率和大小
                     gh_info = remote_map[key]
                     size_bytes = gh_info.get("size", 0)
-                    # GitHub 索引中没有分辨率，所以我们只提供大小
                     github_images[img_type] = {
                         "url": gh_info.get("url"),
                         "resolution": "未知分辨率",
