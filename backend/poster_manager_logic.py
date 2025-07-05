@@ -163,6 +163,8 @@ class PosterManagerLogic:
             logging.error(f"【海报备份】获取仓库 {repo_url} 的索引失败: {e}")
             return None
 
+    # backend/poster_manager_logic.py (函数替换)
+
     def _get_aggregated_remote_index(self, task_cat: str) -> Dict:
         """通过缓存或并发获取，得到聚合的所有远程文件索引"""
         ui_logger.info("➡️ [阶段1.3] 开始获取并聚合所有远程仓库的索引...", task_category=task_cat)
@@ -173,15 +175,33 @@ class PosterManagerLogic:
                 if os.path.exists(AGGREGATED_INDEX_CACHE_FILE):
                     with open(AGGREGATED_INDEX_CACHE_FILE, 'r', encoding='utf-8') as f:
                         cache_data = json.load(f)
+                    
                     cached_at = datetime.fromisoformat(cache_data.get("cached_at"))
-                    if datetime.now() - cached_at < timedelta(seconds=AGGREGATED_INDEX_CACHE_DURATION):
-                        ui_logger.info("✅ [阶段1.3] 命中本地聚合索引缓存。", task_category=task_cat)
-                        return cache_data.get("aggregated_index", {})
+                    now = datetime.now()
+                    
+                    if now - cached_at < timedelta(seconds=AGGREGATED_INDEX_CACHE_DURATION):
+                        # --- 核心修改：增加空缓存检查 ---
+                        aggregated_index = cache_data.get("aggregated_index", {})
+                        if aggregated_index:
+                            age = now - cached_at
+                            if age.total_seconds() < 60:
+                                age_str = f"{int(age.total_seconds())}秒前"
+                            elif age.total_seconds() < 3600:
+                                age_str = f"{int(age.total_seconds() / 60)}分钟前"
+                            else:
+                                age_str = f"{age.total_seconds() / 3600:.1f}小时前"
+                            
+                            ui_logger.info(f"✅ [阶段1.3] 命中本地聚合索引缓存 (更新于 {age_str})。", task_category=task_cat)
+                            return aggregated_index
+                        else:
+                            ui_logger.warning("⚠️ 检测到有效的空缓存文件，可能由之前的网络问题导致，将强制刷新。", task_category=task_cat)
+                        # --- 修复结束 ---
         except (Timeout, IOError, json.JSONDecodeError) as e:
             ui_logger.warning(f"⚠️ 读取聚合缓存失败，将强制从网络获取。原因: {e}", task_category=task_cat)
 
         remote_file_map = {}
         repos = self.pm_config.github_repos
+        successful_fetches = 0
         
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_repo = {executor.submit(self._get_repo_index, repo.model_dump()): repo for repo in repos}
@@ -191,6 +211,7 @@ class PosterManagerLogic:
                     time.sleep(0.1) # 内部短冷却
                     index_content = future.result()
                     if index_content and "images" in index_content:
+                        successful_fetches += 1
                         for tmdb_id, images in index_content["images"].items():
                             for image_type, image_info in images.items():
                                 key = f"{tmdb_id}-{image_type}"
@@ -198,26 +219,30 @@ class PosterManagerLogic:
                 except Exception as e:
                     ui_logger.error(f"❌ 处理仓库 {repo_config.repo_url} 索引时出错: {e}", task_category=task_cat)
 
-        # 回写缓存
-        try:
-            with FileLock(lock_path, timeout=10):
-                cache_content = {
-                    "cached_at": datetime.now().isoformat(),
-                    "aggregated_index": remote_file_map
-                }
-                with open(AGGREGATED_INDEX_CACHE_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(cache_content, f)
-                ui_logger.info("✅ [阶段1.3] 成功聚合远程索引并已写入本地缓存。", task_category=task_cat)
-        except Exception as e:
-            ui_logger.error(f"❌ 写入聚合索引缓存失败: {e}", task_category=task_cat)
+        if successful_fetches == len(repos):
+            try:
+                with FileLock(lock_path, timeout=10):
+                    cache_content = {
+                        "cached_at": datetime.now().isoformat(),
+                        "aggregated_index": remote_file_map
+                    }
+                    with open(AGGREGATED_INDEX_CACHE_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(cache_content, f)
+                    ui_logger.info("✅ [阶段1.3] 成功聚合所有远程索引并已写入本地缓存。", task_category=task_cat)
+            except Exception as e:
+                ui_logger.error(f"❌ 写入聚合索引缓存失败: {e}", task_category=task_cat)
+        else:
+            ui_logger.warning(f"⚠️ 未能成功获取所有仓库的索引({successful_fetches}/{len(repos)})，本次不更新聚合缓存。", task_category=task_cat)
             
         return remote_file_map
 
-    def _classify_pending_files(self, initial_list: List[Dict], remote_map: Dict, task_cat: str) -> Tuple[List, List]:
+    def _classify_pending_files(self, initial_list: List[Dict], remote_map: Dict, overwrite: bool, task_cat: str) -> Tuple[List, List]:
         """将待办列表分为新增和覆盖两类"""
         ui_logger.info("➡️ [阶段2] 开始对待办文件进行分类 (新增/覆盖)...", task_category=task_cat)
         new_files = []
         overwrite_files = []
+        # --- 新增：跳过计数器 ---
+        skipped_count = 0
         
         for item in initial_list:
             key = f"{item['tmdb_id']}-{item['image_type']}"
@@ -225,11 +250,15 @@ class PosterManagerLogic:
             
             if not remote_info:
                 new_files.append(item)
-            elif self.pm_config.overwrite_remote_files:
+            elif overwrite:
                 item['remote_info'] = remote_info
                 overwrite_files.append(item)
+            else:
+                # --- 新增：增加跳过计数 ---
+                skipped_count += 1
         
-        ui_logger.info(f"✅ [阶段2] 分类完成。新增: {len(new_files)} 项, 覆盖: {len(overwrite_files)} 项。", task_category=task_cat)
+        # --- 修改：在日志中加入跳过数量 ---
+        ui_logger.info(f"✅ [阶段2] 分类完成。新增: {len(new_files)} 项, 覆盖: {len(overwrite_files)} 项, 跳过: {skipped_count} 项。", task_category=task_cat)
         return new_files, overwrite_files
 
     def _calculate_dispatch_plan(self, new_files: List, overwrite_files: List, task_cat: str) -> Dict:
@@ -257,7 +286,8 @@ class PosterManagerLogic:
             
             dispatch_plan[repo_url]["overwrite"].append(item)
             temp_repo_states[repo_url] -= delta
-            ui_logger.info(f"  - [计划-覆盖] {os.path.basename(item['local_path'])} -> 分配至原仓库 {repo_url} (空间变化: {delta/1024/1024:+.2f} MB)", task_category=task_cat)
+            # --- 修改：在日志中加入 TMDB ID ---
+            ui_logger.info(f"  - [计划-覆盖] [{item['tmdb_id']}] {os.path.basename(item['local_path'])} -> 分配至原仓库 {repo_url} (空间变化: {delta/1024/1024:+.2f} MB)", task_category=task_cat)
 
         # 2. 处理新增文件
         for item in new_files:
@@ -266,7 +296,8 @@ class PosterManagerLogic:
                 if temp_repo_states.get(repo.repo_url, -1) >= item['size']:
                     dispatch_plan[repo.repo_url]["new"].append(item)
                     temp_repo_states[repo.repo_url] -= item['size']
-                    ui_logger.info(f"  - [计划-新增] {os.path.basename(item['local_path'])} ({item['size']/1024/1024:.2f} MB) -> 分配至 {repo.repo_url}", task_category=task_cat)
+                    # --- 修改：在日志中加入 TMDB ID ---
+                    ui_logger.info(f"  - [计划-新增] [{item['tmdb_id']}] {os.path.basename(item['local_path'])} ({item['size']/1024/1024:.2f} MB) -> 分配至 {repo.repo_url}", task_category=task_cat)
                     allocated = True
                     break
             if not allocated:
@@ -274,9 +305,9 @@ class PosterManagerLogic:
 
         ui_logger.info("✅ [阶段3] 文件分发计划制定成功。", task_category=task_cat)
         return dispatch_plan
-    
+
     def _execute_github_write_request(self, method: str, url: str, pat: str, payload: Optional[Dict] = None) -> Dict:
-        """通过 curl 执行 GitHub 写入操作"""
+        """通过 curl 执行 GitHub 写入操作（无重试）"""
         command = [
             'curl', '-L', '-X', method,
             '-H', 'Accept: application/vnd.github.v3+json',
@@ -293,6 +324,8 @@ class PosterManagerLogic:
         if proxies.get('https'):
             command.extend(['--proxy', proxies['https']])
 
+        command.append(url)
+
         result = subprocess.run(command, input=json_payload_str, capture_output=True, text=True, check=False)
         
         response_data = {}
@@ -300,7 +333,8 @@ class PosterManagerLogic:
             if result.stdout:
                 response_data = json.loads(result.stdout)
         except json.JSONDecodeError:
-            raise Exception(f"cURL 返回了非JSON响应: {result.stdout} | 错误: {result.stderr}")
+            # --- 核心修改：将 curl 的 stderr 加入异常信息 ---
+            raise Exception(f"cURL 返回了非JSON响应: {result.stdout or '无输出'} | 错误: {result.stderr or '无错误信息'}")
 
         if result.returncode != 0 or (response_data.get("message") and response_data.get("documentation_url")):
             error_message = response_data.get('message', f"cURL 错误: {result.stderr}")
@@ -308,9 +342,36 @@ class PosterManagerLogic:
                 error_message = f"无效请求 (422)。服务器提示 'sha' 参数有问题。这可能是因为在您操作期间，文件被其他进程修改。请重试。({error_message})"
             elif "409 Conflict" in result.stderr:
                 error_message = "GitHub API 返回 409 Conflict 错误，这通常是并发写入冲突导致的。请稍后重试。"
+            # --- 核心修改：将 curl 的 stderr 加入异常信息 ---
+            elif "schannel: failed to receive handshake" in result.stderr or "curl: (35)" in result.stderr:
+                error_message = f"SSL/TLS 握手失败。这通常是临时的网络或代理问题。错误: {result.stderr}"
+
             raise Exception(f"GitHub API 错误: {error_message}")
 
         return response_data
+    
+    def _execute_github_write_request_with_retry(self, method: str, url: str, pat: str, payload: Optional[Dict] = None, task_cat: str = "GitHub写入") -> Dict:
+        """
+        执行 GitHub 写入操作，并增加了针对网络错误的重试逻辑。
+        """
+        max_retries = 3
+        retry_delay = 5  # seconds
+        for attempt in range(max_retries):
+            try:
+                return self._execute_github_write_request(method, url, pat, payload)
+            except Exception as e:
+                # 只对特定的、可能是瞬态的网络错误进行重试
+                error_str = str(e).lower()
+                if "ssl/tls" in error_str or "handshake" in error_str or "curl: (35)" in error_str:
+                    if attempt < max_retries - 1:
+                        ui_logger.warning(f"  - ⚠️ 网络操作失败 (尝试 {attempt + 1}/{max_retries})，将在 {retry_delay} 秒后重试... 原因: {e}", task_category=task_cat)
+                        time.sleep(retry_delay)
+                        continue
+                # 对于其他错误或达到最大重试次数，则直接抛出异常
+                raise e
+        # 这行代码理论上不会被执行，但为了代码完整性保留
+        raise Exception("重试逻辑执行完毕但未能成功。")
+
 
     def _get_latest_repo_size(self, repo_url: str, pat: str) -> int:
         """获取仓库的最新大小 (KB)"""
@@ -326,7 +387,8 @@ class PosterManagerLogic:
         response.raise_for_status()
         return response.json().get('size', 0)
 
-    # TODO: 实现阶段四的执行逻辑
+    # backend/poster_manager_logic.py (函数替换)
+
     def _execute_dispatch_plan(self, dispatch_plan: Dict, task_cat: str, cancellation_event: threading.Event):
         """执行文件上传和索引更新"""
         ui_logger.info("➡️ [阶段4] 开始执行文件上传和索引更新...", task_category=task_cat)
@@ -345,8 +407,10 @@ class PosterManagerLogic:
             ui_logger.info(f"  - 正在处理仓库: {repo_url}", task_category=task_cat)
             pat = repo_config.personal_access_token or self.pm_config.global_personal_access_token
             branch = repo_config.branch
-            match = re.match(r"httpshttps?://github\.com/([^/]+)/([^/]+)", repo_url)
+            match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url)
             owner, repo_name = match.groups()
+
+            size_delta_for_this_repo = 0
 
             # 1. 加锁
             lock_path = ".lock"
@@ -356,7 +420,7 @@ class PosterManagerLogic:
                 "content": base64.b64encode(f"locked_at: {datetime.now().isoformat()}".encode()).decode(),
                 "branch": branch
             }
-            self._execute_github_write_request("PUT", lock_api_url, pat, lock_payload)
+            self._execute_github_write_request_with_retry("PUT", lock_api_url, pat, lock_payload, task_cat=task_cat)
             ui_logger.info(f"    - 🔒 已成功在仓库 {repo_url} 中创建 .lock 文件。", task_category=task_cat)
 
             try:
@@ -370,7 +434,10 @@ class PosterManagerLogic:
                 for item in files_to_process:
                     if cancellation_event.is_set(): raise InterruptedError("任务被取消")
                     
-                    time.sleep(self.pm_config.file_upload_cooldown_seconds)
+                    cooldown = self.pm_config.file_upload_cooldown_seconds
+                    if cooldown > 0:
+                        ui_logger.info(f"    - ⏱️ 文件上传冷却 {cooldown} 秒...", task_category=task_cat)
+                        time.sleep(cooldown)
                     
                     with open(item['local_path'], 'rb') as f:
                         content_b64 = base64.b64encode(f.read()).decode()
@@ -384,22 +451,24 @@ class PosterManagerLogic:
                         "branch": branch
                     }
 
-                    # 如果是覆盖，带上SHA
-                    if 'remote_info' in item:
+                    is_overwrite = 'remote_info' in item
+                    if is_overwrite:
                         payload['sha'] = item['remote_info']['sha']
 
                     try:
-                        response_data = self._execute_github_write_request("PUT", api_url, pat, payload)
+                        response_data = self._execute_github_write_request_with_retry("PUT", api_url, pat, payload, task_cat=task_cat)
                     except Exception as e:
-                        # 新增转覆盖容错
-                        if "422" in str(e) and 'remote_info' not in item:
+                        if "422" in str(e) and not is_overwrite:
                             ui_logger.warning(f"    - 🔄 文件 {github_path} 已存在，触发“新增转覆盖”容错机制...", task_category=task_cat)
-                            # 获取SHA重试
                             get_resp = self.session.get(api_url, headers={"Authorization": f"token {pat}"}, proxies=self.proxy_manager.get_proxies(api_url)).json()
                             payload['sha'] = get_resp['sha']
-                            response_data = self._execute_github_write_request("PUT", api_url, pat, payload)
+                            response_data = self._execute_github_write_request_with_retry("PUT", api_url, pat, payload, task_cat=task_cat)
                         else:
                             raise e
+                    
+                    new_size = response_data['content']['size']
+                    old_size = item['remote_info']['size'] if is_overwrite else 0
+                    size_delta_for_this_repo += (new_size - old_size)
 
                     # 4. 更新内存中的索引
                     tmdb_id_str = str(item['tmdb_id'])
@@ -409,7 +478,7 @@ class PosterManagerLogic:
                     current_index['images'][tmdb_id_str][item['image_type']] = {
                         "repo_url": repo_url,
                         "sha": response_data['content']['sha'],
-                        "size": response_data['content']['size'],
+                        "size": new_size,
                         "url": response_data['content']['download_url']
                     }
                     ui_logger.info(f"    - ⬆️ 上传成功: {github_path}", task_category=task_cat)
@@ -418,7 +487,6 @@ class PosterManagerLogic:
                 current_index['last_updated'] = datetime.now().isoformat()
                 index_api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/database.json"
                 
-                # 获取最新的 index SHA
                 get_index_resp = self.session.get(index_api_url, headers={"Authorization": f"token {pat}"}, proxies=self.proxy_manager.get_proxies(index_api_url)).json()
                 index_sha = get_index_resp.get('sha')
 
@@ -430,23 +498,29 @@ class PosterManagerLogic:
                 if index_sha:
                     index_payload['sha'] = index_sha
                 
-                self._execute_github_write_request("PUT", index_api_url, pat, index_payload)
+                self._execute_github_write_request_with_retry("PUT", index_api_url, pat, index_payload, task_cat=task_cat)
                 ui_logger.info(f"    - 索引文件 database.json 更新成功。", task_category=task_cat)
 
                 # 6. 更新config中的仓库大小
-                latest_size_kb = self._get_latest_repo_size(repo_url, pat)
-                current_config = app_config_module.load_app_config()
-                for r in current_config.poster_manager_config.github_repos:
+                # --- 核心修复：直接在 self.config 对象上操作，并确保保存后实例也同步 ---
+                current_app_config = self.config
+                for r in current_app_config.poster_manager_config.github_repos:
                     if r.repo_url == repo_url:
-                        r.state.size_kb = latest_size_kb
+                        new_size_bytes = (r.state.size_kb * 1024) + size_delta_for_this_repo
+                        r.state.size_kb = round(new_size_bytes / 1024)
                         r.state.last_checked = datetime.now().isoformat()
                         break
-                app_config_module.save_app_config(current_config)
-                ui_logger.info(f"    - 仓库 {repo_url} 最新容量 {latest_size_kb} KB 已回写配置。", task_category=task_cat)
+                
+                app_config_module.save_app_config(current_app_config)
+                # 更新当前实例的配置，以便后续循环使用正确的值
+                self.pm_config = current_app_config.poster_manager_config
+                
+                latest_size_kb = next((r.state.size_kb for r in self.pm_config.github_repos if r.repo_url == repo_url), 0)
+                ui_logger.info(f"    - 仓库 {repo_url} 最新容量(理论值) {latest_size_kb} KB 已回写配置。", task_category=task_cat)
+                # --- 修复结束 ---
 
             finally:
                 # 7. 解锁
-                # 获取锁文件的SHA
                 lock_get_resp = self.session.get(lock_api_url, headers={"Authorization": f"token {pat}"}, proxies=self.proxy_manager.get_proxies(lock_api_url)).json()
                 lock_sha = lock_get_resp.get('sha')
                 if lock_sha:
@@ -455,10 +529,17 @@ class PosterManagerLogic:
                         "sha": lock_sha,
                         "branch": branch
                     }
-                    self._execute_github_write_request("DELETE", lock_api_url, pat, delete_payload)
+                    self._execute_github_write_request_with_retry("DELETE", lock_api_url, pat, delete_payload, task_cat=task_cat)
                     ui_logger.info(f"    - 🔓 已成功从仓库 {repo_url} 中移除 .lock 文件。", task_category=task_cat)
 
         ui_logger.info("✅ [阶段4] 所有文件上传和索引更新完成。", task_category=task_cat)
+
+        if os.path.exists(AGGREGATED_INDEX_CACHE_FILE):
+            try:
+                os.remove(AGGREGATED_INDEX_CACHE_FILE)
+                ui_logger.info("  - ✅ 本地聚合索引缓存已清理，下次将重新生成。", task_category=task_cat)
+            except OSError as e:
+                ui_logger.error(f"  - ❌ 清理聚合索引缓存文件失败: {e}", task_category=task_cat)
 
     def _restore_single_item(self, item_id: str, tmdb_id: str, content_types: List[str], remote_map: Dict, task_cat: str):
         """恢复单个媒体项的图片"""
@@ -886,7 +967,8 @@ class PosterManagerLogic:
             if cancellation_event.is_set(): return
 
             # 阶段二：分类
-            new_files, overwrite_files = self._classify_pending_files(initial_list, remote_map, task_cat)
+            # --- 核心修复：传递 overwrite 参数 ---
+            new_files, overwrite_files = self._classify_pending_files(initial_list, remote_map, overwrite, task_cat)
             task_manager.update_task_progress(task_id, 50, 100)
             if not new_files and not overwrite_files:
                 ui_logger.info("✅ 所有文件均已是最新版本，无需备份。", task_category=task_cat)
