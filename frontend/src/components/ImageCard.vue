@@ -1,4 +1,3 @@
-<!-- frontend/src/components/ImageCard.vue (template部分替换) -->
 <template>
   <div class="image-card">
     <div 
@@ -29,15 +28,14 @@
       </div>
 
       <div v-if="imageInfo" class="info-overlay">
-        <span>{{ imageInfo.resolution || '未知分辨率' }}</span>
-        <el-divider direction="vertical" />
-        <span>{{ imageInfo.size || '未知大小' }}</span>
+        <span v-if="imageInfo.resolution" class="info-text left">{{ imageInfo.resolution }}</span>
+        <span v-if="imageInfo.size && imageInfo.size !== '0.0 KB'" class="info-text right">{{ imageInfo.size }}</span>
       </div>
     </div>
     <div class="action-bar">
       <el-button
         v-if="!isRemote"
-        plain
+        size="small"
         :disabled="actionDisabled"
         @click="$emit('action')"
       >
@@ -46,7 +44,7 @@
       <template v-else>
         <el-button
           type="success"
-          plain
+          size="small"
           :disabled="!imageInfo"
           @click="$emit('action')"
         >
@@ -54,7 +52,7 @@
         </el-button>
         <el-button
           type="danger"
-          plain
+          size="small"
           :disabled="!imageInfo"
           @click="$emit('delete')"
         >
@@ -67,7 +65,7 @@
 
 <script setup>
 import { computed } from 'vue';
-import { ElImage, ElButton, ElIcon, ElDivider } from 'element-plus';
+import { ElImage, ElButton, ElIcon } from 'element-plus';
 import { Loading, Picture } from '@element-plus/icons-vue';
 
 const props = defineProps({
@@ -90,14 +88,13 @@ const typeName = computed(() => {
 });
 </script>
 
-/* frontend/src/components/ImageCard.vue (style块替换) */
 <style scoped>
 .image-card {
   display: flex;
   flex-direction: column;
   width: 100%;
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
+  border-radius: 12px;
   overflow: hidden;
   background-color: var(--el-fill-color-light);
 }
@@ -106,7 +103,6 @@ const typeName = computed(() => {
   position: relative;
   overflow: hidden;
   width: 100%;
-  border-radius: 6px 6px 0 0;
 }
 
 .main-image, .image-placeholder, .image-slot-loading, .image-slot-error {
@@ -120,7 +116,6 @@ const typeName = computed(() => {
   justify-content: center;
 }
 
-/* --- 新增：为 contain 模式的 logo 图片增加内边距 --- */
 .main-image:deep(img[style*="contain"]) {
   padding: 10px;
   box-sizing: border-box;
@@ -142,18 +137,22 @@ const typeName = computed(() => {
 
 .info-overlay {
   position: absolute;
-  bottom: 5px;
-  left: 5px;
-  background-color: rgba(0, 0, 0, 0.6);
-  color: white;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
+  bottom: 0;
+  left: 0;
+  right: 0;
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 5px;
-  backdrop-filter: blur(2px);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  padding: 8px 12px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.4) 50%, transparent 100%);
+  pointer-events: none;
+}
+
+.info-text {
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
 }
 
 .action-bar {
@@ -167,15 +166,5 @@ const typeName = computed(() => {
 }
 .action-bar .el-button {
   width: 100%;
-}
-
-/* --- 新增：为 plain 按钮定义颜色变量 --- */
-.action-bar .el-button--default.is-plain {
-  --el-button-text-color: var(--el-text-color-regular);
-  --el-button-bg-color: var(--el-fill-color);
-  --el-button-border-color: var(--el-border-color-light);
-  --el-button-hover-text-color: var(--el-color-primary);
-  --el-button-hover-bg-color: var(--el-color-primary-light-9);
-  --el-button-hover-border-color: var(--el-color-primary-light-7);
 }
 </style>

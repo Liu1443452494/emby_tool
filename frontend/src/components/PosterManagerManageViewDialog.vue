@@ -1,8 +1,9 @@
+<!-- frontend/src/components/PosterManagerManageViewDialog.vue (template块替换) -->
 <template>
   <el-dialog
     :model-value="visible"
     @update:model-value="handleClose"
-    :title="dialogTitle"
+    title="单个媒体图片管理"
     width="auto"
     top="auto"
     class="poster-manager-manage-dialog"
@@ -10,17 +11,21 @@
     destroy-on-close
     @open="fetchDetails"
   >
-    <div v-loading="isFetchingDetails" class="manage-view">
+    <!-- 核心修改：添加 energy-ring-loading-container 类和加载文本 -->
+    <div 
+      v-loading="isFetchingDetails" 
+      class="manage-view energy-ring-loading-container"
+      element-loading-text="正在加载详情..."
+    >
       <div class="manage-header">
-        <el-link type="primary" :icon="ArrowLeft" @click="goBack">重新选择</el-link>
+        <h3 class="media-title">{{ mediaTitle }}</h3>
+        <el-link type="primary" :icon="ArrowLeft" @click="goBack">重新选择媒体</el-link>
       </div>
-
-    <!-- frontend/src/components/PosterManagerManageViewDialog.vue (template部分最终修正) -->
 
       <div class="comparison-area">
         <!-- 左侧：Emby -->
         <div class="side-panel">
-          <div class="panel-header">Emby</div>
+          <div class="panel-header">来自EMBY服务器</div>
           <div class="image-layout">
             <ImageCard
               class="poster-card"
@@ -55,7 +60,7 @@
 
         <!-- 右侧：GitHub -->
         <div class="side-panel">
-          <div class="panel-header">GitHub 备份</div>
+          <div class="panel-header">来自远程GitHub</div>
           <div class="image-layout">
             <ImageCard
               class="poster-card"
@@ -107,8 +112,8 @@ const isFetchingDetails = ref(false);
 const embyImages = ref({});
 const githubImages = ref({});
 
-const dialogTitle = computed(() => {
-  return props.mediaItem ? `单体图片管理: ${props.mediaItem.Name} (${props.mediaItem.ProductionYear})` : '单体图片管理';
+const mediaTitle = computed(() => {
+  return props.mediaItem ? `${props.mediaItem.Name} (${props.mediaItem.ProductionYear})` : '加载中...';
 });
 
 const fetchDetails = async () => {
@@ -163,7 +168,6 @@ const handleGithubAction = async (type, action) => {
 };
 </script>
 
-/* frontend/src/components/PosterManagerManageViewDialog.vue (style块替换) */
 
 <style>
 /* 非 scoped 样式，用于修改 el-dialog 根元素 */
@@ -193,12 +197,18 @@ const handleGithubAction = async (type, action) => {
 .manage-header {
   flex-shrink: 0;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   padding: 15px 30px;
   background-color: var(--el-fill-color-light);
   border-bottom: 1px solid var(--el-border-color);
 }
+.media-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
 .comparison-area {
   display: flex;
   align-items: center;
@@ -244,15 +254,5 @@ const handleGithubAction = async (type, action) => {
 
 .small-card {
   width: 100%;
-}
-
-/* --- 新增：为 Emby 侧的按钮应用朴素样式 --- */
-.side-panel:first-of-type .image-layout :deep(.el-button) {
-  --el-button-text-color: var(--el-text-color-regular);
-  --el-button-bg-color: var(--el-fill-color);
-  --el-button-border-color: var(--el-border-color-light);
-  --el-button-hover-text-color: var(--el-color-primary);
-  --el-button-hover-bg-color: var(--el-color-primary-light-9);
-  --el-button-hover-border-color: var(--el-color-primary-light-7);
 }
 </style>
