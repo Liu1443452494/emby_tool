@@ -287,47 +287,88 @@ class PosterManagerLogic:
         ui_logger.info(f"✅ [阶段2] 分类完成。新增: {len(new_files)} 项, 覆盖: {len(overwrite_files)} 项, 跳过: {skipped_count} 项。", task_category=task_cat)
         return new_files, overwrite_files
 
+    # backend/poster_manager_logic.py (函数替换)
+
     def _calculate_dispatch_plan(self, new_files: List, overwrite_files: List, task_cat: str) -> Dict:
-        """核心算法：计算文件分发计划"""
+        """核心算法：计算文件分发计划 (打包分配 + 降级策略)"""
         ui_logger.info("➡️ [阶段3] 正在进行精确预计算，生成文件分发计划...", task_category=task_cat)
         
         dispatch_plan = {repo.repo_url: {"new": [], "overwrite": []} for repo in self.pm_config.github_repos}
         
-        # 初始化仓库临时状态
         threshold_bytes = self.pm_config.repository_size_threshold_mb * 1024 * 1024
         temp_repo_states = {
             repo.repo_url: threshold_bytes - repo.state.size_bytes
             for repo in self.pm_config.github_repos
         }
 
-        # 1. 处理覆盖文件
+        # --- 核心修改：对覆盖文件进行分组处理和日志优化 ---
+        # 1. 分组覆盖文件
+        grouped_overwrite_files = {}
         for item in overwrite_files:
+            key = (item['tmdb_id'], item['remote_info']['repo_url'])
+            if key not in grouped_overwrite_files:
+                grouped_overwrite_files[key] = {"files": [], "total_delta": 0}
+            
             new_size = item['size']
             old_size = item['remote_info']['size']
             delta = new_size - old_size
-            repo_url = item['remote_info']['repo_url']
             
-            if temp_repo_states.get(repo_url, -1) < delta:
-                raise ValueError(f"文件覆盖失败：覆盖文件 {item['local_path']} 将导致仓库 {repo_url} 超出容量限制。")
-            
-            dispatch_plan[repo_url]["overwrite"].append(item)
-            temp_repo_states[repo_url] -= delta
-            # --- 修改：在日志中加入 TMDB ID ---
-            ui_logger.info(f"  - [计划-覆盖] [{item['tmdb_id']}] {os.path.basename(item['local_path'])} -> 分配至原仓库 {repo_url} (空间变化: {delta/1024/1024:+.2f} MB)", task_category=task_cat)
+            grouped_overwrite_files[key]["files"].append(item)
+            grouped_overwrite_files[key]["total_delta"] += delta
 
-        # 2. 处理新增文件
+        # 2. 处理分组后的覆盖文件
+        for (tmdb_id, repo_url), group in grouped_overwrite_files.items():
+            total_delta = group['total_delta']
+            
+            if temp_repo_states.get(repo_url, -1) < total_delta:
+                file_names = ', '.join([os.path.basename(f['local_path']) for f in group['files']])
+                raise ValueError(f"文件覆盖失败：覆盖 TMDB ID {tmdb_id} 的文件 ({file_names}) 将导致仓库 {repo_url} 超出容量限制。")
+            
+            for item in group['files']:
+                dispatch_plan[repo_url]["overwrite"].append(item)
+            
+            temp_repo_states[repo_url] -= total_delta
+            
+            file_names_str = ' '.join([os.path.basename(f['local_path']) for f in group['files']])
+            ui_logger.info(f"  - [计划-覆盖] [{tmdb_id}] -({file_names_str})-> 分配至原仓库 {repo_url} (空间变化: {total_delta/1024/1024:+.2f} MB)", task_category=task_cat)
+        # --- 修改结束 ---
+
+        # 3. 文件分组 (新增文件)
+        grouped_new_files = {}
         for item in new_files:
-            allocated = False
-            for repo in self.pm_config.github_repos: # 按优先级顺序
-                if temp_repo_states.get(repo.repo_url, -1) >= item['size']:
-                    dispatch_plan[repo.repo_url]["new"].append(item)
-                    temp_repo_states[repo.repo_url] -= item['size']
-                    # --- 修改：在日志中加入 TMDB ID ---
-                    ui_logger.info(f"  - [计划-新增] [{item['tmdb_id']}] {os.path.basename(item['local_path'])} ({item['size']/1024/1024:.2f} MB) -> 分配至 {repo.repo_url}", task_category=task_cat)
-                    allocated = True
+            tmdb_id = item['tmdb_id']
+            if tmdb_id not in grouped_new_files:
+                grouped_new_files[tmdb_id] = {"files": [], "total_size": 0}
+            grouped_new_files[tmdb_id]["files"].append(item)
+            grouped_new_files[tmdb_id]["total_size"] += item['size']
+
+        # 4. 打包分配 (新增文件)
+        for tmdb_id, group in grouped_new_files.items():
+            allocated_as_group = False
+            # 主策略：尝试整体放入
+            for repo in self.pm_config.github_repos:
+                if temp_repo_states.get(repo.repo_url, -1) >= group['total_size']:
+                    for item in group['files']:
+                        dispatch_plan[repo.repo_url]["new"].append(item)
+                    temp_repo_states[repo.repo_url] -= group['total_size']
+                    ui_logger.info(f"  - [计划-打包] [{tmdb_id}] 图片组 (共 {len(group['files'])} 项, {group['total_size']/1024/1024:.2f} MB) -> 分配至 {repo.repo_url}", task_category=task_cat)
+                    allocated_as_group = True
                     break
-            if not allocated:
-                raise ValueError(f"文件分配失败：文件 {item['local_path']} ({item['size']/1024/1024:.2f} MB) 过大，所有仓库均无足够空间容纳。")
+            
+            # 降级策略：如果无法整体放入，则逐个分配
+            if not allocated_as_group:
+                ui_logger.warning(f"  - ⚠️ [计划-降级] [{tmdb_id}] 图片组 (总大小 {group['total_size']/1024/1024:.2f} MB) 无法整体放入任何仓库，将尝试单独分配...", task_category=task_cat)
+                for item in group['files']:
+                    allocated_individually = False
+                    for repo in self.pm_config.github_repos:
+                        if temp_repo_states.get(repo.repo_url, -1) >= item['size']:
+                            dispatch_plan[repo.repo_url]["new"].append(item)
+                            temp_repo_states[repo.repo_url] -= item['size']
+                            ui_logger.info(f"    - [计划-降级分配] {os.path.basename(item['local_path'])} ({item['size']/1024/1024:.2f} MB) -> 分配至 {repo.repo_url}", task_category=task_cat)
+                            allocated_individually = True
+                            break
+                    if not allocated_individually:
+                         raise ValueError(f"文件分配失败：文件 {item['local_path']} ({item['size']/1024/1024:.2f} MB) 过大，所有仓库均无足够空间容纳。")
 
         ui_logger.info("✅ [阶段3] 文件分发计划制定成功。", task_category=task_cat)
         return dispatch_plan
@@ -436,18 +477,18 @@ class PosterManagerLogic:
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url)
             owner, repo_name = match.groups()
 
-            # 1. 加锁
-            lock_path = ".lock"
-            lock_api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/{lock_path}"
-            lock_payload = {
-                "message": f"feat: Acquire lock for task",
-                "content": base64.b64encode(f"locked_at: {datetime.now().isoformat()}".encode()).decode(),
-                "branch": branch
-            }
-            self._execute_github_write_request_with_retry("PUT", lock_api_url, pat, lock_payload, task_cat=task_cat)
-            ui_logger.info(f"    - 🔒 已成功在仓库 {repo_url} 中创建 .lock 文件。", task_category=task_cat)
-
             try:
+                # 1. 加锁
+                lock_path = ".lock"
+                lock_api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/{lock_path}"
+                lock_payload = {
+                    "message": f"feat: Acquire lock for task",
+                    "content": base64.b64encode(f"locked_at: {datetime.now().isoformat()}".encode()).decode(),
+                    "branch": branch
+                }
+                self._execute_github_write_request_with_retry("PUT", lock_api_url, pat, lock_payload, task_cat=task_cat)
+                ui_logger.info(f"    - 🔒 已成功在仓库 {repo_url} 中创建 .lock 文件。", task_category=task_cat)
+
                 # 2. 获取最新索引
                 current_index = self._get_repo_index(repo_config.model_dump())
                 if current_index is None:
@@ -457,6 +498,9 @@ class PosterManagerLogic:
                 files_to_process = plan['overwrite'] + plan['new']
                 for item in files_to_process:
                     if cancellation_event.is_set(): raise InterruptedError("任务被取消")
+                    
+                    # --- 核心修改：初始化 action_type 标志位 ---
+                    action_type = '新增'
                     
                     cooldown = self.pm_config.file_upload_cooldown_seconds
                     if cooldown > 0:
@@ -478,18 +522,27 @@ class PosterManagerLogic:
                     is_overwrite = 'remote_info' in item
                     if is_overwrite:
                         payload['sha'] = item['remote_info']['sha']
+                        action_type = '覆盖' # 预期的覆盖操作
 
                     try:
                         response_data = self._execute_github_write_request_with_retry("PUT", api_url, pat, payload, task_cat=task_cat)
                     except Exception as e:
                         if "422" in str(e) and not is_overwrite:
-                            ui_logger.warning(f"    - 🔄 文件 {github_path} 已存在，触发“新增转覆盖”容错机制...", task_category=task_cat)
+                            # --- 核心修改：日志级别改为 INFO，并更新 action_type ---
+                            ui_logger.info(f"    - 🔄 文件 {github_path} 已存在，触发“新增转覆盖”容错机制...", task_category=task_cat)
+                            action_type = '覆盖' # 新增转覆盖
                             get_resp = self.session.get(api_url, headers={"Authorization": f"token {pat}"}, proxies=self.proxy_manager.get_proxies(api_url)).json()
                             payload['sha'] = get_resp['sha']
                             response_data = self._execute_github_write_request_with_retry("PUT", api_url, pat, payload, task_cat=task_cat)
                         else:
                             raise e
                     
+                    # --- 核心修改：根据 action_type 打印不同的成功日志 ---
+                    if action_type == '覆盖':
+                        ui_logger.info(f"    - ✅ 覆盖上传成功: {github_path}", task_category=task_cat)
+                    else:
+                        ui_logger.info(f"    - ⬆️ 新增上传成功: {github_path}", task_category=task_cat)
+
                     # 4. 更新内存中的索引
                     tmdb_id_str = str(item['tmdb_id'])
                     if tmdb_id_str not in current_index['images']:
@@ -501,7 +554,6 @@ class PosterManagerLogic:
                         "size": response_data['content']['size'],
                         "url": response_data['content']['download_url']
                     }
-                    ui_logger.info(f"    - ⬆️ 上传成功: {github_path}", task_category=task_cat)
 
                 # 5. 提交更新后的索引
                 current_index['last_updated'] = datetime.now().isoformat()
@@ -535,8 +587,6 @@ class PosterManagerLogic:
                     ui_logger.info(f"    - 🔓 已成功从仓库 {repo_url} 中移除 .lock 文件。", task_category=task_cat)
 
         ui_logger.info("✅ [阶段4] 所有文件上传和索引更新完成。", task_category=task_cat)
-
-    # backend/poster_manager_logic.py (函数替换)
 
     def _update_all_repo_sizes(self, task_cat: str):
         """
