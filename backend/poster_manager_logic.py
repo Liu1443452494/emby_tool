@@ -163,46 +163,48 @@ class PosterManagerLogic:
             logging.error(f"【海报备份】获取仓库 {repo_url} 的索引失败: {e}")
             return None
 
-    def _get_aggregated_remote_index(self, task_cat: str) -> Dict:
+    def _get_aggregated_remote_index(self, task_cat: str, force_refresh: bool = False) -> Dict:
         """通过缓存或并发获取，得到聚合的所有远程文件索引"""
         ui_logger.info("➡️ [阶段1.3] 开始获取并聚合所有远程仓库的索引...", task_category=task_cat)
         
         lock_path = AGGREGATED_INDEX_CACHE_FILE + ".lock"
-        try:
-            with FileLock(lock_path, timeout=5):
-                if os.path.exists(AGGREGATED_INDEX_CACHE_FILE):
-                    with open(AGGREGATED_INDEX_CACHE_FILE, 'r', encoding='utf-8') as f:
-                        cache_data = json.load(f)
-                    
-                    cached_at = datetime.fromisoformat(cache_data.get("cached_at"))
-                    now = datetime.now()
-                    
-                    if now - cached_at < timedelta(seconds=AGGREGATED_INDEX_CACHE_DURATION):
-                        aggregated_index = cache_data.get("aggregated_index", {})
-                        if aggregated_index:
-                            age = now - cached_at
-                            if age.total_seconds() < 60:
-                                age_str = f"{int(age.total_seconds())}秒前"
-                            elif age.total_seconds() < 3600:
-                                age_str = f"{int(age.total_seconds() / 60)}分钟前"
+        
+        if not force_refresh:
+            try:
+                with FileLock(lock_path, timeout=5):
+                    if os.path.exists(AGGREGATED_INDEX_CACHE_FILE):
+                        with open(AGGREGATED_INDEX_CACHE_FILE, 'r', encoding='utf-8') as f:
+                            cache_data = json.load(f)
+                        
+                        cached_at = datetime.fromisoformat(cache_data.get("cached_at"))
+                        now = datetime.now()
+                        
+                        if now - cached_at < timedelta(seconds=AGGREGATED_INDEX_CACHE_DURATION):
+                            aggregated_index = cache_data.get("aggregated_index", {})
+                            if aggregated_index:
+                                age = now - cached_at
+                                if age.total_seconds() < 60:
+                                    age_str = f"{int(age.total_seconds())}秒前"
+                                elif age.total_seconds() < 3600:
+                                    age_str = f"{int(age.total_seconds() / 60)}分钟前"
+                                else:
+                                    age_str = f"{age.total_seconds() / 3600:.1f}小时前"
+                                
+                                ui_logger.info(f"✅ [阶段1.3] 命中本地聚合索引缓存 (更新于 {age_str})。", task_category=task_cat)
+                                return aggregated_index
                             else:
-                                age_str = f"{age.total_seconds() / 3600:.1f}小时前"
-                            
-                            ui_logger.info(f"✅ [阶段1.3] 命中本地聚合索引缓存 (更新于 {age_str})。", task_category=task_cat)
-                            return aggregated_index
-                        else:
-                            ui_logger.warning("⚠️ 检测到有效的空缓存文件，可能由之前的网络问题导致，将强制刷新。", task_category=task_cat)
-        except (Timeout, IOError, json.JSONDecodeError) as e:
-            ui_logger.warning(f"⚠️ 读取聚合缓存失败，将强制从网络获取。原因: {e}", task_category=task_cat)
+                                ui_logger.warning("⚠️ 检测到有效的空缓存文件，可能由之前的网络问题导致，将强制刷新。", task_category=task_cat)
+            except (Timeout, IOError, json.JSONDecodeError) as e:
+                ui_logger.warning(f"⚠️ 读取聚合缓存失败，将强制从网络获取。原因: {e}", task_category=task_cat)
+        else:
+            ui_logger.info("   - [模式] 已启用强制刷新，将忽略本地缓存。", task_category=task_cat)
 
-        # --- 新增：初始化计数器和状态变量 ---
         remote_file_map = {}
         repos = self.pm_config.github_repos
         total_repos = len(repos)
         successful_fetches = 0
         repos_with_data_count = 0
         total_records_aggregated = 0
-        # --- 新增结束 ---
         
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_repo = {executor.submit(self._get_repo_index, repo.model_dump()): repo for repo in repos}
@@ -211,7 +213,6 @@ class PosterManagerLogic:
                 try:
                     time.sleep(0.1)
                     index_content = future.result()
-                    # --- 修改：只要 result 不是 None，就认为是成功获取 ---
                     if index_content is not None:
                         successful_fetches += 1
                         if "images" in index_content and index_content["images"]:
@@ -221,13 +222,13 @@ class PosterManagerLogic:
                                 for image_type, image_info in images.items():
                                     key = f"{tmdb_id}-{image_type}"
                                     remote_file_map[key] = image_info
-                    # --- 修改结束 ---
                 except Exception as e:
-                    # --- 修改：错误日志更具体 ---
                     ui_logger.error(f"❌ 处理仓库 {repo_config.repo_url} 索引时出错: {e}", task_category=task_cat)
-                    # --- 修改结束 ---
 
-        # --- 新增：条件化日志输出与缓存写入 ---
+        log_message_prefix = "✅ [阶段1.3]"
+        if force_refresh:
+            log_message_prefix = "✅ [阶段5]"
+
         if successful_fetches == total_repos:
             try:
                 with FileLock(lock_path, timeout=10):
@@ -239,18 +240,16 @@ class PosterManagerLogic:
                         json.dump(cache_content, f)
                 
                 if total_records_aggregated == 0:
-                    ui_logger.info(f"✅ [阶段1.3] 成功检查所有({total_repos}/{total_repos})仓库，但所有索引均为空。已写入一个空的聚合缓存文件。", task_category=task_cat)
+                    ui_logger.info(f"{log_message_prefix} 成功检查所有({total_repos}/{total_repos})仓库，所有索引均为空。已写入一个空的聚合缓存文件。", task_category=task_cat)
                 else:
-                    ui_logger.info(f"✅ [阶段1.3] 成功聚合所有({total_repos}/{total_repos})仓库的索引。共聚合来自 {repos_with_data_count} 个仓库的 {total_records_aggregated} 条记录，并已写入本地缓存。", task_category=task_cat)
+                    ui_logger.info(f"{log_message_prefix} 成功聚合所有({total_repos}/{total_repos})仓库的索引。共聚合来自 {repos_with_data_count} 个仓库的 {total_records_aggregated} 条记录，并已写入本地缓存。", task_category=task_cat)
 
             except Exception as e:
                 ui_logger.error(f"❌ 写入聚合索引缓存失败: {e}", task_category=task_cat)
         else:
             ui_logger.warning(f"⚠️ 未能成功获取所有仓库的索引({successful_fetches}/{total_repos})，本次不更新聚合缓存。将使用内存中不完整的索引继续任务。", task_category=task_cat)
-        # --- 新增结束 ---
             
         return remote_file_map
-
 
     def _classify_pending_files(self, initial_list: List[Dict], remote_map: Dict, overwrite: bool, task_cat: str) -> Tuple[List, List]:
         """将待办列表分为新增和覆盖两类"""
@@ -518,7 +517,6 @@ class PosterManagerLogic:
                 ui_logger.info(f"    - 索引文件 database.json 更新成功。", task_category=task_cat)
 
                 # 6. 更新config中的仓库大小
-                # --- 核心修复：直接在 self.config 对象上操作，并确保保存后实例也同步 ---
                 current_app_config = self.config
                 for r in current_app_config.poster_manager_config.github_repos:
                     if r.repo_url == repo_url:
@@ -528,12 +526,10 @@ class PosterManagerLogic:
                         break
                 
                 app_config_module.save_app_config(current_app_config)
-                # 更新当前实例的配置，以便后续循环使用正确的值
                 self.pm_config = current_app_config.poster_manager_config
                 
                 latest_size_kb = next((r.state.size_kb for r in self.pm_config.github_repos if r.repo_url == repo_url), 0)
                 ui_logger.info(f"    - 仓库 {repo_url} 最新容量(理论值) {latest_size_kb} KB 已回写配置。", task_category=task_cat)
-                # --- 修复结束 ---
 
             finally:
                 # 7. 解锁
@@ -550,12 +546,8 @@ class PosterManagerLogic:
 
         ui_logger.info("✅ [阶段4] 所有文件上传和索引更新完成。", task_category=task_cat)
 
-        if os.path.exists(AGGREGATED_INDEX_CACHE_FILE):
-            try:
-                os.remove(AGGREGATED_INDEX_CACHE_FILE)
-                ui_logger.info("  - ✅ 本地聚合索引缓存已清理，下次将重新生成。", task_category=task_cat)
-            except OSError as e:
-                ui_logger.error(f"  - ❌ 清理聚合索引缓存文件失败: {e}", task_category=task_cat)
+        # --- 核心修改：调用缓存更新，而不是删除 ---
+        self._get_aggregated_remote_index(task_cat, force_refresh=True)
 
     def _restore_single_item(self, item_id: str, tmdb_id: str, content_types: List[str], remote_map: Dict, task_cat: str):
         """恢复单个媒体项的图片"""
@@ -954,6 +946,7 @@ class PosterManagerLogic:
         ui_logger.info(f"🎉 单体删除任务完成。", task_category=task_cat)
 
 
+
     def start_backup_task(
         self,
         scope: ScheduledTasksTargetScope,
@@ -978,12 +971,12 @@ class PosterManagerLogic:
             task_manager.update_task_progress(task_id, 25, 100)
             if cancellation_event.is_set(): return
 
-            remote_map = self._get_aggregated_remote_index(task_cat)
+            # --- 核心修改：调用时不强制刷新 ---
+            remote_map = self._get_aggregated_remote_index(task_cat, force_refresh=False)
             task_manager.update_task_progress(task_id, 40, 100)
             if cancellation_event.is_set(): return
 
             # 阶段二：分类
-            # --- 核心修复：传递 overwrite 参数 ---
             new_files, overwrite_files = self._classify_pending_files(initial_list, remote_map, overwrite, task_cat)
             task_manager.update_task_progress(task_id, 50, 100)
             if not new_files and not overwrite_files:
