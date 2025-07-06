@@ -169,6 +169,9 @@ class PosterManagerLogic:
         
         lock_path = AGGREGATED_INDEX_CACHE_FILE + ".lock"
         
+        # --- 核心修改：增加一个标志位来判断是否需要写缓存 ---
+        should_write_cache = False
+
         if not force_refresh:
             try:
                 with FileLock(lock_path, timeout=5):
@@ -194,17 +197,25 @@ class PosterManagerLogic:
                                 return aggregated_index
                             else:
                                 ui_logger.warning("⚠️ 检测到有效的空缓存文件，可能由之前的网络问题导致，将强制刷新。", task_category=task_cat)
+                                should_write_cache = True # 发现空缓存，标记需要重写
+                        else:
+                            should_write_cache = True # 缓存过期，标记需要重写
+                    else:
+                        should_write_cache = True # 缓存文件不存在，标记需要写入
             except (Timeout, IOError, json.JSONDecodeError) as e:
                 ui_logger.warning(f"⚠️ 读取聚合缓存失败，将强制从网络获取。原因: {e}", task_category=task_cat)
+                should_write_cache = True # 读取失败，标记需要重写
         else:
             ui_logger.info("   - [模式] 已启用强制刷新，将忽略本地缓存。", task_category=task_cat)
+            should_write_cache = True # 强制刷新，标记需要重写
 
         remote_file_map = {}
         repos = self.pm_config.github_repos
         total_repos = len(repos)
         successful_fetches = 0
         repos_with_data_count = 0
-        total_records_aggregated = 0
+        
+        ui_logger.info(f"   - [模式] 缓存未命中或被强制刷新，正在从网络实时获取所有远程仓库的索引...", task_category=task_cat)
         
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_repo = {executor.submit(self._get_repo_index, repo.model_dump()): repo for repo in repos}
@@ -217,7 +228,6 @@ class PosterManagerLogic:
                         successful_fetches += 1
                         if "images" in index_content and index_content["images"]:
                             repos_with_data_count += 1
-                            total_records_aggregated += len(index_content["images"])
                             for tmdb_id, images in index_content["images"].items():
                                 for image_type, image_info in images.items():
                                     key = f"{tmdb_id}-{image_type}"
@@ -225,30 +235,31 @@ class PosterManagerLogic:
                 except Exception as e:
                     ui_logger.error(f"❌ 处理仓库 {repo_config.repo_url} 索引时出错: {e}", task_category=task_cat)
 
-        log_message_prefix = "✅ [阶段1.3]"
-        if force_refresh:
-            log_message_prefix = "✅ [阶段5]"
-
-        if successful_fetches == total_repos:
-            try:
-                with FileLock(lock_path, timeout=10):
-                    cache_content = {
-                        "cached_at": datetime.now().isoformat(),
-                        "aggregated_index": remote_file_map
-                    }
-                    with open(AGGREGATED_INDEX_CACHE_FILE, 'w', encoding='utf-8') as f:
-                        json.dump(cache_content, f)
-                
-                if total_records_aggregated == 0:
-                    ui_logger.info(f"{log_message_prefix} 成功检查所有({total_repos}/{total_repos})仓库，所有索引均为空。已写入一个空的聚合缓存文件。", task_category=task_cat)
-                else:
-                    ui_logger.info(f"{log_message_prefix} 成功聚合所有({total_repos}/{total_repos})仓库的索引。共聚合来自 {repos_with_data_count} 个仓库的 {total_records_aggregated} 条记录，并已写入本地缓存。", task_category=task_cat)
-
-            except Exception as e:
-                ui_logger.error(f"❌ 写入聚合索引缓存失败: {e}", task_category=task_cat)
-        else:
-            ui_logger.warning(f"⚠️ 未能成功获取所有仓库的索引({successful_fetches}/{total_repos})，本次不更新聚合缓存。将使用内存中不完整的索引继续任务。", task_category=task_cat)
+        # --- 核心修改：使用标志位来决定是否执行写入和日志打印 ---
+        if should_write_cache:
+            total_records_aggregated = len(remote_file_map)
+            log_message_prefix = "✅ [阶段5]" if force_refresh else "✅ [阶段1.3]"
             
+            if successful_fetches == total_repos:
+                try:
+                    with FileLock(lock_path, timeout=10):
+                        cache_content = {
+                            "cached_at": datetime.now().isoformat(),
+                            "aggregated_index": remote_file_map
+                        }
+                        with open(AGGREGATED_INDEX_CACHE_FILE, 'w', encoding='utf-8') as f:
+                            json.dump(cache_content, f)
+                    
+                    if total_records_aggregated == 0:
+                        ui_logger.info(f"{log_message_prefix} 成功检查所有({total_repos}/{total_repos})仓库，所有索引均为空。已写入一个空的聚合缓存文件。", task_category=task_cat)
+                    else:
+                        ui_logger.info(f"{log_message_prefix} 成功聚合所有({total_repos}/{total_repos})仓库的索引。共聚合来自 {repos_with_data_count} 个仓库的 {total_records_aggregated} 条记录，并已写入本地缓存。", task_category=task_cat)
+
+                except Exception as e:
+                    ui_logger.error(f"❌ {log_message_prefix} 写入聚合索引缓存失败: {e}", task_category=task_cat)
+            else:
+                ui_logger.warning(f"⚠️ {log_message_prefix} 未能成功获取所有仓库的索引({successful_fetches}/{total_repos})，聚合缓存更新失败。", task_category=task_cat)
+        
         return remote_file_map
 
     def _classify_pending_files(self, initial_list: List[Dict], remote_map: Dict, overwrite: bool, task_cat: str) -> Tuple[List, List]:
@@ -285,7 +296,7 @@ class PosterManagerLogic:
         # 初始化仓库临时状态
         threshold_bytes = self.pm_config.repository_size_threshold_mb * 1024 * 1024
         temp_repo_states = {
-            repo.repo_url: threshold_bytes - (repo.state.size_kb * 1024)
+            repo.repo_url: threshold_bytes - repo.state.size_bytes
             for repo in self.pm_config.github_repos
         }
 
@@ -425,8 +436,6 @@ class PosterManagerLogic:
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url)
             owner, repo_name = match.groups()
 
-            size_delta_for_this_repo = 0
-
             # 1. 加锁
             lock_path = ".lock"
             lock_api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/{lock_path}"
@@ -481,10 +490,6 @@ class PosterManagerLogic:
                         else:
                             raise e
                     
-                    new_size = response_data['content']['size']
-                    old_size = item['remote_info']['size'] if is_overwrite else 0
-                    size_delta_for_this_repo += (new_size - old_size)
-
                     # 4. 更新内存中的索引
                     tmdb_id_str = str(item['tmdb_id'])
                     if tmdb_id_str not in current_index['images']:
@@ -493,7 +498,7 @@ class PosterManagerLogic:
                     current_index['images'][tmdb_id_str][item['image_type']] = {
                         "repo_url": repo_url,
                         "sha": response_data['content']['sha'],
-                        "size": new_size,
+                        "size": response_data['content']['size'],
                         "url": response_data['content']['download_url']
                     }
                     ui_logger.info(f"    - ⬆️ 上传成功: {github_path}", task_category=task_cat)
@@ -516,21 +521,6 @@ class PosterManagerLogic:
                 self._execute_github_write_request_with_retry("PUT", index_api_url, pat, index_payload, task_cat=task_cat)
                 ui_logger.info(f"    - 索引文件 database.json 更新成功。", task_category=task_cat)
 
-                # 6. 更新config中的仓库大小
-                current_app_config = self.config
-                for r in current_app_config.poster_manager_config.github_repos:
-                    if r.repo_url == repo_url:
-                        new_size_bytes = (r.state.size_kb * 1024) + size_delta_for_this_repo
-                        r.state.size_kb = round(new_size_bytes / 1024)
-                        r.state.last_checked = datetime.now().isoformat()
-                        break
-                
-                app_config_module.save_app_config(current_app_config)
-                self.pm_config = current_app_config.poster_manager_config
-                
-                latest_size_kb = next((r.state.size_kb for r in self.pm_config.github_repos if r.repo_url == repo_url), 0)
-                ui_logger.info(f"    - 仓库 {repo_url} 最新容量(理论值) {latest_size_kb} KB 已回写配置。", task_category=task_cat)
-
             finally:
                 # 7. 解锁
                 lock_get_resp = self.session.get(lock_api_url, headers={"Authorization": f"token {pat}"}, proxies=self.proxy_manager.get_proxies(lock_api_url)).json()
@@ -546,8 +536,55 @@ class PosterManagerLogic:
 
         ui_logger.info("✅ [阶段4] 所有文件上传和索引更新完成。", task_category=task_cat)
 
-        # --- 核心修改：调用缓存更新，而不是删除 ---
-        self._get_aggregated_remote_index(task_cat, force_refresh=True)
+    # backend/poster_manager_logic.py (函数替换)
+
+    def _update_all_repo_sizes(self, task_cat: str):
+        """
+        在任务结束后，根据最新的聚合索引，统一计算并回写所有仓库的容量状态。
+        """
+        ui_logger.info(f"➡️ [阶段5] 正在根据最新索引统一更新所有仓库的容量状态...", task_category=task_cat)
+        
+        if not os.path.exists(AGGREGATED_INDEX_CACHE_FILE):
+            ui_logger.warning("⚠️ 未找到聚合索引缓存文件，跳过容量更新。", task_category=task_cat)
+            return
+        
+        with open(AGGREGATED_INDEX_CACHE_FILE, 'r', encoding='utf-8') as f:
+            cache_data = json.load(f)
+        aggregated_index = cache_data.get("aggregated_index", {})
+
+        repo_sizes = {}
+        for key, image_info in aggregated_index.items():
+            repo_url = image_info.get("repo_url")
+            size = image_info.get("size", 0)
+            if repo_url:
+                repo_sizes[repo_url] = repo_sizes.get(repo_url, 0) + size
+        
+        current_app_config = app_config_module.load_app_config()
+        updated_repos = []
+        for repo in current_app_config.poster_manager_config.github_repos:
+            new_size_bytes = repo_sizes.get(repo.repo_url, 0)
+            if repo.state.size_bytes != new_size_bytes:
+                repo.state.size_bytes = new_size_bytes
+                repo.state.last_checked = datetime.now().isoformat()
+                updated_repos.append(repo)
+        
+        if updated_repos:
+            app_config_module.save_app_config(current_app_config)
+            self.pm_config = current_app_config.poster_manager_config
+            for repo in updated_repos:
+                match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo.repo_url)
+                name = f"{match.group(1)}/{match.group(2)}" if match else repo.repo_url
+                
+                # --- 核心修改：应用新的日志格式化规则 ---
+                size_in_gb = repo.state.size_bytes / (1024 * 1024 * 1024)
+                if size_in_gb >= 1:
+                    ui_logger.info(f"   - [容量更新] 仓库 {name} 最新容量为 {size_in_gb:.2f} GB。", task_category=task_cat)
+                else:
+                    size_in_mb = repo.state.size_bytes / (1024 * 1024)
+                    ui_logger.info(f"   - [容量更新] 仓库 {name} 最新容量为 {size_in_mb:.2f} MB。", task_category=task_cat)
+                # --- 修改结束 ---
+        else:
+            ui_logger.info("   - [容量更新] 所有仓库容量均无变化。", task_category=task_cat)
 
     def _restore_single_item(self, item_id: str, tmdb_id: str, content_types: List[str], remote_map: Dict, task_cat: str):
         """恢复单个媒体项的图片"""
@@ -707,7 +744,7 @@ class PosterManagerLogic:
         for repo in self.pm_config.github_repos:
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo.repo_url)
             name = f"{match.group(1)}/{match.group(2)}" if match else repo.repo_url
-            used_bytes = repo.state.size_kb * 1024
+            used_bytes = repo.state.size_bytes
             repo_details.append({
                 "name": name,
                 "used_bytes": used_bytes,
@@ -971,7 +1008,6 @@ class PosterManagerLogic:
             task_manager.update_task_progress(task_id, 25, 100)
             if cancellation_event.is_set(): return
 
-            # --- 核心修改：调用时不强制刷新 ---
             remote_map = self._get_aggregated_remote_index(task_cat, force_refresh=False)
             task_manager.update_task_progress(task_id, 40, 100)
             if cancellation_event.is_set(): return
@@ -991,6 +1027,14 @@ class PosterManagerLogic:
 
             # 阶段四：执行
             self._execute_dispatch_plan(dispatch_plan, task_cat, cancellation_event)
+            
+            # --- 核心修改：任务收尾阶段 ---
+            if not cancellation_event.is_set():
+                # 阶段 5.1: 更新聚合缓存
+                self._get_aggregated_remote_index(task_cat, force_refresh=True)
+                # 阶段 5.2: 更新所有仓库容量
+                self._update_all_repo_sizes(task_cat)
+
             task_manager.update_task_progress(task_id, 100, 100)
             
             ui_logger.info("🎉 备份任务执行完毕。", task_category=task_cat)

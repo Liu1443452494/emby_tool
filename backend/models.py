@@ -217,10 +217,11 @@ class EpisodeRenamerConfig(BaseModel):
     clouddrive_rename_cooldown: float = Field(default=1.0, description="每次重命名网盘文件之间的间隔时间（秒）", ge=0)
 
 
-# --- 新增代码块：将 PosterManager 相关的模型定义提前 ---
 class GitHubRepoState(BaseModel):
     """记录单个GitHub仓库的状态"""
-    size_kb: int = Field(default=0, description="该仓库已用空间大小，单位KB")
+    # --- 修改 ---
+    size_bytes: int = Field(default=0, description="该仓库已用空间大小，单位Bytes")
+    # --- 修改结束 ---
     last_checked: str = Field(default="", description="上次更新此状态的ISO 8601格式时间戳")
 
 class GitHubRepo(BaseModel):

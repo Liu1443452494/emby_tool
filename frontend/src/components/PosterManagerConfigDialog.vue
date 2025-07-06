@@ -149,7 +149,7 @@ const getRepoName = (url) => {
 };
 
 const getRepoUsagePercent = (repo) => {
-  const used = repo.state.size_kb * 1024;
+  const used = repo.state.size_bytes || 0;
   const total = localConfig.value.repository_size_threshold_mb * 1024 * 1024;
   if (!total) return 0;
   return Math.round((used / total) * 100);
@@ -163,11 +163,10 @@ const getRepoUsageColor = (repo) => {
 };
 
 const getRepoUsageText = (repo) => {
-  const used = repo.state.size_kb * 1024;
+  const used = repo.state.size_bytes || 0;
   const total = localConfig.value.repository_size_threshold_mb * 1024 * 1024;
   return `${store.formatBytes(used)} / ${store.formatBytes(total)}`;
 };
-
 const getRelativeTime = (isoString) => {
   if (!isoString) return '(从未更新)';
   return `(更新于: ${dayjs(isoString).fromNow()})`;

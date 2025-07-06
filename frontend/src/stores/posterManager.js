@@ -46,13 +46,19 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
     ElMessage({ message, type, showClose: true, duration: 3000 });
   };
 
+
   const formatBytes = (bytes, decimals = 2) => {
-    if (bytes === 0) return '0 Bytes';
+    if (!bytes || bytes === 0) return '0 MB'; // 如果为0，按小于1G处理，显示0 MB
     const k = 1024;
     const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    const gb_threshold = k * k * k;
+    const mb_threshold = k * k;
+
+    if (bytes >= gb_threshold) {
+        return `${(bytes / gb_threshold).toFixed(dm)} GB`;
+    }
+    
+    return `${(bytes / mb_threshold).toFixed(dm)} MB`;
   };
 
   async function fetchConfig() {
