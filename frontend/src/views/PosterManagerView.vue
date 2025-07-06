@@ -1,11 +1,17 @@
+<!-- frontend/views/PosterManagerView.vue (完整文件覆盖) -->
 <template>
   <div class="poster-manager-page">
     <div class="page-header">
       <h2>海报管理器</h2>
       <p>系统性地管理您的媒体图片（海报、Logo、背景图）。提供从 Emby 到 GitHub 的备份、恢复及精细化单体管理功能，确保您的图片资产安全可控。</p>
     </div>
+    <!-- 核心修改：调整顶部操作栏布局 -->
     <div class="top-actions">
-      <el-button size="large" @click="isSearchDialogVisible = true">查找单个媒体进行管理...</el-button>
+      <div class="left-action-group">
+        <el-button size="large" @click="isSearchDialogVisible = true">查找单个媒体进行管理...</el-button>
+        <el-button size="large" @click="handleBackup" :loading="isLoading" class="button-backup">开始备份到 GitHub</el-button>
+        <el-button size="large" @click="handleRestore" :loading="isLoading" class="button-restore">从 GitHub 恢复到 Emby</el-button>
+      </div>
       <el-button size="large" @click="isConfigDialogVisible = true">配置中心</el-button>
     </div>
     <div class="main-content-area">
@@ -72,13 +78,10 @@
                 <el-checkbox value="fanart">背景图 (Fanart)</el-checkbox>
               </el-checkbox-group>
             </div>
+            <!-- 核心修改：移除动作按钮，保留保存配置按钮 -->
             <div class="button-group">
               <el-button @click="handleSaveScope" :loading="isSavingScope"
                 class="button-save-scope">保存范围与内容配置</el-button>
-              <el-button type="primary" @click="handleBackup" :loading="isLoading" class="button-backup">开始备份到
-                GitHub</el-button>
-              <el-button type="success" @click="handleRestore" :loading="isLoading" class="button-restore">从 GitHub 恢复到
-                Emby</el-button>
             </div>
           </div>
         </el-card>
@@ -212,7 +215,6 @@ const isBatchSearchDialogVisible = ref(false);
 const batchSearchQuery = ref('');
 const batchDialogSelection = ref([]);
 
-// --- 新增代码块 ---
 const isPanelLoading = computed(() => store.isStatsLoading || !configStore.isLoaded);
 
 const updateScopeFromConfig = () => {
@@ -228,7 +230,6 @@ const updateScopeFromConfig = () => {
   const savedScope = configStore.appConfig.scheduled_tasks_config?.target_scope;
   batchScope.value = _.cloneDeep({ ...defaultConfig, ...savedScope });
 };
-// --- 新增结束 ---
 
 onMounted(() => {
   store.fetchConfig();
@@ -297,11 +298,9 @@ const handleRestore = () => {
 };
 
 const openBatchSearchDialog = () => {
-  // --- 新增行 ---
   if (!batchScope.value.item_ids) {
     batchScope.value.item_ids = [];
   }
-  // --- 新增结束 ---
   isBatchSearchDialogVisible.value = true;
   batchSearchQuery.value = '';
   mediaStore.searchResults = [];
@@ -382,11 +381,19 @@ const handleBackToSearch = () => {
   color: var(--el-text-color-secondary);
 }
 
+/* --- 核心修改：顶部操作栏样式 --- */
 .top-actions {
   display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: 15px;
   margin-bottom: 20px;
   flex-shrink: 0;
+}
+
+.left-action-group {
+  display: flex;
+  gap: 15px;
 }
 
 .main-content-area {
@@ -432,12 +439,6 @@ const handleBackToSearch = () => {
   font-size: 14px;
   color: var(--el-text-color-secondary);
   margin-bottom: 8px;
-}
-
-.button-group {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 .stats-cards-container {
@@ -604,25 +605,52 @@ const handleBackToSearch = () => {
   margin-top: 10px;
   border-top: 1px solid var(--el-border-color-lighter);
   padding-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.poster-manager-page :deep(.el-button--primary) {
-  --el-button-bg-color: var(--custom-theme-color);
-  --el-button-border-color: var(--custom-theme-color);
-  --el-button-hover-bg-color: var(--custom-theme-color-hover);
-  --el-button-hover-border-color: var(--custom-theme-color-hover);
-  --el-button-active-bg-color: var(--custom-theme-color-active);
-  --el-button-active-border-color: var(--custom-theme-color-active);
-  --el-button-text-color: #ffffff;
+.button-group .el-button {
+  width: 100%;
+  margin-left: 0 !important;
 }
 
-.top-actions .el-button:hover {
+.top-actions .el-button:not(.button-backup):not(.button-restore) {
+  color: var(--el-text-color-regular);
+  background-color: var(--el-bg-color-overlay);
+  border-color: var(--el-border-color);
+}
+
+.top-actions .el-button:not(.button-backup):not(.button-restore):hover {
   color: var(--custom-theme-color);
   border-color: color-mix(in srgb, var(--custom-theme-color) 50%, transparent);
   background-color: color-mix(in srgb, var(--custom-theme-color) 10%, transparent);
 }
 
-.poster-manager-page :deep(.themed-button-plain) {
+/* --- 备选颜色方案二：暖调灰褐色系 (增强互动感版) --- */
+.button-backup {
+  --el-button-text-color: #ffffff;
+  --el-button-bg-color: #9e9e9e; /* 暖灰色 (基础色) */
+  --el-button-border-color: #9e9e9e;
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: #bdbdbd; /* 显著提亮的灰色 (增强互动感) */
+  --el-button-hover-border-color: #bdbdbd;
+  --el-button-active-bg-color: #8e8e8e; /* 点击时的颜色保持深色 */
+  --el-button-active-border-color: #8e8e8e;
+}
+
+.button-restore {
+  --el-button-text-color: #ffffff;
+  --el-button-bg-color: #a1887f; /* 浅褐色 (基础色) */
+  --el-button-border-color: #a1887f;
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: #bcaaa4; /* 显著提亮的褐色 (增强互动感) */
+  --el-button-hover-border-color: #bcaaa4;
+  --el-button-active-bg-color: #907970; /* 点击时的颜色保持深色 */
+  --el-button-active-border-color: #907970;
+}
+
+.button-save-scope {
   --el-button-text-color: var(--custom-theme-color);
   --el-button-bg-color: color-mix(in srgb, var(--custom-theme-color) 10%, transparent);
   --el-button-border-color: color-mix(in srgb, var(--custom-theme-color) 40%, transparent);
@@ -665,49 +693,4 @@ const handleBackToSearch = () => {
   --el-button-active-bg-color: var(--custom-theme-color-active);
   --el-button-active-border-color: var(--custom-theme-color-active);
 }
-
-.button-group {
-  margin-top: 10px;
-  border-top: 1px solid var(--el-border-color-lighter);
-  padding-top: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.button-group .el-button {
-  width: 100%;
-  margin-left: 0 !important;
-}
-
-.button-save-scope {
-  --el-button-text-color: var(--custom-theme-color);
-  --el-button-bg-color: color-mix(in srgb, var(--custom-theme-color) 10%, transparent);
-  --el-button-border-color: color-mix(in srgb, var(--custom-theme-color) 40%, transparent);
-  --el-button-hover-text-color: #ffffff;
-  --el-button-hover-bg-color: var(--custom-theme-color-hover);
-  --el-button-hover-border-color: var(--custom-theme-color-hover);
-}
-
-.button-backup {
-  --el-button-bg-color: var(--custom-theme-color);
-  --el-button-border-color: var(--custom-theme-color);
-  --el-button-hover-bg-color: var(--custom-theme-color-hover);
-  --el-button-hover-border-color: var(--custom-theme-color-hover);
-  --el-button-active-bg-color: var(--custom-theme-color-active);
-  --el-button-active-border-color: var(--custom-theme-color-active);
-  --el-button-text-color: #ffffff;
-}
-
-.button-restore {
-  --el-button-bg-color: #8cc8c0;
-  --el-button-border-color: #8cc8c0;
-  --el-button-hover-bg-color: #a1d4cd;
-  --el-button-hover-border-color: #a1d4cd;
-  --el-button-active-bg-color: #79b8b0;
-  --el-button-active-border-color: #79b8b0;
-  --el-button-text-color: #ffffff;
-}
-
-
 </style>

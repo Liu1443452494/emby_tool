@@ -229,7 +229,9 @@ const handleSave = async () => {
 .repo-toolbar { margin-bottom: 15px; }
 .repo-management .el-table { flex-grow: 1; }
 
-/* --- 核心修正 2: 状态列自适应布局 --- */
+
+/* frontend/src/components/PosterManagerConfigDialog.vue (样式规则替换 - 固定宽度版) */
+
 .repo-status-cell {
   display: flex;
   align-items: center;
@@ -238,8 +240,9 @@ const handleSave = async () => {
   font-size: 12px;
 }
 .status-progress {
-  flex-grow: 1; /* 让进度条占据所有可用空间 */
-  min-width: 80px; /* 设置一个最小宽度，防止过窄 */
+  /* --- 核心修改 1: 固定进度条的宽度 --- */
+  width: 320px; /* 给进度条一个固定的宽度 */
+  flex-shrink: 0; /* 防止它被压缩 */
 }
 .status-progress :deep(.el-progress__text) {
   display: none;
@@ -248,17 +251,19 @@ const handleSave = async () => {
   color: var(--el-text-color-secondary); 
   font-family: monospace;
   white-space: nowrap;
-  flex-shrink: 0; /* 防止文本被压缩 */
+  flex-shrink: 0;
 }
 .update-time-text { 
   color: var(--el-text-color-placeholder); 
   white-space: nowrap;
-  margin-left: auto;
   flex-shrink: 0;
+  /* --- 核心修改 2: 让更新时间占据所有剩余空间并靠右对齐 --- */
+  margin-left: auto;
+  text-align: right;
 }
 .warning-tag {
   flex-shrink: 0;
-  margin-left: 8px;
+  margin-left: 10px; /* 与更新时间保持一点距离 */
 }
 
 /* --- 核心修正 3: 操作按钮单元格样式 --- */
