@@ -204,7 +204,10 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
     }
   }
 
+// frontend/src/stores/posterManager.js (函数替换)
+
   async function backupSingleImage(itemId, imageType) {
+    showMessage('info', `正在后台启动 [${imageType}] 的单体备份任务...`);
     try {
       const response = await fetch(`${API_BASE_URL}/api/poster-manager/backup-single`, {
         method: 'POST',
@@ -213,13 +216,16 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '备份失败');
-      showMessage('success', data.message);
+      
+      showMessage('success', `✅ [${imageType}] 单体备份成功！正在刷新详情...`);
+      // 返回 true 以便组件可以触发刷新
       return true;
     } catch (error) {
-      showMessage('error', error.message);
+      showMessage('error', `❌ [${imageType}] 备份失败: ${error.message}`);
       return false;
     }
   }
+// frontend/src/stores/posterManager.js (函数替换)
 
   async function deleteSingleImage(itemId, imageType) {
     try {
@@ -232,6 +238,9 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
           type: 'warning',
         }
       );
+      
+      showMessage('info', `正在后台启动 [${imageType}] 的单体删除任务...`);
+
       const response = await fetch(`${API_BASE_URL}/api/poster-manager/delete-single`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -239,11 +248,13 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '删除失败');
-      showMessage('success', data.message);
+
+      showMessage('success', `✅ [${imageType}] 单体删除成功！正在刷新详情...`);
+      // 返回 true 以便组件可以触发刷新
       return true;
     } catch (error) {
       if (error !== 'cancel') {
-        showMessage('error', error.message);
+        showMessage('error', `❌ [${imageType}] 删除失败: ${error.message}`);
       }
       return false;
     }

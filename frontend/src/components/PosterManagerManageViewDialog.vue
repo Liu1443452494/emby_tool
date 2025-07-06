@@ -149,22 +149,33 @@ const isEmbyActionDisabled = (type) => {
   return githubImages.value[type] && !store.config.overwrite_remote_files;
 };
 
+// frontend/src/components/PosterManagerManageViewDialog.vue (函数替换 1/2)
+
 const handleEmbyAction = async (type) => {
-  isFetchingDetails.value = true;
+  // 不再设置 loading 状态
   const success = await store.backupSingleImage(props.mediaItem.Id, type);
-  if (success) await fetchDetails();
-  isFetchingDetails.value = false;
+  // 如果 store action 返回 true (表示成功)，则刷新界面
+  if (success) {
+    isFetchingDetails.value = true; // 仅在刷新数据时显示loading
+    await fetchDetails();
+    isFetchingDetails.value = false;
+  }
 };
 
+// frontend/src/components/PosterManagerManageViewDialog.vue (函数替换 2/2)
+
 const handleGithubAction = async (type, action) => {
-  isFetchingDetails.value = true;
   if (action === 'restore') {
     // 恢复逻辑待实现
+    ElMessage.info('此功能正在开发中...');
   } else if (action === 'delete') {
     const success = await store.deleteSingleImage(props.mediaItem.Id, type);
-    if (success) await fetchDetails();
+    if (success) {
+      isFetchingDetails.value = true; // 仅在刷新数据时显示loading
+      await fetchDetails();
+      isFetchingDetails.value = false;
+    }
   }
-  isFetchingDetails.value = false;
 };
 </script>
 

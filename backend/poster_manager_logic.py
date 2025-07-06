@@ -477,8 +477,9 @@ class PosterManagerLogic:
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url)
             owner, repo_name = match.groups()
 
+            # --- 核心修改：为加锁操作增加专门的 try...except 块 ---
             try:
-                # 1. 加锁
+                # 1. 尝试加锁
                 lock_path = ".lock"
                 lock_api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/{lock_path}"
                 lock_payload = {
@@ -488,7 +489,24 @@ class PosterManagerLogic:
                 }
                 self._execute_github_write_request_with_retry("PUT", lock_api_url, pat, lock_payload, task_cat=task_cat)
                 ui_logger.info(f"    - 🔒 已成功在仓库 {repo_url} 中创建 .lock 文件。", task_category=task_cat)
+            
+            except Exception as e:
+                if "422" in str(e) or "Unprocessable Entity" in str(e):
+                    error_message = (
+                        f"❌ 无法锁定仓库 {repo_url}，任务中止！\n"
+                        f"    - **可能原因**: 上一次备份任务异常中断，导致 .lock 文件未能被自动删除。\n"
+                        f"    - **修复建议**: 请手动前往该 GitHub 仓库，检查并删除根目录下的 `.lock` 文件后，再重新运行备份任务。\n"
+                        f"    - **补充说明**: 如果您确认没有其他任务正在运行，删除 .lock 文件是安全的操作。重新运行一次完整的备份任务可以修复任何潜在的索引不一致问题。"
+                    )
+                    ui_logger.error(error_message, task_category=task_cat)
+                    # 抛出一个更明确的异常，让外层知道是锁的问题
+                    raise Exception(f"获取仓库 {repo_url} 的锁失败。")
+                else:
+                    # 如果是其他错误，则原样抛出
+                    raise e
+            # --- 修改结束 ---
 
+            try:
                 # 2. 获取最新索引
                 current_index = self._get_repo_index(repo_config.model_dump())
                 if current_index is None:
@@ -499,7 +517,6 @@ class PosterManagerLogic:
                 for item in files_to_process:
                     if cancellation_event.is_set(): raise InterruptedError("任务被取消")
                     
-                    # --- 核心修改：初始化 action_type 标志位 ---
                     action_type = '新增'
                     
                     cooldown = self.pm_config.file_upload_cooldown_seconds
@@ -522,22 +539,20 @@ class PosterManagerLogic:
                     is_overwrite = 'remote_info' in item
                     if is_overwrite:
                         payload['sha'] = item['remote_info']['sha']
-                        action_type = '覆盖' # 预期的覆盖操作
+                        action_type = '覆盖'
 
                     try:
                         response_data = self._execute_github_write_request_with_retry("PUT", api_url, pat, payload, task_cat=task_cat)
                     except Exception as e:
                         if "422" in str(e) and not is_overwrite:
-                            # --- 核心修改：日志级别改为 INFO，并更新 action_type ---
                             ui_logger.info(f"    - 🔄 文件 {github_path} 已存在，触发“新增转覆盖”容错机制...", task_category=task_cat)
-                            action_type = '覆盖' # 新增转覆盖
+                            action_type = '覆盖'
                             get_resp = self.session.get(api_url, headers={"Authorization": f"token {pat}"}, proxies=self.proxy_manager.get_proxies(api_url)).json()
                             payload['sha'] = get_resp['sha']
                             response_data = self._execute_github_write_request_with_retry("PUT", api_url, pat, payload, task_cat=task_cat)
                         else:
                             raise e
                     
-                    # --- 核心修改：根据 action_type 打印不同的成功日志 ---
                     if action_type == '覆盖':
                         ui_logger.info(f"    - ✅ 覆盖上传成功: {github_path}", task_category=task_cat)
                     else:
@@ -929,13 +944,20 @@ class PosterManagerLogic:
             "github": github_images
         }
 
+    # backend/poster_manager_logic.py (函数替换)
+
     def backup_single_image(self, item_id: str, image_type: str):
         """单体备份：从Emby下载图片，存入本地缓存，再上传到GitHub"""
-        task_cat = f"单体备份({item_id}-{image_type})"
-        ui_logger.info(f"➡️ 开始执行单体备份...", task_category=task_cat)
+        # --- 核心修改：提前获取详情，构建更友好的日志 ---
+        item_details = self._get_emby_item_details(item_id, "Name,ProviderIds")
+        item_name = item_details.get("Name", f"ID {item_id}")
+        image_type_map = {"poster": "海报", "logo": "Logo", "fanart": "背景图"}
+        image_type_cn = image_type_map.get(image_type, image_type)
         
-        # 1. 获取必要信息
-        tmdb_id = self._get_tmdb_id(item_id)
+        task_cat = f"单体备份-{item_name}"
+        ui_logger.info(f"➡️ 开始为【{item_name}】执行单体备份 ({image_type_cn})...", task_category=task_cat)
+        
+        tmdb_id = item_details.get("ProviderIds", {}).get("Tmdb")
         if not tmdb_id: raise ValueError("媒体项缺少 TMDB ID。")
         
         # 2. 从Emby下载图片
@@ -963,7 +985,10 @@ class PosterManagerLogic:
             "size": len(image_data)
         }
         remote_map = self._get_aggregated_remote_index(task_cat)
-        new_files, overwrite_files = self._classify_pending_files([item_info], remote_map, task_cat)
+        
+        # --- 核心修复：正确传递所有参数，并将 overwrite 硬编码为 True ---
+        overwrite_remote = True 
+        new_files, overwrite_files = self._classify_pending_files([item_info], remote_map, overwrite_remote, task_cat)
         
         dispatch_plan = self._calculate_dispatch_plan(new_files, overwrite_files, task_cat)
         self._execute_dispatch_plan(dispatch_plan, task_cat, threading.Event())
