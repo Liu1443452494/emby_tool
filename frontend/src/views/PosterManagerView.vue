@@ -134,7 +134,7 @@
               <div class="card-header"><el-icon>
                   <DataAnalysis />
                 </el-icon> <span>仓库容量概览</span>
-                <el-button :icon="Refresh" circle text :loading="store.isStatsLoading" @click="store.fetchStats"
+                <el-button :icon="Refresh" circle text :loading="store.isStatsLoading" @click="store.fetchStats(true)"
                   style="margin-left: auto;" title="刷新状态" />
               </div>
             </template>

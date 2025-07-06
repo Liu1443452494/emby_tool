@@ -6,7 +6,7 @@
         <el-tab-pane label="仓库管理" name="repos">
           <div class="repo-management">
             <div class="repo-toolbar">
-              <el-button @click="store.fetchStats" :loading="store.isStatsLoading">刷新仓库状态</el-button>
+              <el-button @click="store.fetchStats(true)" :loading="store.isStatsLoading">刷新仓库状态</el-button>
             </div>
             <el-table :data="localConfig.github_repos" style="width: 100%" height="100%" border row-key="repo_url">
               <el-table-column label="优先级" type="index" width="80" align="center" />

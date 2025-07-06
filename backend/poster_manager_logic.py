@@ -721,15 +721,20 @@ class PosterManagerLogic:
             ui_logger.error(f"❌ 恢复任务执行失败: {e}", task_category=task_cat, exc_info=True)
             raise e
         
-    def get_stats(self) -> Dict:
+
+    def get_stats(self, force_refresh: bool = False) -> Dict:
         """获取状态仪表盘所需的数据"""
-        total_images = 0
-        total_size_bytes = 0
         repo_count = len(self.pm_config.github_repos)
         
-        remote_map = self._get_aggregated_remote_index("状态获取")
-        total_images = len(remote_map)
+        # --- 核心修改：将 force_refresh 参数传递下去 ---
+        remote_map = self._get_aggregated_remote_index("状态获取", force_refresh=force_refresh)
         
+        # --- 核心修改：如果执行了强制刷新，则同步更新 config.json 中的容量 ---
+        if force_refresh:
+            self._update_all_repo_sizes("状态获取")
+
+        total_images = len(remote_map)
+        total_size_bytes = 0
         type_counts = {"poster": 0, "logo": 0, "fanart": 0}
         for key, value in remote_map.items():
             total_size_bytes += value.get("size", 0)
@@ -741,7 +746,10 @@ class PosterManagerLogic:
         total_capacity_bytes = 0
         threshold_bytes = self.pm_config.repository_size_threshold_mb * 1024 * 1024
         
-        for repo in self.pm_config.github_repos:
+        # 重新加载一次配置，以获取可能被 _update_all_repo_sizes 更新过的最新状态
+        current_config = app_config_module.load_app_config()
+        
+        for repo in current_config.poster_manager_config.github_repos:
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo.repo_url)
             name = f"{match.group(1)}/{match.group(2)}" if match else repo.repo_url
             used_bytes = repo.state.size_bytes

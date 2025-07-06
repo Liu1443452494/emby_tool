@@ -96,10 +96,44 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
     }
   }
 
-  async function fetchStats() {
+
+// frontend/src/stores/posterManager.js (函数替换)
+
+  async function fetchStats(force = false) {
+    // --- 核心修改：为强制刷新增加独立的 loading 状态和消息提示 ---
+    if (force) {
+      isStatsLoading.value = true;
+      const loadingMessage = ElMessage({
+        message: '正在强制刷新所有仓库状态，请稍候...',
+        type: 'info',
+        duration: 0, // 不自动关闭
+      });
+
+      try {
+        const url = `${API_BASE_URL}/api/poster-manager/stats?force_refresh=true`;
+        const response = await fetch(url);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || '获取状态概览失败');
+        
+        stats.value = data;
+        await fetchConfig(); // 同步 config state
+        
+        loadingMessage.close();
+        showMessage('success', '✅ 仓库状态已成功刷新！');
+      } catch (error) {
+        loadingMessage.close();
+        showMessage('error', `❌ 刷新失败: ${error.message}`);
+      } finally {
+        isStatsLoading.value = false;
+      }
+      return;
+    }
+
+    // --- 非强制刷新的原始逻辑保持不变 ---
     isStatsLoading.value = true;
     try {
-      const response = await fetch(`${API_BASE_URL}/api/poster-manager/stats`);
+      const url = `${API_BASE_URL}/api/poster-manager/stats`;
+      const response = await fetch(url);
       if (!response.ok) throw new Error('获取状态概览失败');
       stats.value = await response.json();
     } catch (error) {

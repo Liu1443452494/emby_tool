@@ -33,12 +33,15 @@ def save_poster_manager_config(config: PosterManagerConfig):
         ui_logger.error(f"保存海报管理器设置失败: {e}", task_category="API-海报管理")
         raise HTTPException(status_code=500, detail=str(e))
 
+# backend/poster_manager_router.py (函数替换)
+
 @router.get("/stats")
-def get_stats():
+def get_stats(force_refresh: bool = False):
     """获取状态仪表盘的数据"""
     try:
         logic = get_logic()
-        return logic.get_stats()
+        # --- 核心修改：将 force_refresh 参数传递给 logic 层 ---
+        return logic.get_stats(force_refresh)
     except Exception as e:
         ui_logger.error(f"获取状态概览失败: {e}", task_category="API-海报管理")
         raise HTTPException(status_code=500, detail=str(e))
