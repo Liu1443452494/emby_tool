@@ -392,6 +392,7 @@
             </el-form>
           </el-tab-pane>
 
+          <!-- frontend/src/views/ScheduledTasksView.vue (el-tab-pane 替换) -->
           <el-tab-pane label="备份与恢复">
             <div class="backup-section">
               <h4><el-icon><Finished /></el-icon> 从 Emby 备份到本地</h4>
@@ -410,6 +411,25 @@
                 使用通用目标范围立即备份
               </el-button>
             </div>
+            <!-- --- 新增：从GitHub恢复 --- -->
+            <div class="backup-section">
+              <h4><el-icon><Download /></el-icon> 从 GitHub 恢复到 Emby</h4>
+              <p class="form-item-description">
+                此功能将根据您选择的“通用目标范围”，从远程 GitHub 仓库中查找匹配的截图并恢复到 Emby。
+              </p>
+              <el-form-item label="恢复时覆盖 Emby 上已存在的图片">
+                <el-switch v-model="overwriteOnRestore" />
+              </el-form-item>
+              <el-button 
+                type="primary" 
+                plain 
+                @click="handleRestoreFromGithub"
+                :loading="isRestoreFromGithubRunning"
+              >
+                使用通用目标范围恢复截图
+              </el-button>
+            </div>
+            <!-- --- 新增结束 --- -->
             <div class="backup-section">
               <h4><el-icon><Upload /></el-icon> 从本地备份到 GitHub</h4>
               <p class="form-item-description">
@@ -440,7 +460,6 @@
                 开始备份到 GitHub
               </el-button>
             </div>
-            <!-- 新增：精准覆盖工具入口 -->
             <div class="backup-section">
               <h4><el-icon><Aim /></el-icon> 精准覆盖 GitHub 截图</h4>
               <p class="form-item-description">
@@ -725,7 +744,7 @@ import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
 import { useEpisodeRenamerStore } from '@/stores/episodeRenamer';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Setting, ArrowDown, Finished, Upload, QuestionFilled, Aim, Delete } from '@element-plus/icons-vue';
+import { Setting, ArrowDown, Finished, Upload, QuestionFilled, Aim, Delete, Download } from '@element-plus/icons-vue';
 import DeletionReviewDialog from '@/components/DeletionReviewDialog.vue'; 
 import cronstrue from 'cronstrue/i18n';
 import _ from 'lodash';
@@ -776,7 +795,9 @@ const isFetchingEpisodes = ref(false);
 const episodesForSelection = ref([]);
 const selectedEpisodes = ref([]);
 const isPreciseUpdating = ref(false);
-const isGithubCleanupRunning = ref(false); 
+const isGithubCleanupRunning = ref(false);
+const overwriteOnRestore = ref(false);
+const isRestoreFromGithubRunning = ref(false);
 
 
 definedTasks.value.forEach(taskDef => {
@@ -1118,6 +1139,46 @@ const handleCleanupGithub = async () => {
     }
   } finally {
     isGithubCleanupRunning.value = false;
+  }
+};
+
+// frontend/src/views/ScheduledTasksView.vue (新增函数)
+
+const handleRestoreFromGithub = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '即将根据您选择的“通用目标范围”，从远程 GitHub 仓库恢复截图。此操作可能会下载大量图片并写入您的Emby，是否继续？',
+      '确认恢复操作',
+      {
+        confirmButtonText: '开始恢复',
+        cancelButtonText: '取消',
+        type: 'info',
+      }
+    );
+    
+    isRestoreFromGithubRunning.value = true;
+    
+    const payload = {
+        scope: localScope.value,
+        overwrite: overwriteOnRestore.value
+    };
+
+    const response = await fetch(`${API_BASE_URL}/api/episode-refresher/restore-from-github`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || '启动恢复任务失败');
+    
+    ElMessage.success(data.message);
+
+  } catch (error) {
+    if (error && error.message) {
+      ElMessage.error(`启动恢复失败: ${error.message}`);
+    }
+  } finally {
+    isRestoreFromGithubRunning.value = false;
   }
 };
 

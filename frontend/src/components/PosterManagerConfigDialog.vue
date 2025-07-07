@@ -67,6 +67,16 @@
                 </div>
               </div>
             </el-form-item>
+            <el-form-item label="恢复模式">
+              <el-radio-group v-model="localConfig.restore_mode">
+                <el-radio value="standard">标准模式</el-radio>
+                <el-radio value="from_remote">从远程备份恢复</el-radio>
+              </el-radio-group>
+              <div class="form-item-description">
+                <b>标准模式：</b>根据左侧选择的“目标范围”扫描 Emby 媒体库，然后与远程备份对比进行恢复。<br>
+                <b>从远程备份恢复：</b>直接读取所有远程备份，反向在 Emby 中查找对应媒体进行恢复。此模式无视“目标范围”，效率更高。
+              </div>
+            </el-form-item>
             <el-form-item label="覆盖开关">
               <el-switch v-model="localConfig.overwrite_remote_files" active-text="备份到github时，覆盖远程图床已存在的同名文件" />
               <el-switch 

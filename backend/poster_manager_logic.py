@@ -1,4 +1,4 @@
-# backend/poster_manager_logic.py
+
 
 import logging
 import os
@@ -20,7 +20,7 @@ from media_selector import MediaSelector
 from proxy_manager import ProxyManager
 import config as app_config_module
 
-# --- 常量定义 ---
+
 AGGREGATED_INDEX_CACHE_FILE = os.path.join('/app/data', 'poster_manager_aggregated_index.json')
 AGGREGATED_INDEX_CACHE_DURATION = 3600  # 缓存1小时 (3600秒)
 
@@ -91,7 +91,7 @@ class PosterManagerLogic:
         initial_pending_list = []
         tmdb_id_map = {}
 
-        # 批量获取TMDB ID以减少API调用
+
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_id = {executor.submit(self._get_tmdb_id, item_id): item_id for item_id in media_ids}
             for future in future_to_id:
@@ -169,7 +169,7 @@ class PosterManagerLogic:
         
         lock_path = AGGREGATED_INDEX_CACHE_FILE + ".lock"
         
-        # --- 核心修改：增加一个标志位来判断是否需要写缓存 ---
+
         should_write_cache = False
 
         if not force_refresh:
@@ -235,7 +235,7 @@ class PosterManagerLogic:
                 except Exception as e:
                     ui_logger.error(f"❌ 处理仓库 {repo_config.repo_url} 索引时出错: {e}", task_category=task_cat)
 
-        # --- 核心修改：使用标志位来决定是否执行写入和日志打印 ---
+
         if should_write_cache:
             total_records_aggregated = len(remote_file_map)
             log_message_prefix = "✅ [阶段5]" if force_refresh else "✅ [阶段1.3]"
@@ -267,7 +267,7 @@ class PosterManagerLogic:
         ui_logger.info("➡️ [阶段2] 开始对待办文件进行分类 (新增/覆盖)...", task_category=task_cat)
         new_files = []
         overwrite_files = []
-        # --- 新增：跳过计数器 ---
+
         skipped_count = 0
         
         for item in initial_list:
@@ -280,14 +280,14 @@ class PosterManagerLogic:
                 item['remote_info'] = remote_info
                 overwrite_files.append(item)
             else:
-                # --- 新增：增加跳过计数 ---
+
                 skipped_count += 1
         
-        # --- 修改：在日志中加入跳过数量 ---
+
         ui_logger.info(f"✅ [阶段2] 分类完成。新增: {len(new_files)} 项, 覆盖: {len(overwrite_files)} 项, 跳过: {skipped_count} 项。", task_category=task_cat)
         return new_files, overwrite_files
 
-    # backend/poster_manager_logic.py (函数替换)
+
 
     def _calculate_dispatch_plan(self, new_files: List, overwrite_files: List, task_cat: str) -> Dict:
         """核心算法：计算文件分发计划 (打包分配 + 降级策略)"""
@@ -301,8 +301,8 @@ class PosterManagerLogic:
             for repo in self.pm_config.github_repos
         }
 
-        # --- 核心修改：对覆盖文件进行分组处理和日志优化 ---
-        # 1. 分组覆盖文件
+
+
         grouped_overwrite_files = {}
         for item in overwrite_files:
             key = (item['tmdb_id'], item['remote_info']['repo_url'])
@@ -316,7 +316,7 @@ class PosterManagerLogic:
             grouped_overwrite_files[key]["files"].append(item)
             grouped_overwrite_files[key]["total_delta"] += delta
 
-        # 2. 处理分组后的覆盖文件
+
         for (tmdb_id, repo_url), group in grouped_overwrite_files.items():
             total_delta = group['total_delta']
             
@@ -331,9 +331,9 @@ class PosterManagerLogic:
             
             file_names_str = ' '.join([os.path.basename(f['local_path']) for f in group['files']])
             ui_logger.info(f"  - [计划-覆盖] [{tmdb_id}] -({file_names_str})-> 分配至原仓库 {repo_url} (空间变化: {total_delta/1024/1024:+.2f} MB)", task_category=task_cat)
-        # --- 修改结束 ---
 
-        # 3. 文件分组 (新增文件)
+
+
         grouped_new_files = {}
         for item in new_files:
             tmdb_id = item['tmdb_id']
@@ -342,10 +342,10 @@ class PosterManagerLogic:
             grouped_new_files[tmdb_id]["files"].append(item)
             grouped_new_files[tmdb_id]["total_size"] += item['size']
 
-        # 4. 打包分配 (新增文件)
+
         for tmdb_id, group in grouped_new_files.items():
             allocated_as_group = False
-            # 主策略：尝试整体放入
+
             for repo in self.pm_config.github_repos:
                 if temp_repo_states.get(repo.repo_url, -1) >= group['total_size']:
                     for item in group['files']:
@@ -355,7 +355,7 @@ class PosterManagerLogic:
                     allocated_as_group = True
                     break
             
-            # 降级策略：如果无法整体放入，则逐个分配
+
             if not allocated_as_group:
                 ui_logger.warning(f"  - ⚠️ [计划-降级] [{tmdb_id}] 图片组 (总大小 {group['total_size']/1024/1024:.2f} MB) 无法整体放入任何仓库，将尝试单独分配...", task_category=task_cat)
                 for item in group['files']:
@@ -400,7 +400,7 @@ class PosterManagerLogic:
             if result.stdout:
                 response_data = json.loads(result.stdout)
         except json.JSONDecodeError:
-            # --- 核心修改：将 curl 的 stderr 加入异常信息 ---
+
             raise Exception(f"cURL 返回了非JSON响应: {result.stdout or '无输出'} | 错误: {result.stderr or '无错误信息'}")
 
         if result.returncode != 0 or (response_data.get("message") and response_data.get("documentation_url")):
@@ -409,7 +409,7 @@ class PosterManagerLogic:
                 error_message = f"无效请求 (422)。服务器提示 'sha' 参数有问题。这可能是因为在您操作期间，文件被其他进程修改。请重试。({error_message})"
             elif "409 Conflict" in result.stderr:
                 error_message = "GitHub API 返回 409 Conflict 错误，这通常是并发写入冲突导致的。请稍后重试。"
-            # --- 核心修改：将 curl 的 stderr 加入异常信息 ---
+
             elif "schannel: failed to receive handshake" in result.stderr or "curl: (35)" in result.stderr:
                 error_message = f"SSL/TLS 握手失败。这通常是临时的网络或代理问题。错误: {result.stderr}"
 
@@ -427,16 +427,16 @@ class PosterManagerLogic:
             try:
                 return self._execute_github_write_request(method, url, pat, payload)
             except Exception as e:
-                # 只对特定的、可能是瞬态的网络错误进行重试
+
                 error_str = str(e).lower()
                 if "ssl/tls" in error_str or "handshake" in error_str or "curl: (35)" in error_str:
                     if attempt < max_retries - 1:
                         ui_logger.warning(f"  - ⚠️ 网络操作失败 (尝试 {attempt + 1}/{max_retries})，将在 {retry_delay} 秒后重试... 原因: {e}", task_category=task_cat)
                         time.sleep(retry_delay)
                         continue
-                # 对于其他错误或达到最大重试次数，则直接抛出异常
+
                 raise e
-        # 这行代码理论上不会被执行，但为了代码完整性保留
+
         raise Exception("重试逻辑执行完毕但未能成功。")
 
 
@@ -454,13 +454,13 @@ class PosterManagerLogic:
         response.raise_for_status()
         return response.json().get('size', 0)
 
-    # backend/poster_manager_logic.py (函数替换)
+
 
     def _execute_dispatch_plan(self, dispatch_plan: Dict, task_cat: str, cancellation_event: threading.Event):
         """执行文件上传和索引更新"""
         ui_logger.info("➡️ [阶段4] 开始执行文件上传和索引更新...", task_category=task_cat)
         
-        # 按优先级处理仓库
+
         for repo_config in self.pm_config.github_repos:
             repo_url = repo_config.repo_url
             plan = dispatch_plan.get(repo_url)
@@ -477,9 +477,9 @@ class PosterManagerLogic:
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url)
             owner, repo_name = match.groups()
 
-            # --- 核心修改：为加锁操作增加专门的 try...except 块 ---
+
             try:
-                # 1. 尝试加锁
+
                 lock_path = ".lock"
                 lock_api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/{lock_path}"
                 lock_payload = {
@@ -499,20 +499,20 @@ class PosterManagerLogic:
                         f"    - **补充说明**: 如果您确认没有其他任务正在运行，删除 .lock 文件是安全的操作。重新运行一次完整的备份任务可以修复任何潜在的索引不一致问题。"
                     )
                     ui_logger.error(error_message, task_category=task_cat)
-                    # 抛出一个更明确的异常，让外层知道是锁的问题
+
                     raise Exception(f"获取仓库 {repo_url} 的锁失败。")
                 else:
-                    # 如果是其他错误，则原样抛出
+
                     raise e
-            # --- 修改结束 ---
+
 
             try:
-                # 2. 获取最新索引
+
                 current_index = self._get_repo_index(repo_config.model_dump())
                 if current_index is None:
                     raise Exception("获取最新索引失败，无法继续。")
 
-                # 3. 上传文件
+
                 files_to_process = plan['overwrite'] + plan['new']
                 for item in files_to_process:
                     if cancellation_event.is_set(): raise InterruptedError("任务被取消")
@@ -558,7 +558,7 @@ class PosterManagerLogic:
                     else:
                         ui_logger.info(f"    - ⬆️ 新增上传成功: {github_path}", task_category=task_cat)
 
-                    # 4. 更新内存中的索引
+
                     tmdb_id_str = str(item['tmdb_id'])
                     if tmdb_id_str not in current_index['images']:
                         current_index['images'][tmdb_id_str] = {}
@@ -570,7 +570,7 @@ class PosterManagerLogic:
                         "url": response_data['content']['download_url']
                     }
 
-                # 5. 提交更新后的索引
+
                 current_index['last_updated'] = datetime.now().isoformat()
                 index_api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/database.json"
                 
@@ -589,7 +589,7 @@ class PosterManagerLogic:
                 ui_logger.info(f"    - 索引文件 database.json 更新成功。", task_category=task_cat)
 
             finally:
-                # 7. 解锁
+
                 lock_get_resp = self.session.get(lock_api_url, headers={"Authorization": f"token {pat}"}, proxies=self.proxy_manager.get_proxies(lock_api_url)).json()
                 lock_sha = lock_get_resp.get('sha')
                 if lock_sha:
@@ -640,20 +640,159 @@ class PosterManagerLogic:
                 match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo.repo_url)
                 name = f"{match.group(1)}/{match.group(2)}" if match else repo.repo_url
                 
-                # --- 核心修改：应用新的日志格式化规则 ---
+
                 size_in_gb = repo.state.size_bytes / (1024 * 1024 * 1024)
                 if size_in_gb >= 1:
                     ui_logger.info(f"   - [容量更新] 仓库 {name} 最新容量为 {size_in_gb:.2f} GB。", task_category=task_cat)
                 else:
                     size_in_mb = repo.state.size_bytes / (1024 * 1024)
                     ui_logger.info(f"   - [容量更新] 仓库 {name} 最新容量为 {size_in_mb:.2f} MB。", task_category=task_cat)
-                # --- 修改结束 ---
+
         else:
             ui_logger.info("   - [容量更新] 所有仓库容量均无变化。", task_category=task_cat)
 
    
+    # backend/poster_manager_logic.py (函数替换)
 
     # backend/poster_manager_logic.py (函数替换)
+
+    def start_restore_from_remote_task(
+        self,
+        scope: ScheduledTasksTargetScope,
+        content_types: List[str],
+        cancellation_event: threading.Event,
+        task_id: str,
+        task_manager: TaskManager
+    ):
+        """从 GitHub 备份反向恢复图片到 Emby 的主任务流程 (已修复范围过滤)"""
+        from concurrent.futures import as_completed
+        
+        overwrite = self.pm_config.overwrite_on_restore
+        task_cat = "海报恢复(反向)"
+        overwrite_text = "强制覆盖" if overwrite else "智能跳过"
+        ui_logger.info(f"🎉 任务启动，模式: 从远程备份恢复, 范围: {scope.mode}, 内容: {content_types}, 策略: {overwrite_text}", task_category=task_cat)
+
+        try:
+            # 阶段一：获取远程数据和ID映射
+            ui_logger.info("➡️ [阶段1/5] 正在获取远程索引和ID映射...", task_category=task_cat)
+            remote_map = self._get_aggregated_remote_index(task_cat)
+            if not remote_map:
+                raise ValueError("无法获取远程聚合索引，任务中止。")
+
+            id_map_file = os.path.join('/app/data', 'id_map.json')
+            if not os.path.exists(id_map_file):
+                raise ValueError("ID映射表 (id_map.json) 不存在，无法进行反向恢复。请先在“定时任务”页面生成映射表。")
+            with open(id_map_file, 'r', encoding='utf-8') as f:
+                id_map = json.load(f)
+
+            # 阶段二：根据远程备份，构建初始的 Emby 媒体检查列表
+            ui_logger.info("➡️ [阶段2/5] 正在根据远程备份构建初始检查列表...", task_category=task_cat)
+            target_tmdb_ids = {
+                key.split('-')[0] for key, value in remote_map.items()
+                if any(f'-{ct}' in key for ct in content_types)
+            }
+            
+            initial_emby_ids_to_check = set()
+            for tmdb_id in target_tmdb_ids:
+                if tmdb_id in id_map:
+                    initial_emby_ids_to_check.update(id_map[tmdb_id])
+            
+            if not initial_emby_ids_to_check:
+                ui_logger.info("✅ 远程备份中的所有媒体在您的 Emby 库中均未找到，任务完成。", task_category=task_cat)
+                return
+
+            ui_logger.info(f"   - 远程数据库包含 {len(target_tmdb_ids)} 个有备份的TMDB ID，对应到本地 Emby 库中的 {len(initial_emby_ids_to_check)} 个媒体实例。", task_category=task_cat)
+
+            # 阶段三：根据用户指定的范围，过滤出最终要处理的媒体
+            ui_logger.info("➡️ [阶段3/5] 正在根据用户指定的范围进行过滤...", task_category=task_cat)
+            selector = MediaSelector(self.config)
+            scoped_emby_ids = set(selector.get_item_ids(scope))
+            
+            final_item_ids_to_process = initial_emby_ids_to_check.intersection(scoped_emby_ids)
+
+            if not final_item_ids_to_process:
+                ui_logger.info("✅ 在指定范围内，没有找到与远程备份匹配的媒体，任务完成。", task_category=task_cat)
+                return
+            
+            ui_logger.info(f"   - 过滤后，最终确定需要处理 {len(final_item_ids_to_process)} 个媒体实例。", task_category=task_cat)
+
+            # 阶段四：构建恢复计划
+            ui_logger.info(f"➡️ [阶段4/5] 正在检查目标媒体状态并构建恢复计划...", task_category=task_cat)
+            restore_plan = []
+            total_items_to_check = len(final_item_ids_to_process)
+            task_manager.update_task_progress(task_id, 0, total_items_to_check)
+
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "Name,ImageTags,ProviderIds"): item_id for item_id in final_item_ids_to_process}
+                for i, future in enumerate(as_completed(future_to_id)):
+                    if cancellation_event.is_set():
+                        ui_logger.warning("⚠️ 任务在构建计划阶段被取消。", task_category=task_cat)
+                        return
+                    
+                    item_id = future_to_id[future]
+                    try:
+                        details = future.result()
+                        item_name = details.get("Name", f"ID {item_id}")
+                        image_tags = details.get("ImageTags", {})
+                        tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
+
+                        if not tmdb_id:
+                            ui_logger.debug(f"   - [跳过] 媒体【{item_name}】(Emby Item ID: {item_id}) 缺少 TMDB ID。", task_category=task_cat)
+                            continue
+
+                        for image_type in content_types:
+                            remote_key = f"{tmdb_id}-{image_type}"
+                            if remote_key not in remote_map:
+                                continue
+
+                            needs_restore = False
+                            if overwrite:
+                                needs_restore = True
+                            else:
+                                type_map = {"poster": "Primary", "logo": "Logo", "fanart": "Backdrop"}
+                                if not image_tags.get(type_map.get(image_type)):
+                                    needs_restore = True
+                                else:
+                                    ui_logger.info(f"   - [跳过] 媒体【{item_name}】(Emby Item ID: {item_id}) 已存在 {image_type} 图片。", task_category=task_cat)
+                            
+                            if needs_restore:
+                                restore_plan.append({"item_id": item_id, "item_name": item_name, "image_type": image_type, "tmdb_id": tmdb_id})
+                    except Exception as e:
+                        ui_logger.error(f"   - ❌ 获取媒体 (Emby Item ID: {item_id}) 详情失败: {e}", task_category=task_cat)
+                    finally:
+                        task_manager.update_task_progress(task_id, i + 1, total_items_to_check)
+
+            ui_logger.info(f"✅ 恢复计划构建完成，共需恢复 {len(restore_plan)} 张图片。", task_category=task_cat)
+
+            # 阶段五：执行恢复
+            ui_logger.info("➡️ [阶段5/5] 开始逐一执行恢复...", task_category=task_cat)
+            total_to_restore = len(restore_plan)
+            task_manager.update_task_progress(task_id, 0, total_to_restore)
+
+            for i, plan_item in enumerate(restore_plan):
+                if cancellation_event.is_set():
+                    ui_logger.warning("⚠️ 任务在执行阶段被取消。", task_category=task_cat)
+                    return
+                
+                item_id = plan_item["item_id"]
+                item_name = plan_item["item_name"]
+                image_type = plan_item["image_type"]
+                tmdb_id = plan_item["tmdb_id"]
+                
+                ui_logger.info(f"  -> 正在为【{item_name}】(Emby Item ID: {item_id}) 恢复 {image_type}...", task_category=task_cat)
+                try:
+                    self._restore_single_image_from_plan(item_id, image_type, tmdb_id, remote_map, task_cat)
+                    ui_logger.info(f"     - ✅ 成功恢复【{item_name}】(Emby Item ID: {item_id}) 的 {image_type} 图片。", task_category=task_cat)
+                except Exception as e:
+                    ui_logger.error(f"     - ❌ 恢复【{item_name}】(Emby Item ID: {item_id}) 的 {image_type} 图片失败: {e}", task_category=task_cat)
+
+                task_manager.update_task_progress(task_id, i + 1, total_to_restore)
+
+            ui_logger.info("🎉 恢复任务执行完毕。", task_category=task_cat)
+
+        except Exception as e:
+            ui_logger.error(f"❌ 恢复任务执行失败: {e}", task_category=task_cat, exc_info=True)
+            raise e
 
     def _restore_single_image_from_plan(self, item_id: str, image_type: str, tmdb_id: str, remote_map: Dict, task_cat: str):
         """根据计划，恢复单张指定类型的图片"""
@@ -713,12 +852,11 @@ class PosterManagerLogic:
             )
             upload_response.raise_for_status()
             
-            # 日志现在在调用处打印，这里只负责执行
+
         except Exception as e:
-            # 直接向上抛出异常，由调用者处理
+
             raise e
 
-    # backend/poster_manager_logic.py (函数替换)
 
     def start_restore_task(
         self,
@@ -728,12 +866,21 @@ class PosterManagerLogic:
         task_id: str,
         task_manager: TaskManager
     ):
-        """从 GitHub 恢复图片到 Emby 的主任务流程"""
-        # --- 核心修改：直接从配置中获取 overwrite 值 ---
+        """
+        恢复任务的入口函数，根据配置分发到不同的执行流程。
+        """
+        if self.pm_config.restore_mode == 'from_remote':
+            from concurrent.futures import as_completed
+            # --- 核心修改：补上缺失的 task_manager 参数 ---
+            self.start_restore_from_remote_task(scope, content_types, cancellation_event, task_id, task_manager)
+            return
+        # --- 修改结束 ---
+
+        """从 GitHub 恢复图片到 Emby 的主任务流程 (标准模式)"""
         overwrite = self.pm_config.overwrite_on_restore
         task_cat = f"海报恢复({scope.mode})"
         overwrite_text = "强制覆盖" if overwrite else "智能跳过"
-        ui_logger.info(f"🎉 任务启动，模式: {scope.mode}, 内容: {content_types}, 策略: {overwrite_text}", task_category=task_cat)
+        ui_logger.info(f"🎉 任务启动，模式: 标准, 范围: {scope.mode}, 内容: {content_types}, 策略: {overwrite_text}", task_category=task_cat)
 
         try:
             # 阶段一：预处理
@@ -748,13 +895,15 @@ class PosterManagerLogic:
             # 阶段二：构建恢复计划
             ui_logger.info(f"➡️ [阶段2/3] 正在构建恢复计划...", task_category=task_cat)
             restore_plan = []
+            skipped_for_no_backup = 0
             total_items_to_check = len(media_ids)
             task_manager.update_task_progress(task_id, 0, total_items_to_check)
 
             item_details_map = {}
+            from concurrent.futures import as_completed
             with ThreadPoolExecutor(max_workers=10) as executor:
                 future_to_id = {executor.submit(self._get_emby_item_details, item_id, "Name,ImageTags,ProviderIds"): item_id for item_id in media_ids}
-                for future in future_to_id:
+                for future in as_completed(future_to_id):
                     item_id = future_to_id[future]
                     try:
                         item_details_map[item_id] = future.result()
@@ -768,6 +917,7 @@ class PosterManagerLogic:
                 
                 details = item_details_map.get(item_id)
                 if not details:
+                    task_manager.update_task_progress(task_id, i + 1, total_items_to_check)
                     continue
 
                 item_name = details.get("Name", f"ID {item_id}")
@@ -780,6 +930,11 @@ class PosterManagerLogic:
                     continue
 
                 for image_type in content_types:
+                    remote_key = f"{tmdb_id}-{image_type}"
+                    if remote_key not in remote_map:
+                        skipped_for_no_backup += 1
+                        continue
+                    
                     needs_restore = False
                     if overwrite:
                         needs_restore = True
@@ -795,7 +950,10 @@ class PosterManagerLogic:
                 
                 task_manager.update_task_progress(task_id, i + 1, total_items_to_check)
 
-            ui_logger.info(f"✅ 恢复计划构建完成，共需恢复 {len(restore_plan)} 张图片。", task_category=task_cat)
+            log_message = f"✅ 恢复计划构建完成，共需恢复 {len(restore_plan)} 张图片。"
+            if skipped_for_no_backup > 0:
+                log_message += f" (因远程无备份而跳过 {skipped_for_no_backup} 张)"
+            ui_logger.info(log_message, task_category=task_cat)
 
             # 阶段三：执行恢复计划
             ui_logger.info("➡️ [阶段3/3] 开始逐一执行恢复...", task_category=task_cat)
@@ -832,10 +990,10 @@ class PosterManagerLogic:
         """获取状态仪表盘所需的数据"""
         repo_count = len(self.pm_config.github_repos)
         
-        # --- 核心修改：将 force_refresh 参数传递下去 ---
+
         remote_map = self._get_aggregated_remote_index("状态获取", force_refresh=force_refresh)
         
-        # --- 核心修改：如果执行了强制刷新，则同步更新 config.json 中的容量 ---
+
         if force_refresh:
             self._update_all_repo_sizes("状态获取")
 
@@ -852,7 +1010,7 @@ class PosterManagerLogic:
         total_capacity_bytes = 0
         threshold_bytes = self.pm_config.repository_size_threshold_mb * 1024 * 1024
         
-        # 重新加载一次配置，以获取可能被 _update_all_repo_sizes 更新过的最新状态
+
         current_config = app_config_module.load_app_config()
         
         for repo in current_config.poster_manager_config.github_repos:
@@ -920,14 +1078,14 @@ class PosterManagerLogic:
                 image_tag = image_info.get("ImageTag")
                 base_path = f"Items/{item_id}/Images/{image_type_from_api}"
                 
-                # --- 核心修复：添加必要的图片处理参数以获取二进制流 ---
+
                 query_params = {
                     'api_key': api_key,
                     'quality': 100  # 请求最高质量的图片
                 }
                 if image_tag:
                     query_params['tag'] = image_tag
-                # --- 修复结束 ---
+
                 
                 image_path_to_emby = f"{base_path}?{urlencode(query_params)}"
                 
@@ -958,11 +1116,11 @@ class PosterManagerLogic:
             return {}
     def get_single_item_details(self, item_id: str) -> Dict:
         """获取单个媒体项在 Emby 和 GitHub 两侧的图片详情"""
-        # 1. 获取 Emby 侧信息
+
         emby_details = self._get_emby_item_details(item_id, "Name,ProductionYear,ProviderIds")
         emby_images = self._get_emby_image_details(item_id)
         
-        # 2. 获取 GitHub 侧信息
+
         github_images = {}
         tmdb_id = emby_details.get("ProviderIds", {}).get("Tmdb")
         if tmdb_id:
@@ -983,7 +1141,7 @@ class PosterManagerLogic:
             "github": github_images
         }
 
-    # backend/poster_manager_logic.py (函数替换)
+
 
     def backup_single_image(self, item_id: str, image_type: str):
         """单体备份：从Emby下载图片，存入本地缓存，再上传到GitHub"""
@@ -1027,12 +1185,12 @@ class PosterManagerLogic:
         dispatch_plan = self._calculate_dispatch_plan(new_files, overwrite_files, task_cat)
         self._execute_dispatch_plan(dispatch_plan, task_cat, threading.Event())
         
-        # --- 核心修改：强制刷新聚合缓存 ---
+
         self._get_aggregated_remote_index(task_cat, force_refresh=True)
         
         ui_logger.info(f"🎉 单体备份任务完成。", task_category=task_cat)
 
-    # backend/poster_manager_logic.py (函数替换)
+
 
     def delete_single_image(self, item_id: str, image_type: str):
         """单体删除：从GitHub删除图片和索引条目"""
@@ -1086,13 +1244,13 @@ class PosterManagerLogic:
         self._execute_github_write_request("PUT", index_api_url, pat, index_payload)
         ui_logger.info(f"  - ✅ 索引文件 database.json 更新成功。", task_category=task_cat)
 
-        # --- 核心修改：调用 _update_all_repo_sizes 来更新容量并强制刷新聚合缓存 ---
+
         self._update_all_repo_sizes(task_cat)
         self._get_aggregated_remote_index(task_cat, force_refresh=True)
 
         ui_logger.info(f"🎉 单体删除任务完成。", task_category=task_cat)
 
-    # backend/poster_manager_logic.py (函数替换)
+
 
     def restore_single_image(self, item_id: str, image_type: str):
         """单体恢复：从GitHub下载图片，并恢复到Emby"""
@@ -1116,7 +1274,7 @@ class PosterManagerLogic:
             ui_logger.info(f"🎉 为【{item_name}】恢复【{image_type_cn}】的任务已完成。", task_category=task_cat)
         
         except Exception as e:
-            # --- 核心修复 3：捕获异常并抛出，让路由层处理 ---
+
             ui_logger.error(f"❌ 为【{item_name}】恢复【{image_type_cn}】的任务失败。", task_category=task_cat)
             raise e
 
@@ -1136,7 +1294,7 @@ class PosterManagerLogic:
         ui_logger.info(f"🎉 任务启动，模式: {scope.mode}, 内容: {content_types}, 覆盖: {overwrite}", task_category=task_cat)
 
         try:
-            # 阶段一：预处理
+
             selector = MediaSelector(self.config)
             media_ids = selector.get_item_ids(scope)
             task_manager.update_task_progress(task_id, 10, 100)
@@ -1150,7 +1308,7 @@ class PosterManagerLogic:
             task_manager.update_task_progress(task_id, 40, 100)
             if cancellation_event.is_set(): return
 
-            # 阶段二：分类
+
             new_files, overwrite_files = self._classify_pending_files(initial_list, remote_map, overwrite, task_cat)
             task_manager.update_task_progress(task_id, 50, 100)
             if not new_files and not overwrite_files:
@@ -1158,19 +1316,19 @@ class PosterManagerLogic:
                 task_manager.update_task_progress(task_id, 100, 100)
                 return
 
-            # 阶段三：分发计划
+
             dispatch_plan = self._calculate_dispatch_plan(new_files, overwrite_files, task_cat)
             task_manager.update_task_progress(task_id, 60, 100)
             if cancellation_event.is_set(): return
 
-            # 阶段四：执行
+
             self._execute_dispatch_plan(dispatch_plan, task_cat, cancellation_event)
             
-            # --- 核心修改：任务收尾阶段 ---
+
             if not cancellation_event.is_set():
-                # 阶段 5.1: 更新聚合缓存
+
                 self._get_aggregated_remote_index(task_cat, force_refresh=True)
-                # 阶段 5.2: 更新所有仓库容量
+
                 self._update_all_repo_sizes(task_cat)
 
             task_manager.update_task_progress(task_id, 100, 100)

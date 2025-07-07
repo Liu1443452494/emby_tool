@@ -1424,6 +1424,29 @@ def cleanup_github_screenshots_api():
     )
     return {"status": "success", "message": "清理任务已启动。", "task_id": task_id}
 
+# backend/main.py (新增路由)
+
+class ScreenshotRestoreRequest(BaseModel):
+    scope: ScheduledTasksTargetScope
+    overwrite: bool
+
+@app.post("/api/episode-refresher/restore-from-github")
+def restore_screenshots_from_github_api(req: ScreenshotRestoreRequest):
+    """启动一个任务，从 GitHub 备份反向恢复截图到 Emby"""
+    task_cat = "API-截图恢复(反向)"
+    ui_logger.info(f"收到从 GitHub 恢复截图的请求...", task_category=task_cat)
+    
+    config = app_config.load_app_config()
+    logic = EpisodeRefresherLogic(config)
+    task_name = f"从GitHub恢复截图 ({req.scope.mode})"
+    task_id = task_manager.register_task(
+        logic.restore_screenshots_from_github_task,
+        task_name,
+        scope=req.scope,
+        overwrite=req.overwrite
+    )
+    return {"status": "success", "message": "从GitHub恢复截图的任务已启动。", "task_id": task_id}
+
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     try:

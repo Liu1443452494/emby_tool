@@ -240,6 +240,7 @@ class PosterManagerConfig(BaseModel):
     file_upload_cooldown_seconds: float = Field(default=1.0, description="向GitHub上传文件（图片或索引）前的等待时间 (秒)")
     overwrite_remote_files: bool = Field(default=False, description="全局开关，决定备份时是否覆盖GitHub上已存在的同名文件")
     overwrite_on_restore: bool = Field(default=False, description="全局开关，决定恢复时是否覆盖Emby上已存在的图片")
+    restore_mode: Literal['standard', 'from_remote'] = Field(default='standard', description="恢复模式: 'standard' - 标准模式, 'from_remote' - 从远程备份反向恢复")
     github_repos: List[GitHubRepo] = Field(default_factory=list, description="仓库列表，顺序即代表优先级")
 # --- 结束新增 ---
     

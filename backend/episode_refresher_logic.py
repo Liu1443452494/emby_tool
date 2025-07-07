@@ -10,6 +10,7 @@ import os
 import shutil
 from typing import List, Iterable, Optional, Dict, Tuple
 from collections import defaultdict
+from collections import defaultdict
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from filelock import FileLock, Timeout
@@ -25,9 +26,10 @@ except ImportError:
     logging.warning("【剧集刷新】OpenCV 或 NumPy 未安装，高质量截图功能将不可用。请运行 'pip install opencv-python-headless numpy Pillow'")
 
 from log_manager import ui_logger
-from models import AppConfig, EpisodeRefresherConfig
+from models import AppConfig, EpisodeRefresherConfig, ScheduledTasksTargetScope
 from task_manager import TaskManager
 from tmdb_logic import TmdbLogic
+from media_selector import MediaSelector
 
 # --- 新增常量 ---
 GITHUB_DELETE_LOG_FILE = os.path.join('/app/data', 'github_delete_log.json')
@@ -1746,3 +1748,146 @@ class EpisodeRefresherLogic:
                 json.dump(final_log_data, f, indent=2, ensure_ascii=False)
         
         ui_logger.info(f"【{task_cat}】🎉 任务全部完成！", task_category=task_cat)
+
+
+    # backend/episode_refresher_logic.py (函数替换)
+
+    def restore_screenshots_from_github_task(
+        self,
+        scope: ScheduledTasksTargetScope,
+        overwrite: bool,
+        cancellation_event: threading.Event,
+        task_id: str,
+        task_manager: TaskManager
+    ):
+        """从 GitHub 备份反向恢复截图到 Emby 的主任务流程 (可靠版)"""
+        from concurrent.futures import as_completed
+        
+        task_cat = "截图恢复(反向)"
+        overwrite_text = "强制覆盖" if overwrite else "智能跳过"
+        ui_logger.info(f"🎉 任务启动，模式: 从远程备份恢复, 范围: {scope.mode}, 策略: {overwrite_text}", task_category=task_cat)
+
+        try:
+            # 阶段一：数据准备
+            ui_logger.info("➡️ [阶段1/4] 正在获取远程数据并构建初始计划...", task_category=task_cat)
+            remote_db, _ = self._get_remote_db(self.app_config.episode_refresher_config)
+            if not remote_db or not remote_db.get("series"):
+                raise ValueError("无法获取远程截图数据库，或数据库为空。")
+
+            id_map_file = os.path.join('/app/data', 'id_map.json')
+            if not os.path.exists(id_map_file):
+                raise ValueError("ID映射表 (id_map.json) 不存在，无法进行反向恢复。请先在“定时任务”页面生成映射表。")
+            with open(id_map_file, 'r', encoding='utf-8') as f:
+                id_map = json.load(f)
+
+            emby_centric_plan = {}
+            for tmdb_id, episodes in remote_db["series"].items():
+                if tmdb_id in id_map:
+                    for emby_series_id in id_map[tmdb_id]:
+                        emby_centric_plan[emby_series_id] = episodes
+            
+            if not emby_centric_plan:
+                ui_logger.info("✅ 远程备份中的所有剧集在您的 Emby 库中均未找到，任务完成。", task_category=task_cat)
+                return
+            
+            # 阶段二：范围过滤
+            ui_logger.info("➡️ [阶段2/4] 正在根据用户指定的范围进行过滤...", task_category=task_cat)
+            selector = MediaSelector(self.app_config)
+            scoped_emby_series_ids = set(selector.get_item_ids(scope, target_collection_type="tvshows"))
+            
+            final_plan = {
+                series_id: episodes
+                for series_id, episodes in emby_centric_plan.items()
+                if series_id in scoped_emby_series_ids
+            }
+
+            if not final_plan:
+                ui_logger.info("✅ 在指定范围内，没有找到与远程备份匹配的剧集，任务完成。", task_category=task_cat)
+                return
+            
+            ui_logger.info(f"   - 过滤后，最终确定需要处理 {len(final_plan)} 个剧集实例。", task_category=task_cat)
+
+            # 阶段三：获取所有相关分集详情并构建最终恢复计划
+            ui_logger.info("➡️ [阶段3/4] 正在获取所有相关分集信息...", task_category=task_cat)
+            
+            all_episodes_details = []
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                session = requests.Session()
+                params = {
+                    "api_key": self.server_config.api_key,
+                    "IncludeItemTypes": "Episode",
+                    "Recursive": "true",
+                    "Fields": "Id,Name,ParentIndexNumber,IndexNumber,ImageTags,SeriesName,SeriesId"
+                }
+                futs = {
+                    executor.submit(session.get, f"{self.server_config.server}/Items", params={**params, "ParentId": series_id}, timeout=60): series_id
+                    for series_id in final_plan.keys()
+                }
+                for f in as_completed(futs):
+                    series_id_for_log = futs[f]
+                    try:
+                        resp = f.result()
+                        resp.raise_for_status()
+                        all_episodes_details.extend(resp.json().get("Items", []))
+                    except Exception as e:
+                        ui_logger.error(f"   - ❌ 获取剧集 (Emby Item ID: {series_id_for_log}) 的分集列表时失败: {e}", task_category=task_cat)
+
+            # 构建快速查找字典
+            episodes_lookup_map = {
+                f"{ep.get('SeriesId')}-{ep.get('ParentIndexNumber')}-{ep.get('IndexNumber')}": ep
+                for ep in all_episodes_details
+            }
+
+            final_restore_list = []
+            for series_id, episodes in final_plan.items():
+                for episode_key, image_url in episodes.items():
+                    s_num_str, e_num_str = episode_key.split('-')
+                    lookup_key = f"{series_id}-{s_num_str}-{e_num_str}"
+                    
+                    ep_details = episodes_lookup_map.get(lookup_key)
+                    if not ep_details:
+                        continue
+
+                    needs_restore = False
+                    if overwrite:
+                        needs_restore = True
+                    elif not ep_details.get("ImageTags", {}).get("Primary"):
+                        needs_restore = True
+                    else:
+                        series_name = ep_details.get("SeriesName", "未知剧集")
+                        ui_logger.info(f"   - [跳过] 《{series_name}》S{s_num_str}E{e_num_str} 已存在截图，跳过恢复。", task_category=task_cat)
+                    
+                    if needs_restore:
+                        final_restore_list.append({
+                            "emby_episode_id": ep_details["Id"],
+                            "series_name": ep_details.get("SeriesName", "未知剧集"),
+                            "s_num": int(s_num_str),
+                            "e_num": int(e_num_str),
+                            "image_url": image_url
+                        })
+
+            ui_logger.info(f"✅ 最终恢复列表构建完成，共需恢复 {len(final_restore_list)} 张截图。", task_category=task_cat)
+
+            # 阶段四：执行恢复
+            ui_logger.info("➡️ [阶段4/4] 开始逐一执行恢复...", task_category=task_cat)
+            task_manager.update_task_progress(task_id, 0, len(final_restore_list))
+            for i, item in enumerate(final_restore_list):
+                if cancellation_event.is_set():
+                    ui_logger.warning("⚠️ 任务在执行阶段被取消。", task_category=task_cat)
+                    return
+                
+                log_prefix = f"  -> 正在为《{item['series_name']}》S{item['s_num']:02d}E{item['e_num']:02d}"
+                ui_logger.info(f"{log_prefix} 恢复截图...", task_category=task_cat)
+                
+                if self._upload_image_from_url(item["emby_episode_id"], item["image_url"], task_cat):
+                    ui_logger.info(f"     - ✅ 成功恢复截图。", task_category=task_cat)
+                else:
+                    ui_logger.error(f"     - ❌ 恢复截图失败。", task_category=task_cat)
+                
+                task_manager.update_task_progress(task_id, i + 1, len(final_restore_list))
+
+            ui_logger.info("🎉 截图恢复任务执行完毕。", task_category=task_cat)
+
+        except Exception as e:
+            ui_logger.error(f"❌ 截图恢复任务执行失败: {e}", task_category=task_cat, exc_info=True)
+            raise e

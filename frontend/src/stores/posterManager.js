@@ -160,14 +160,14 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
 
 
 
+
   async function startRestore(scope, contentTypes) {
     try {
-      // --- 核心修改：直接从 store 的 config 中获取 overwrite 值 ---
-      const overwrite = config.value.overwrite_on_restore;
+      // --- 核心修改：移除 overwrite 参数的传递 ---
       const response = await fetch(`${API_BASE_URL}/api/poster-manager/start-restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope, content_types: contentTypes, overwrite }),
+        body: JSON.stringify({ scope, content_types: contentTypes }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '启动恢复任务失败');
