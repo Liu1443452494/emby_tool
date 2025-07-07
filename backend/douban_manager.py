@@ -1,4 +1,4 @@
-# backend/douban_manager.py (修改后)
+
 
 import os
 import json
@@ -59,7 +59,7 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
 
     for i, folder_info in enumerate(media_folders):
         if cancellation_event.is_set():
-            # 对于非前端显示的日志，可以继续使用 logging
+
             logging.warning("【豆瓣扫描】任务被用户取消。")
             return
 
@@ -67,8 +67,8 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
         folder_name = os.path.basename(folder_path)
         media_type = folder_info['type']
         
-        # --- 核心修改：将 logging.debug 替换为 ui_logger.debug ---
-        # 并且也传入 task_category
+
+
         ui_logger.debug(f"进度 {i+1}/{total_folders}: 正在处理【{folder_name}】", task_category=task_cat)
         task_manager.update_task_progress(task_id, i + 1, total_folders)
 
@@ -76,7 +76,7 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
         json_path = os.path.join(folder_path, json_filename)
 
         if not os.path.isfile(json_path):
-            # 对于警告和错误，也可以使用 ui_logger，这样前端也能看到
+
             ui_logger.warning(f"警告：在目录【{folder_path}】中未找到元数据文件 {json_filename}，已跳过。", task_category=task_cat)
             continue
 
@@ -165,7 +165,7 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
             is_scanning=False
         )
         app_config.save_app_config(config)
-        # 这个日志只给后端看，所以用 logging
+
         logging.info("已更新配置文件中的缓存状态。")
 
     except Exception as e:

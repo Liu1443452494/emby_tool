@@ -13,10 +13,10 @@ try:
 except ImportError:
     Image = None
     UnidentifiedImageError = None
-    # 对于底层依赖缺失，保留 logging.warning
+
     logging.warning("【演员画廊】Pillow 库未安装，本地图片上传功能将受限。请运行 'pip install Pillow'")
 
-# --- 核心修改：导入 ui_logger ---
+
 from log_manager import ui_logger
 from models import AppConfig, CombinedImage, CombinedImageResponse, CombinedAvatarResponse, CombinedActorImage, ActorTmdbImageFlowRequest, CombinedAvatarRequest
 from douban_manager import DOUBAN_CACHE_FILE

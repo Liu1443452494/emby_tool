@@ -740,7 +740,8 @@ const definedTasks = ref([
   { id: 'douban_fixer', name: '豆瓣ID修复器', hasSettings: false },
   { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
   { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true },
-  { id: 'episode_renamer', name: '剧集文件重命名', hasSettings: true }
+  { id: 'episode_renamer', name: '剧集文件重命名', hasSettings: true },
+  { id: 'id_mapper', name: 'TMDB-Emby ID 映射表', hasSettings: false }
 ]);
 
 const localScope = ref({});

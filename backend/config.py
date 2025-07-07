@@ -1,4 +1,4 @@
-# backend/config.py (修改后)
+
 import json
 import os
 import logging
@@ -29,7 +29,7 @@ DEFAULT_SF_MODEL_REMARKS = {
     "deepseek-ai/DeepSeek-V2.5": "（收费 输入：￥1.33/ M Tokens）"
 }
 
-# === 文件: backend/config.py === #
+
 
 def load_app_config() -> AppConfig:
     config_dir = os.path.dirname(CONFIG_FILE)
@@ -140,7 +140,7 @@ def load_app_config() -> AppConfig:
     if "local_screenshot_caching_enabled" in refresher_conf:
         del refresher_conf["local_screenshot_caching_enabled"]
     
-    # --- 新增：GitHub冷却时间兼容性处理 ---
+
     if "github_config" in refresher_conf:
         if "download_cooldown" not in refresher_conf["github_config"]:
             refresher_conf["github_config"]["download_cooldown"] = 0.5

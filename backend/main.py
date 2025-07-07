@@ -58,6 +58,71 @@ from episode_renamer_logic import EpisodeRenamerLogic
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
+def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    """
+    扫描全库，生成 TMDB ID 到 Emby Item ID 的映射文件。
+    """
+    task_cat = "ID映射表生成"
+    ui_logger.info(f"➡️ 开始扫描全库，生成 TMDB-Emby ID 映射表...", task_category=task_cat)
+    
+    config = app_config.load_app_config()
+    selector = MediaSelector(config)
+    
+    all_media_scope = ScheduledTasksTargetScope(mode='all')
+    all_item_ids = selector.get_item_ids(all_media_scope)
+
+    if not all_item_ids:
+        ui_logger.warning("⚠️ 未在 Emby 中找到任何媒体项，任务中止。", task_category=task_cat)
+        return
+
+    total_items = len(all_item_ids)
+    task_manager.update_task_progress(task_id, 0, total_items)
+    ui_logger.info(f"🔍 已获取到 {total_items} 个媒体项，正在批量处理...", task_category=task_cat)
+
+    id_map = {}
+    processed_count = 0
+    skipped_count = 0
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        # --- 核心修改：请求的字段增加 Name，用于日志输出 ---
+        future_to_id = {executor.submit(selector._get_emby_item_details, item_id, "ProviderIds,Name"): item_id for item_id in all_item_ids}
+        for future in future_to_id:
+            if cancellation_event.is_set():
+                ui_logger.warning("⚠️ 任务在处理中被取消。", task_category=task_cat)
+                return
+            
+            item_id = future_to_id[future]
+            try:
+                details = future.result()
+                provider_ids = details.get("ProviderIds", {})
+                tmdb_id = provider_ids.get("Tmdb")
+                if tmdb_id:
+                    id_map[str(tmdb_id)] = item_id
+                else:
+                    # --- 核心修改：增加跳过日志 ---
+                    item_name = details.get("Name", f"ID {item_id}")
+                    ui_logger.info(f"   - [跳过] 媒体【{item_name}】(ID: {item_id}) 因缺少 TMDB ID 而被忽略。", task_category=task_cat)
+                    skipped_count += 1
+            except Exception as e:
+                ui_logger.error(f"   - ❌ 处理媒体 {item_id} 时出错: {e}", task_category=task_cat)
+                skipped_count += 1
+            
+            processed_count += 1
+            if processed_count % 100 == 0:
+                task_manager.update_task_progress(task_id, processed_count, total_items)
+
+    ID_MAP_FILE = os.path.join('/app/data', 'id_map.json')
+    try:
+        with open(ID_MAP_FILE, 'w', encoding='utf-8') as f:
+            json.dump(id_map, f, indent=4)
+        # --- 核心修改：在最终日志中加入跳过数量 ---
+        ui_logger.info(f"✅ 映射表生成完毕，共成功映射 {len(id_map)} 个媒体项，跳过 {skipped_count} 个。", task_category=task_cat)
+    except IOError as e:
+        ui_logger.error(f"❌ 写入映射表文件失败: {e}", task_category=task_cat)
+        raise e
+
 webhook_queue = asyncio.Queue()
 webhook_processing_set = set()
 
@@ -241,8 +306,7 @@ def _episode_renamer_task_runner(
         task_cat
     )
 
-
-
+# backend/main.py (函数替换)
 
 def trigger_scheduled_task(task_id: str):
     task_name_map = {
@@ -250,19 +314,25 @@ def trigger_scheduled_task(task_id: str):
         "douban_fixer": "豆瓣ID修复",
         "douban_poster_updater": "豆瓣海报更新",
         "episode_refresher": "剧集元数据刷新",
+        "episode_renamer": "剧集文件重命名",
         # --- 新增行 ---
-        "episode_renamer": "剧集文件重命名"
+        "id_mapper": "TMDB-Emby ID 映射表"
     }
     task_display_name = task_name_map.get(task_id, task_id)
     task_cat = f"定时任务-{task_display_name}"
     ui_logger.info(f"开始执行定时任务...", task_category=task_cat)
     
+    # --- 核心修改：ID映射任务不依赖通用范围 ---
+    if task_id == "id_mapper":
+        task_manager.register_task(generate_id_map_task, f"定时任务-{task_display_name}")
+        return
+
     config = app_config.load_app_config()
     scope = config.scheduled_tasks_config.target_scope
     selector = MediaSelector(config)
     
     target_collection_type = None
-    if task_id == "episode_refresher" or task_id == "episode_renamer": # --- 修改此行 ---
+    if task_id == "episode_refresher" or task_id == "episode_renamer":
         target_collection_type = "tvshows"
         
     item_ids = selector.get_item_ids(scope, target_collection_type=target_collection_type)
@@ -308,19 +378,15 @@ def trigger_scheduled_task(task_id: str):
             config=config,
             task_name=task_name
         )
-    # --- 新增代码块 ---
     elif task_id == "episode_renamer":
-        # 注意：重命名任务需要的是分集ID，但范围选择器返回的是剧集ID
-        # 所以我们需要一个类似 _episode_refresher_task_runner 的包装器
         task_name = f"定时任务-剧集文件重命名({scope.mode})"
         task_manager.register_task(
-            _episode_renamer_task_runner, # 我们将创建一个新的包装器函数
+            _episode_renamer_task_runner,
             task_name,
             series_ids=item_ids,
             config=config,
             task_name=task_name
         )
-    # --- 结束新增 ---
     else:
         ui_logger.warning(f"未知的任务ID: {task_id}", task_category=task_cat)
 

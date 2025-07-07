@@ -270,7 +270,8 @@ class ScheduledTasksConfig(BaseModel):
         ScheduledTaskItem(id="douban_fixer", name="豆瓣ID修复器"),
         ScheduledTaskItem(id="douban_poster_updater", name="豆瓣海报更新"),
         ScheduledTaskItem(id="episode_refresher", name="剧集元数据刷新"),
-        ScheduledTaskItem(id="episode_renamer", name="剧集文件重命名", hasSettings=True)
+        ScheduledTaskItem(id="episode_renamer", name="剧集文件重命名", hasSettings=True),
+        ScheduledTaskItem(id="id_mapper", name="TMDB-Emby ID 映射表", hasSettings=False)
     ])
 
 class WebhookConfig(BaseModel):

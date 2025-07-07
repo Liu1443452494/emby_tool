@@ -876,8 +876,6 @@ class PosterManagerLogic:
             "repo_details": repo_details
         }
 
-    # backend/poster_manager_logic.py (函数替换 - 终极修复)
-
     def _get_emby_image_details(self, item_id: str) -> Dict[str, Dict]:
         """
         一次性获取 Emby 媒体项所有类型图片（海报、Logo、背景图）的详细信息。

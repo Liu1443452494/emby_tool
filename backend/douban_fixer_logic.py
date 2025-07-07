@@ -11,7 +11,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 import re
 
-# --- 核心修改：导入 ui_logger ---
+
 from log_manager import ui_logger
 from models import AppConfig, ScheduledTasksTargetScope
 from task_manager import TaskManager
@@ -42,7 +42,7 @@ class DoubanFixerLogic:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
-            # 底层错误，保留 logging
+
             logging.error(f"【豆瓣修复器】获取 Emby 媒体详情 (ID: {item_id}) 失败: {e}")
             return None
 
@@ -149,7 +149,7 @@ class DoubanFixerLogic:
             with open(DOUBAN_FIXER_CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=4, ensure_ascii=False)
         except IOError as e:
-            # 底层错误，保留 logging
+
             logging.error(f"【豆瓣修复器】保存失败缓存文件失败: {e}")
 
     def add_to_cache(self, item_details: Dict, task_cat: str):

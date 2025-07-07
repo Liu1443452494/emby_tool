@@ -4,7 +4,7 @@ from fastapi.responses import Response
 import logging
 from typing import Optional
 
-# --- 核心修改：导入 ui_logger ---
+
 from log_manager import ui_logger
 from models import (
     AppConfig, ActorGalleryMatchRequest, ActorGalleryUploadRequest, 

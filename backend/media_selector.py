@@ -1,7 +1,6 @@
-
 import logging
 import requests
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime, timedelta, timezone
 import json 
 
@@ -35,8 +34,30 @@ class MediaSelector:
             # 底层错误，保留 logging
             logging.error(f"【媒体选择器】获取最新项目失败: {e}")
             return []
+        
+    def _get_emby_item_details(self, item_id: str, fields: str) -> Dict:
+        """
+        从 Emby 获取媒体项的详细信息。
+        这是一个通用的内部方法，可以被其他逻辑复用。
+        """
+        # --- 核心修改：导入 ProxyManager 并使用它 ---
+        from proxy_manager import ProxyManager
+        proxy_manager = ProxyManager(self.app_config)
+        
+        try:
+            url = f"{self.base_url}/Users/{self.user_id}/Items/{item_id}"
+            params = {**self.params, "Fields": fields}
+            
+            # 动态获取代理设置
+            proxies = proxy_manager.get_proxies(url)
+            
+            response = self.session.get(url, params=params, timeout=15, proxies=proxies)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            logging.error(f"【媒体选择器】获取媒体项 {item_id} 的详情失败: {e}")
+            raise e
 
-    # backend/media_selector.py (修改 get_item_ids 方法)
 
     def get_item_ids(self, scope: ScheduledTasksTargetScope, target_collection_type: Optional[str] = None) -> List[str]:
         """

@@ -1,4 +1,4 @@
-# backend/douban_fixer_router.py (修改后)
+
 
 import logging
 import requests
@@ -7,7 +7,7 @@ from typing import List, Dict
 from bs4 import BeautifulSoup
 import re
 
-# --- 核心修改：导入 ui_logger ---
+
 from log_manager import ui_logger
 from models import AppConfig
 from douban_fixer_logic import DoubanFixerLogic
@@ -22,7 +22,7 @@ def get_logic(temp_config: AppConfig = None) -> DoubanFixerLogic:
     if not all([config_to_use.server_config.server, config_to_use.server_config.api_key, config_to_use.server_config.user_id]):
         raise HTTPException(status_code=400, detail="Emby 服务器未配置，请先在配置页面完成设置。")
     if not config_to_use.douban_fixer_config.cookie:
-        # 底层配置警告，保留 logging
+
         logging.warning("【豆瓣修复器】豆瓣 Cookie 未配置，功能可能受限。")
     return DoubanFixerLogic(config_to_use)
 

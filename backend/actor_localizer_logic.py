@@ -13,7 +13,7 @@ from typing import List, Dict, Any, Generator, Optional, Iterable
 try:
     import translators as ts
 except ImportError:
-    # 底层依赖缺失，保留 logging.warning
+
     logging.warning("【演员中文化】'translators' 库未安装，相关功能将不可用。请运行 'pip install translators'。")
     ts = None
 
@@ -67,7 +67,7 @@ class ActorLocalizerLogic:
             resp.raise_for_status()
             return resp.json()
         except requests.RequestException as e:
-            # 这是一个底层错误，不直接展示给用户，所以保留 logging
+
             logging.error(f"【演员中文化】获取媒体详情 (ID: {item_id}) 失败: {e}")
             return None
 
