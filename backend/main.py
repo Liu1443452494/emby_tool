@@ -77,20 +77,24 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
 
     total_items = len(all_item_ids)
     task_manager.update_task_progress(task_id, 0, total_items)
-    ui_logger.info(f"🔍 已获取到 {total_items} 个媒体项，正在批量处理...", task_category=task_cat)
+    ui_logger.info(f"🔍 已获取到 {total_items} 个媒体项实例，正在批量处理...", task_category=task_cat)
 
+    # --- 核心修改 1: 初始化 id_map ---
     id_map = {}
     processed_count = 0
     skipped_count = 0
+    failed_count = 0
 
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        # --- 核心修改：请求的字段增加 Name，用于日志输出 ---
         future_to_id = {executor.submit(selector._get_emby_item_details, item_id, "ProviderIds,Name"): item_id for item_id in all_item_ids}
-        for future in future_to_id:
+        
+        for future in as_completed(future_to_id):
             if cancellation_event.is_set():
                 ui_logger.warning("⚠️ 任务在处理中被取消。", task_category=task_cat)
+                for f in future_to_id:
+                    f.cancel()
                 return
             
             item_id = future_to_id[future]
@@ -99,30 +103,36 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
                 provider_ids = details.get("ProviderIds", {})
                 tmdb_id = provider_ids.get("Tmdb")
                 if tmdb_id:
-                    id_map[str(tmdb_id)] = item_id
+                    # --- 核心修改 2: 构建一对多的映射关系 ---
+                    tmdb_id_str = str(tmdb_id)
+                    if tmdb_id_str not in id_map:
+                        id_map[tmdb_id_str] = []
+                    id_map[tmdb_id_str].append(item_id)
+                    # --- 修改结束 ---
                 else:
-                    # --- 核心修改：增加跳过日志 ---
                     item_name = details.get("Name", f"ID {item_id}")
                     ui_logger.info(f"   - [跳过] 媒体【{item_name}】(ID: {item_id}) 因缺少 TMDB ID 而被忽略。", task_category=task_cat)
                     skipped_count += 1
             except Exception as e:
                 ui_logger.error(f"   - ❌ 处理媒体 {item_id} 时出错: {e}", task_category=task_cat)
-                skipped_count += 1
+                failed_count += 1
             
             processed_count += 1
-            if processed_count % 100 == 0:
+            if processed_count % 100 == 0 or processed_count == total_items:
                 task_manager.update_task_progress(task_id, processed_count, total_items)
 
     ID_MAP_FILE = os.path.join('/app/data', 'id_map.json')
     try:
         with open(ID_MAP_FILE, 'w', encoding='utf-8') as f:
             json.dump(id_map, f, indent=4)
-        # --- 核心修改：在最终日志中加入跳过数量 ---
-        ui_logger.info(f"✅ 映射表生成完毕，共成功映射 {len(id_map)} 个媒体项，跳过 {skipped_count} 个。", task_category=task_cat)
+        
+        # --- 核心修改 3: 更新最终的日志输出 ---
+        total_emby_ids_mapped = sum(len(v) for v in id_map.values())
+        ui_logger.info(f"✅ 映射表生成完毕。共映射 {len(id_map)} 个唯一TMDB ID，关联 {total_emby_ids_mapped} 个Emby媒体项。跳过: {skipped_count} 项, 失败: {failed_count} 项。", task_category=task_cat)
+        # --- 修改结束 ---
     except IOError as e:
         ui_logger.error(f"❌ 写入映射表文件失败: {e}", task_category=task_cat)
         raise e
-
 webhook_queue = asyncio.Queue()
 webhook_processing_set = set()
 
