@@ -154,6 +154,10 @@ def load_app_config() -> AppConfig:
 
     if "poster_manager_config" not in config_data:
         config_data["poster_manager_config"] = {}
+        
+    if "overwrite_on_restore" not in config_data["poster_manager_config"]:
+        config_data["poster_manager_config"]["overwrite_on_restore"] = False
+        migration_needed = True
 
     if "subtitle_processor_config" in config_data:
         del config_data["subtitle_processor_config"]

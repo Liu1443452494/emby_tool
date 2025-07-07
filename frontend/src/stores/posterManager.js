@@ -158,12 +158,16 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
     }
   }
 
+
+
   async function startRestore(scope, contentTypes) {
     try {
+      // --- 核心修改：直接从 store 的 config 中获取 overwrite 值 ---
+      const overwrite = config.value.overwrite_on_restore;
       const response = await fetch(`${API_BASE_URL}/api/poster-manager/start-restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope, content_types: contentTypes }),
+        body: JSON.stringify({ scope, content_types: contentTypes, overwrite }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '启动恢复任务失败');
@@ -173,7 +177,7 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
     }
   }
 
-  // frontend/src/stores/posterManager.js (函数替换)
+
 
   async function fetchSingleItemDetails(itemId) {
     try {
@@ -260,6 +264,25 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
     }
   }
 
+  async function restoreSingleImage(itemId, imageType) {
+    showMessage('info', `正在后台启动 [${imageType}] 的单体恢复任务...`);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/poster-manager/restore-single`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_id: itemId, image_type: imageType }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '恢复失败');
+      
+      showMessage('success', `✅ [${imageType}] 单体恢复成功！正在刷新详情...`);
+      return true;
+    } catch (error) {
+      showMessage('error', `❌ [${imageType}] 恢复失败: ${error.message}`);
+      return false;
+    }
+  }
+
   return {
     config,
     stats,
@@ -277,5 +300,6 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
     fetchSingleItemDetails,
     backupSingleImage,
     deleteSingleImage,
+    restoreSingleImage,
   };
 });

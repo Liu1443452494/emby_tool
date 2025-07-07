@@ -68,7 +68,12 @@
               </div>
             </el-form-item>
             <el-form-item label="覆盖开关">
-              <el-switch v-model="localConfig.overwrite_remote_files" active-text="备份时，覆盖远程图床已存在的同名文件" />
+              <el-switch v-model="localConfig.overwrite_remote_files" active-text="备份到github时，覆盖远程图床已存在的同名文件" />
+              <el-switch 
+                v-model="localConfig.overwrite_on_restore" 
+                active-text="恢复时，覆盖 Emby 上已存在的图片"
+                style="margin-left: 30px;"
+              />
             </el-form-item>
           </el-form>
         </el-tab-pane>

@@ -162,16 +162,20 @@ const handleEmbyAction = async (type) => {
   }
 };
 
-// frontend/src/components/PosterManagerManageViewDialog.vue (函数替换 2/2)
+
 
 const handleGithubAction = async (type, action) => {
   if (action === 'restore') {
-    // 恢复逻辑待实现
-    ElMessage.info('此功能正在开发中...');
+    const success = await store.restoreSingleImage(props.mediaItem.Id, type);
+    if (success) {
+      isFetchingDetails.value = true;
+      await fetchDetails();
+      isFetchingDetails.value = false;
+    }
   } else if (action === 'delete') {
     const success = await store.deleteSingleImage(props.mediaItem.Id, type);
     if (success) {
-      isFetchingDetails.value = true; // 仅在刷新数据时显示loading
+      isFetchingDetails.value = true;
       await fetchDetails();
       isFetchingDetails.value = false;
     }

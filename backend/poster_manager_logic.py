@@ -651,79 +651,74 @@ class PosterManagerLogic:
         else:
             ui_logger.info("   - [容量更新] 所有仓库容量均无变化。", task_category=task_cat)
 
-    def _restore_single_item(self, item_id: str, tmdb_id: str, content_types: List[str], remote_map: Dict, task_cat: str):
-        """恢复单个媒体项的图片"""
+   
+
+    # backend/poster_manager_logic.py (函数替换)
+
+    def _restore_single_image_from_plan(self, item_id: str, image_type: str, tmdb_id: str, remote_map: Dict, task_cat: str):
+        """根据计划，恢复单张指定类型的图片"""
         import requests
         
-        item_name = ""
+        key = f"{tmdb_id}-{image_type}"
+        image_info = remote_map.get(key)
+
+        if not image_info:
+            ui_logger.debug(f"     - 跳过: 在远程备份中未找到 TMDB ID {tmdb_id} 的 {image_type} 图片。", task_category=task_cat)
+            return
+
+        image_url = image_info.get("url")
+        if not image_url:
+            ui_logger.warning(f"     - ⚠️ 警告: 远程备份中 TMDB ID {tmdb_id} 的 {image_type} 图片记录缺少下载URL。", task_category=task_cat)
+            return
+
         try:
-            # 尝试获取 Emby 媒体项名称用于日志记录
-            details = self._get_emby_item_details(item_id, "Name")
-            item_name = details.get("Name", f"ID {item_id}")
-        except Exception:
-            item_name = f"ID {item_id}"
+            cooldown = self.pm_config.image_download_cooldown_seconds
+            if cooldown > 0:
+                ui_logger.info(f"     - ⏱️ 下载冷却 {cooldown} 秒...", task_category=task_cat)
+                time.sleep(cooldown)
+            
+            ui_logger.debug(f"     - 正在下载: {image_url}", task_category=task_cat)
+            proxies = self.proxy_manager.get_proxies(image_url)
+            image_response = self.session.get(image_url, timeout=60, proxies=proxies)
+            image_response.raise_for_status()
+            image_data = image_response.content
+            
+            emby_image_type_map = {
+                "poster": "Primary",
+                "logo": "Logo",
+                "fanart": "Backdrop"
+            }
+            emby_image_type = emby_image_type_map.get(image_type)
+            if not emby_image_type: return
 
-        ui_logger.info(f"  -> 正在为【{item_name}】执行恢复...", task_category=task_cat)
-        
-        for image_type in content_types:
-            key = f"{tmdb_id}-{image_type}"
-            image_info = remote_map.get(key)
-
-            if not image_info:
-                ui_logger.debug(f"     - 跳过: 在远程备份中未找到【{item_name}】的 {image_type} 图片。", task_category=task_cat)
-                continue
-
-            image_url = image_info.get("url")
-            if not image_url:
-                ui_logger.warning(f"     - ⚠️ 警告: 远程备份中【{item_name}】的 {image_type} 图片记录缺少下载URL。", task_category=task_cat)
-                continue
-
+            upload_url = f"{self.config.server_config.server}/Items/{item_id}/Images/{emby_image_type}"
+            
             try:
-                # 应用图片下载冷却
-                time.sleep(self.pm_config.image_download_cooldown_seconds)
-                
-                ui_logger.debug(f"     - 正在下载: {image_url}", task_category=task_cat)
-                proxies = self.proxy_manager.get_proxies(image_url)
-                image_response = self.session.get(image_url, timeout=60, proxies=proxies)
-                image_response.raise_for_status()
-                image_data = image_response.content
-                
-                # 准备上传到 Emby
-                emby_image_type_map = {
-                    "poster": "Primary",
-                    "logo": "Logo",
-                    "fanart": "Backdrop"
-                }
-                emby_image_type = emby_image_type_map.get(image_type)
-                if not emby_image_type: continue
+                delete_proxies = self.proxy_manager.get_proxies(upload_url)
+                self.session.delete(upload_url, params={"api_key": self.config.server_config.api_key}, timeout=20, proxies=delete_proxies)
+            except requests.RequestException:
+                pass
 
-                upload_url = f"{self.config.server_config.server}/Items/{item_id}/Images/{emby_image_type}"
-                
-                # 删除旧图
-                try:
-                    delete_proxies = self.proxy_manager.get_proxies(upload_url)
-                    self.session.delete(upload_url, params={"api_key": self.config.server_config.api_key}, timeout=20, proxies=delete_proxies)
-                except requests.RequestException:
-                    # 删除失败是正常情况（可能原本就没有图）
-                    pass
+            base64_encoded_data = base64.b64encode(image_data).decode('utf-8')
+            headers = {'Content-Type': image_response.headers.get('Content-Type', 'image/jpeg')}
+            upload_proxies = self.proxy_manager.get_proxies(upload_url)
+            
+            upload_response = self.session.post(
+                upload_url, 
+                params={"api_key": self.config.server_config.api_key}, 
+                data=base64_encoded_data,
+                headers=headers, 
+                timeout=60,
+                proxies=upload_proxies
+            )
+            upload_response.raise_for_status()
+            
+            # 日志现在在调用处打印，这里只负责执行
+        except Exception as e:
+            # 直接向上抛出异常，由调用者处理
+            raise e
 
-                # 上传新图
-                headers = {'Content-Type': image_response.headers.get('Content-Type', 'image/jpeg')}
-                upload_proxies = self.proxy_manager.get_proxies(upload_url)
-                upload_response = self.session.post(
-                    upload_url, 
-                    params={"api_key": self.config.server_config.api_key}, 
-                    data=image_data, 
-                    headers=headers, 
-                    timeout=60,
-                    proxies=upload_proxies
-                )
-                upload_response.raise_for_status()
-                ui_logger.info(f"     - ✅ 成功恢复【{item_name}】的 {image_type} 图片。", task_category=task_cat)
-
-            except Exception as e:
-                ui_logger.error(f"     - ❌ 恢复【{item_name}】的 {image_type} 图片失败: {e}", task_category=task_cat)
-
+    # backend/poster_manager_logic.py (函数替换)
 
     def start_restore_task(
         self,
@@ -734,12 +729,15 @@ class PosterManagerLogic:
         task_manager: TaskManager
     ):
         """从 GitHub 恢复图片到 Emby 的主任务流程"""
+        # --- 核心修改：直接从配置中获取 overwrite 值 ---
+        overwrite = self.pm_config.overwrite_on_restore
         task_cat = f"海报恢复({scope.mode})"
-        ui_logger.info(f"🎉 任务启动，模式: {scope.mode}, 内容: {content_types}", task_category=task_cat)
+        overwrite_text = "强制覆盖" if overwrite else "智能跳过"
+        ui_logger.info(f"🎉 任务启动，模式: {scope.mode}, 内容: {content_types}, 策略: {overwrite_text}", task_category=task_cat)
 
         try:
             # 阶段一：预处理
-            ui_logger.info("➡️ [阶段1/2] 正在获取远程索引和媒体列表...", task_category=task_cat)
+            ui_logger.info("➡️ [阶段1/3] 正在获取远程索引和媒体列表...", task_category=task_cat)
             remote_map = self._get_aggregated_remote_index(task_cat)
             if not remote_map:
                 raise ValueError("无法获取远程聚合索引，任务中止。")
@@ -747,38 +745,81 @@ class PosterManagerLogic:
             selector = MediaSelector(self.config)
             media_ids = selector.get_item_ids(scope)
             
-            total_items = len(media_ids)
-            task_manager.update_task_progress(task_id, 0, total_items)
-            ui_logger.info(f"✅ [阶段1/2] 预处理完成，共需检查 {total_items} 个媒体项。", task_category=task_cat)
-            
-            # 阶段二：执行恢复
-            ui_logger.info("➡️ [阶段2/2] 开始逐一恢复媒体项...", task_category=task_cat)
-            
-            # 批量获取TMDB ID
-            tmdb_id_map = {}
+            # 阶段二：构建恢复计划
+            ui_logger.info(f"➡️ [阶段2/3] 正在构建恢复计划...", task_category=task_cat)
+            restore_plan = []
+            total_items_to_check = len(media_ids)
+            task_manager.update_task_progress(task_id, 0, total_items_to_check)
+
+            item_details_map = {}
             with ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_id = {executor.submit(self._get_tmdb_id, item_id): item_id for item_id in media_ids}
+                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "Name,ImageTags,ProviderIds"): item_id for item_id in media_ids}
                 for future in future_to_id:
                     item_id = future_to_id[future]
                     try:
-                        tmdb_id = future.result()
-                        if tmdb_id:
-                            tmdb_id_map[item_id] = tmdb_id
+                        item_details_map[item_id] = future.result()
                     except Exception as e:
-                        logging.error(f"【海报恢复】获取 TMDB ID 时出错 (Emby ID: {item_id}): {e}")
+                        ui_logger.error(f"   - ❌ 获取媒体 {item_id} 详情失败: {e}", task_category=task_cat)
 
             for i, item_id in enumerate(media_ids):
                 if cancellation_event.is_set():
+                    ui_logger.warning("⚠️ 任务在构建计划阶段被取消。", task_category=task_cat)
+                    return
+                
+                details = item_details_map.get(item_id)
+                if not details:
+                    continue
+
+                item_name = details.get("Name", f"ID {item_id}")
+                image_tags = details.get("ImageTags", {})
+                tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
+
+                if not tmdb_id:
+                    ui_logger.debug(f"   - [跳过] 媒体【{item_name}】缺少 TMDB ID。", task_category=task_cat)
+                    task_manager.update_task_progress(task_id, i + 1, total_items_to_check)
+                    continue
+
+                for image_type in content_types:
+                    needs_restore = False
+                    if overwrite:
+                        needs_restore = True
+                    else:
+                        type_map = {"poster": "Primary", "logo": "Logo", "fanart": "Backdrop"}
+                        if not image_tags.get(type_map.get(image_type)):
+                            needs_restore = True
+                        else:
+                            ui_logger.info(f"   - [跳过] 媒体【{item_name}】已存在 {image_type} 图片。", task_category=task_cat)
+                    
+                    if needs_restore:
+                        restore_plan.append({"item_id": item_id, "item_name": item_name, "image_type": image_type, "tmdb_id": tmdb_id})
+                
+                task_manager.update_task_progress(task_id, i + 1, total_items_to_check)
+
+            ui_logger.info(f"✅ 恢复计划构建完成，共需恢复 {len(restore_plan)} 张图片。", task_category=task_cat)
+
+            # 阶段三：执行恢复计划
+            ui_logger.info("➡️ [阶段3/3] 开始逐一执行恢复...", task_category=task_cat)
+            total_to_restore = len(restore_plan)
+            task_manager.update_task_progress(task_id, 0, total_to_restore)
+
+            for i, plan_item in enumerate(restore_plan):
+                if cancellation_event.is_set():
                     ui_logger.warning("⚠️ 任务在执行阶段被取消。", task_category=task_cat)
                     return
-
-                tmdb_id = tmdb_id_map.get(item_id)
-                if not tmdb_id:
-                    ui_logger.debug(f"  -> 跳过 Emby ID: {item_id}，因为它没有关联的 TMDB ID。", task_category=task_cat)
-                else:
-                    self._restore_single_item(item_id, tmdb_id, content_types, remote_map, task_cat)
                 
-                task_manager.update_task_progress(task_id, i + 1, total_items)
+                item_id = plan_item["item_id"]
+                item_name = plan_item["item_name"]
+                image_type = plan_item["image_type"]
+                tmdb_id = plan_item["tmdb_id"]
+                
+                ui_logger.info(f"  -> 正在为【{item_name}】恢复 {image_type}...", task_category=task_cat)
+                try:
+                    self._restore_single_image_from_plan(item_id, image_type, tmdb_id, remote_map, task_cat)
+                    ui_logger.info(f"     - ✅ 成功恢复【{item_name}】的 {image_type} 图片。", task_category=task_cat)
+                except Exception as e:
+                    ui_logger.error(f"     - ❌ 恢复【{item_name}】的 {image_type} 图片失败: {e}", task_category=task_cat)
+
+                task_manager.update_task_progress(task_id, i + 1, total_to_restore)
 
             ui_logger.info("🎉 恢复任务执行完毕。", task_category=task_cat)
 
@@ -948,7 +989,6 @@ class PosterManagerLogic:
 
     def backup_single_image(self, item_id: str, image_type: str):
         """单体备份：从Emby下载图片，存入本地缓存，再上传到GitHub"""
-        # --- 核心修改：提前获取详情，构建更友好的日志 ---
         item_details = self._get_emby_item_details(item_id, "Name,ProviderIds")
         item_name = item_details.get("Name", f"ID {item_id}")
         image_type_map = {"poster": "海报", "logo": "Logo", "fanart": "背景图"}
@@ -960,7 +1000,6 @@ class PosterManagerLogic:
         tmdb_id = item_details.get("ProviderIds", {}).get("Tmdb")
         if not tmdb_id: raise ValueError("媒体项缺少 TMDB ID。")
         
-        # 2. 从Emby下载图片
         emby_key = {"poster": "Primary", "logo": "Logo", "fanart": "Backdrop"}.get(image_type)
         emby_image_url = f"{self.config.server_config.server}/Items/{item_id}/Images/{emby_key}"
         proxies = self.proxy_manager.get_proxies(emby_image_url)
@@ -968,7 +1007,6 @@ class PosterManagerLogic:
         response.raise_for_status()
         image_data = response.content
 
-        # 3. 写入本地缓存
         filename = {"poster": "poster.jpg", "logo": "clearlogo.png", "fanart": "fanart.jpg"}.get(image_type)
         local_dir = os.path.join(self.pm_config.local_cache_path, tmdb_id)
         os.makedirs(local_dir, exist_ok=True)
@@ -977,7 +1015,6 @@ class PosterManagerLogic:
             f.write(image_data)
         ui_logger.info(f"  - ✅ 图片已成功下载并覆盖本地缓存: {local_path}", task_category=task_cat)
 
-        # 4. 执行上传（复用备份流程）
         item_info = {
             "local_path": local_path,
             "tmdb_id": tmdb_id,
@@ -986,14 +1023,18 @@ class PosterManagerLogic:
         }
         remote_map = self._get_aggregated_remote_index(task_cat)
         
-        # --- 核心修复：正确传递所有参数，并将 overwrite 硬编码为 True ---
         overwrite_remote = True 
         new_files, overwrite_files = self._classify_pending_files([item_info], remote_map, overwrite_remote, task_cat)
         
         dispatch_plan = self._calculate_dispatch_plan(new_files, overwrite_files, task_cat)
         self._execute_dispatch_plan(dispatch_plan, task_cat, threading.Event())
         
+        # --- 核心修改：强制刷新聚合缓存 ---
+        self._get_aggregated_remote_index(task_cat, force_refresh=True)
+        
         ui_logger.info(f"🎉 单体备份任务完成。", task_category=task_cat)
+
+    # backend/poster_manager_logic.py (函数替换)
 
     def delete_single_image(self, item_id: str, image_type: str):
         """单体删除：从GitHub删除图片和索引条目"""
@@ -1016,10 +1057,11 @@ class PosterManagerLogic:
 
         pat = repo_config.personal_access_token or self.pm_config.global_personal_access_token
         branch = repo_config.branch
-        match = re.match(r"httpshttps?://github\.com/([^/]+)/([^/]+)", repo_url)
+        match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", repo_url)
+        if not match:
+            raise ValueError(f"无法从仓库URL中解析出 owner 和 repo: {repo_url}")
         owner, repo_name = match.groups()
         
-        # 1. 删除文件
         filename = {"poster": "poster.jpg", "logo": "clearlogo.png", "fanart": "fanart.jpg"}.get(image_type)
         github_path = f"images/{tmdb_id}/{filename}"
         api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/{github_path}"
@@ -1027,7 +1069,6 @@ class PosterManagerLogic:
         self._execute_github_write_request("DELETE", api_url, pat, delete_payload)
         ui_logger.info(f"  - ✅ 已成功从 GitHub 删除文件: {github_path}", task_category=task_cat)
 
-        # 2. 更新索引
         index = self._get_repo_index(repo_config.model_dump())
         if str(tmdb_id) in index['images'] and image_type in index['images'][str(tmdb_id)]:
             del index['images'][str(tmdb_id)][image_type]
@@ -1047,23 +1088,39 @@ class PosterManagerLogic:
         self._execute_github_write_request("PUT", index_api_url, pat, index_payload)
         ui_logger.info(f"  - ✅ 索引文件 database.json 更新成功。", task_category=task_cat)
 
-        # 3. 更新仓库大小
-        latest_size_kb = self._get_latest_repo_size(repo_url, pat)
-        current_config = app_config_module.load_app_config()
-        for r in current_config.poster_manager_config.github_repos:
-            if r.repo_url == repo_url:
-                r.state.size_kb = latest_size_kb
-                r.state.last_checked = datetime.now().isoformat()
-                break
-        app_config_module.save_app_config(current_config)
-        ui_logger.info(f"  - ✅ 仓库 {repo_url} 最新容量 {latest_size_kb} KB 已回写配置。", task_category=task_cat)
-        
-        # 4. 清理聚合缓存
-        if os.path.exists(AGGREGATED_INDEX_CACHE_FILE):
-            os.remove(AGGREGATED_INDEX_CACHE_FILE)
-            ui_logger.info(f"  - ✅ 本地聚合缓存已清理。", task_category=task_cat)
+        # --- 核心修改：调用 _update_all_repo_sizes 来更新容量并强制刷新聚合缓存 ---
+        self._update_all_repo_sizes(task_cat)
+        self._get_aggregated_remote_index(task_cat, force_refresh=True)
 
         ui_logger.info(f"🎉 单体删除任务完成。", task_category=task_cat)
+
+    # backend/poster_manager_logic.py (函数替换)
+
+    def restore_single_image(self, item_id: str, image_type: str):
+        """单体恢复：从GitHub下载图片，并恢复到Emby"""
+        item_details = self._get_emby_item_details(item_id, "Name,ProviderIds")
+        item_name = item_details.get("Name", f"ID {item_id}")
+        image_type_map = {"poster": "海报", "logo": "Logo", "fanart": "背景图"}
+        image_type_cn = image_type_map.get(image_type, image_type)
+
+        task_cat = f"单体恢复-{item_name}"
+        ui_logger.info(f"➡️ 开始为【{item_name}】恢复【{image_type_cn}】...", task_category=task_cat)
+
+        try:
+            tmdb_id = item_details.get("ProviderIds", {}).get("Tmdb")
+            if not tmdb_id:
+                raise ValueError("媒体项缺少 TMDB ID，无法进行恢复。")
+
+            remote_map = self._get_aggregated_remote_index(task_cat)
+            
+            self._restore_single_item(item_id, tmdb_id, [image_type], remote_map, task_cat)
+            
+            ui_logger.info(f"🎉 为【{item_name}】恢复【{image_type_cn}】的任务已完成。", task_category=task_cat)
+        
+        except Exception as e:
+            # --- 核心修复 3：捕获异常并抛出，让路由层处理 ---
+            ui_logger.error(f"❌ 为【{item_name}】恢复【{image_type_cn}】的任务失败。", task_category=task_cat)
+            raise e
 
 
 

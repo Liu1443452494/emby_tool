@@ -27,8 +27,10 @@
         <span>无 {{ typeName }}</span>
       </div>
 
+      <!-- frontend/src/components/ImageCard.vue (部分修改) -->
       <div v-if="imageInfo" class="info-overlay">
-        <span v-if="imageInfo.resolution" class="info-text left">{{ imageInfo.resolution }}</span>
+        <!-- --- 核心修改：仅在非远程（即Emby侧）时显示分辨率 --- -->
+        <span v-if="imageInfo.resolution && !isRemote" class="info-text left">{{ imageInfo.resolution }}</span>
         <span v-if="imageInfo.size && imageInfo.size !== '0.0 KB'" class="info-text right">{{ imageInfo.size }}</span>
       </div>
     </div>

@@ -216,6 +216,7 @@ const batchSearchQuery = ref('');
 const batchDialogSelection = ref([]);
 
 const isPanelLoading = computed(() => store.isStatsLoading || !configStore.isLoaded);
+const overwriteOnRestore = useStorage('poster-manager-overwrite-restore', false);
 
 const updateScopeFromConfig = () => {
   const defaultConfig = {
@@ -285,6 +286,7 @@ const handleBackup = () => {
   store.startBackup(batchScope.value, selectedContentTypes.value, store.config.overwrite_remote_files);
 };
 
+// frontend/src/views/PosterManagerView.vue (函数替换)
 const handleRestore = () => {
   if (selectedContentTypes.value.length === 0) {
     ElMessage.warning('请至少选择一种内容类型进行恢复。');
@@ -294,9 +296,9 @@ const handleRestore = () => {
     ElMessage.warning('在“按搜索/ID”模式下，请先搜索并选择媒体项。');
     return;
   }
+  // --- 核心修改：不再传递 overwrite 参数 ---
   store.startRestore(batchScope.value, selectedContentTypes.value);
 };
-
 const openBatchSearchDialog = () => {
   if (!batchScope.value.item_ids) {
     batchScope.value.item_ids = [];

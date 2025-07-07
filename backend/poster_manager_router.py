@@ -70,9 +70,11 @@ def start_backup(req: BackupRequest = Body(...)):
     )
     return {"status": "success", "message": "海报备份任务已启动。", "task_id": task_id}
 
+
 class RestoreRequest(BaseModel):
     scope: ScheduledTasksTargetScope
     content_types: List[str]
+    # overwrite 字段被移除
 
 @router.post("/start-restore")
 def start_restore(req: RestoreRequest = Body(...)):
@@ -87,6 +89,7 @@ def start_restore(req: RestoreRequest = Body(...)):
         task_name,
         scope=req.scope,
         content_types=req.content_types
+        # 不再传递 overwrite 参数
     )
     return {"status": "success", "message": "海报恢复任务已启动。", "task_id": task_id}
 
@@ -124,4 +127,15 @@ def delete_single_image(req: SingleImageRequest):
         return {"status": "success", "message": "单体删除成功！"}
     except Exception as e:
         ui_logger.error(f"单体删除失败 (ID: {req.item_id}, 类型: {req.image_type}): {e}", task_category="API-海报管理")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/restore-single")
+def restore_single_image(req: SingleImageRequest):
+    """恢复单张图片到 Emby"""
+    try:
+        logic = get_logic()
+        logic.restore_single_image(req.item_id, req.image_type)
+        return {"status": "success", "message": "单体恢复成功！"}
+    except Exception as e:
+        ui_logger.error(f"单体恢复失败 (ID: {req.item_id}, 类型: {req.image_type}): {e}", task_category="API-海报管理")
         raise HTTPException(status_code=500, detail=str(e))
