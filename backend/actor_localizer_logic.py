@@ -130,6 +130,47 @@ class ActorLocalizerLogic:
         except requests.RequestException as e:
             logging.error(f"【演员中文化】更新媒体项 (ID: {item_id}) 失败: {e}")
             return False
+        
+    def _rename_person_item(self, person_id: str, old_name: str, new_name: str, task_category: str) -> bool:
+        """
+        通过独立的 API 请求，直接重命名一个演员（Person）Item。
+        此函数逻辑参考了 actor_gallery_logic.py 中已验证的成功实现。
+        """
+        try:
+            # 步骤 1: 获取演员的当前信息。注意：这里不使用 _get_item_details，而是直接请求。
+            person_url = f"{self.base_url}/Users/{self.user_id}/Items/{person_id}"
+            person_details_resp = requests.get(person_url, params=self.params, timeout=15)
+            person_details_resp.raise_for_status()
+            person_details = person_details_resp.json()
+
+            # 检查是否需要更新
+            if person_details.get("Name") == new_name:
+                ui_logger.debug(f"     -- 跳过重命名，演员 '{old_name}' 的名称已经是 '{new_name}'。", task_category=task_category)
+                return True # 认为操作成功，因为它已经达到了目标状态
+
+            # 步骤 2: 修改名称并准备提交
+            person_details['Name'] = new_name
+            
+            # 步骤 3: 使用 /Items/{Id} 端点提交完整的对象
+            update_url = f"{self.base_url}/Items/{person_id}"
+            headers = {'Content-Type': 'application/json'}
+            
+            resp = requests.post(update_url, params=self.params, json=person_details, headers=headers, timeout=30)
+            resp.raise_for_status()
+            
+            if resp.status_code == 204:
+                ui_logger.info(f"     -- ✅ 演员名修正: '{old_name}' -> '{new_name}' (已通过API独立更新)", task_category=task_category)
+                return True
+            else:
+                ui_logger.warning(f"     -- ⚠️ 演员重命名请求已发送，但服务器返回状态码 {resp.status_code}，可能未成功。", task_category=task_category)
+                return False
+
+        except requests.RequestException as e:
+            ui_logger.error(f"     -- ❌ 演员重命名API请求失败: {e}", task_category=task_category)
+            return False
+        except Exception as e:
+            ui_logger.error(f"     -- ❌ 演员重命名时发生未知错误: {e}", task_category=task_category, exc_info=True)
+            return False
 
     def _translate_text_with_retry(self, text: str, config: ActorLocalizerConfig, context_title: Optional[str] = None) -> str:
         task_cat = f"翻译引擎({config.translation_mode})" # --- 定义任务类别 ---
@@ -203,9 +244,8 @@ class ActorLocalizerLogic:
             return False
         
         people = details.get('People', [])
-        actors_with_roles = [p for p in people if p.get('Type') == 'Actor' and p.get('Role')]
-        if not any(not self._contains_chinese(p.get('Role', '')) for p in actors_with_roles):
-            ui_logger.debug(f"     -- 跳过，所有角色名均已包含中文或为空。", task_category=task_category)
+        if not people:
+            ui_logger.debug(f"     -- 跳过，无演职员信息。", task_category=task_category)
             return False
 
         douban_item = self.douban_map.get(douban_id)
@@ -213,33 +253,83 @@ class ActorLocalizerLogic:
             ui_logger.warning(f"     -- 跳过，本地无豆瓣ID {douban_id} 的数据。", task_category=task_category)
             return False
 
-        emby_actors_to_match = {p['Name']: p.get('Role', '') for p in people[:config.person_limit] if p.get('Type') == 'Actor' and p.get('Role') and not self._contains_chinese(p.get('Role', ''))}
-        douban_standard_roles = {actor.get('name'): self._clean_douban_character(actor.get('character', '')) for actor in douban_item.get('actors', []) if self._clean_douban_character(actor.get('character', '')) and self._contains_chinese(self._clean_douban_character(actor.get('character', '')))}
+        douban_actor_map = {}
+        for actor in douban_item.get('actors', []):
+            chinese_name = actor.get('name')
+            latin_name = actor.get('latin_name')
+            role = self._clean_douban_character(actor.get('character', ''))
+            
+            info_package = {"name": chinese_name, "role": role}
+            
+            if chinese_name:
+                douban_actor_map[chinese_name] = info_package
+            
+            if latin_name:
+                latin_name_lower = latin_name.lower()
+                douban_actor_map[latin_name_lower] = info_package
+                
+                parts = latin_name.split()
+                if len(parts) == 2:
+                    reversed_latin_name_lower = f"{parts[1]} {parts[0]}".lower()
+                    douban_actor_map[reversed_latin_name_lower] = info_package
 
         new_people_list = copy.deepcopy(people)
         has_changes = False
-        
         actors_to_translate = []
 
-        for emby_actor_name, original_role in emby_actors_to_match.items():
-            new_role = None
-            source = "豆瓣"
-            if emby_actor_name in douban_standard_roles:
-                new_role = douban_standard_roles[emby_actor_name]
-                ui_logger.info(f"     -- 更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自{source})", task_category=task_category)
-            elif config.replace_english_role and self._is_pure_english(original_role):
-                new_role = "演员"
-                source = "替换"
-                ui_logger.info(f"     -- 更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自{source})", task_category=task_category)
-            
-            if new_role:
-                has_changes = True
-                for person in new_people_list:
-                    if person.get('Name') == emby_actor_name:
-                        person['Role'] = new_role
-                        break
-            elif config.translation_enabled:
-                actors_to_translate.append({'name': emby_actor_name, 'role': original_role})
+        for person in new_people_list:
+            if person.get('Type') != 'Actor':
+                continue
+
+            emby_actor_name = person.get('Name')
+            original_role = person.get('Role', '')
+
+            matched_douban_actor = douban_actor_map.get(emby_actor_name)
+            if not matched_douban_actor:
+                matched_douban_actor = douban_actor_map.get(emby_actor_name.lower())
+
+            if matched_douban_actor:
+                correct_chinese_name = matched_douban_actor.get('name')
+                douban_role = matched_douban_actor.get('role')
+
+                # --- 核心修改：调用独立的重命名函数 ---
+                if correct_chinese_name and emby_actor_name != correct_chinese_name:
+                    person_id = person.get('Id')
+                    if person_id:
+                        if self._rename_person_item(person_id, emby_actor_name, correct_chinese_name, task_category):
+                            # 即使重命名成功，也标记 has_changes，以确保后续的角色名更新能被提交
+                            has_changes = True
+                            # 更新循环内变量，以便后续角色名日志能显示正确的中文名
+                            person['Name'] = correct_chinese_name
+                    else:
+                        ui_logger.warning(f"     -- ⚠️ 演员 '{emby_actor_name}' 需要重命名，但无法获取其在Emby中的ID，跳过重命名。", task_category=task_category)
+                # --- 修改结束 ---
+                
+                current_actor_name_for_log = person.get('Name', emby_actor_name)
+
+                if self._contains_chinese(original_role):
+                    continue
+
+                if douban_role and self._contains_chinese(douban_role):
+                    ui_logger.info(f"     -- 角色名更新: {current_actor_name_for_log}: '{original_role}' -> '{douban_role}' (来自豆瓣)", task_category=task_category)
+                    person['Role'] = douban_role
+                    has_changes = True
+                elif config.replace_english_role and self._is_pure_english(original_role):
+                    new_role = "演员"
+                    ui_logger.info(f"     -- 角色名更新: {current_actor_name_for_log}: '{original_role}' -> '{new_role}' (来自暴力替换)", task_category=task_category)
+                    person['Role'] = new_role
+                    has_changes = True
+                elif config.translation_enabled and original_role:
+                    actors_to_translate.append({'name': current_actor_name_for_log, 'role': original_role})
+
+            elif not self._contains_chinese(original_role):
+                if config.replace_english_role and self._is_pure_english(original_role):
+                    new_role = "演员"
+                    ui_logger.info(f"     -- 角色名更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自暴力替换)", task_category=task_category)
+                    person['Role'] = new_role
+                    has_changes = True
+                elif config.translation_enabled and original_role:
+                    actors_to_translate.append({'name': emby_actor_name, 'role': original_role})
 
         if config.translation_enabled and actors_to_translate:
             ui_logger.info(f"【翻译】为媒体《{item_name}》收集到 {len(actors_to_translate)} 个待翻译角色。", task_category=task_category)
@@ -292,11 +382,12 @@ class ActorLocalizerLogic:
         if has_changes:
             full_item_json = self._get_item_details(item_id, full_json=True)
             if full_item_json:
+                # 我们只更新 People 列表中的角色信息，演员名已通过独立API更新
                 full_item_json['People'] = new_people_list
                 if self._update_item_on_server(item_id, full_item_json):
-                    ui_logger.info(f"     -- 成功应用更新到 Emby。", task_category=task_category)
+                    ui_logger.info(f"     -- 成功将角色名更新应用到 Emby。", task_category=task_category)
                     return True
-            ui_logger.error(f"     -- 应用更新到 Emby 失败。", task_category=task_category)
+            ui_logger.error(f"     -- 应用角色名更新到 Emby 失败。", task_category=task_category)
         else:
             ui_logger.info(f"     -- 处理完成，无任何变更。", task_category=task_category)
         

@@ -100,6 +100,7 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
                     {
                         'id': actor.get('id'),
                         'name': actor.get('name'),
+                        'latin_name': actor.get('latin_name'),
                         'character': actor.get('character'),
                         'avatar': actor.get('avatar', {})
                     } for actor in data.get('actors', [])
