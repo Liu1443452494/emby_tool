@@ -11,6 +11,7 @@
         <el-button size="large" @click="isSearchDialogVisible = true">查找单个媒体进行管理...</el-button>
         <el-button size="large" @click="handleBackup" :loading="isLoading" class="button-backup">开始备份到 GitHub</el-button>
         <el-button size="large" @click="handleRestore" :loading="isLoading" class="button-restore">从 GitHub 恢复到 Emby</el-button>
+        <el-button size="large" @click="handleRestoreFromLocal" :loading="isLoading" class="button-restore-local">从本地缓存恢复到 Emby</el-button>
       </div>
       <el-button size="large" @click="isConfigDialogVisible = true">配置中心</el-button>
     </div>
@@ -286,7 +287,6 @@ const handleBackup = () => {
   store.startBackup(batchScope.value, selectedContentTypes.value, store.config.overwrite_remote_files);
 };
 
-// frontend/src/views/PosterManagerView.vue (函数替换)
 const handleRestore = () => {
   if (selectedContentTypes.value.length === 0) {
     ElMessage.warning('请至少选择一种内容类型进行恢复。');
@@ -298,6 +298,19 @@ const handleRestore = () => {
   }
   // --- 核心修改：不再传递 overwrite 参数 ---
   store.startRestore(batchScope.value, selectedContentTypes.value);
+};
+
+
+const handleRestoreFromLocal = () => {
+  if (selectedContentTypes.value.length === 0) {
+    ElMessage.warning('请至少选择一种内容类型进行恢复。');
+    return;
+  }
+  if (batchScope.value.mode === 'by_search' && batchScope.value.item_ids.length === 0) {
+    ElMessage.warning('在“按搜索/ID”模式下，请先搜索并选择媒体项。');
+    return;
+  }
+  store.startRestoreFromLocal(batchScope.value, selectedContentTypes.value, store.config.overwrite_on_restore);
 };
 const openBatchSearchDialog = () => {
   if (!batchScope.value.item_ids) {
@@ -650,6 +663,18 @@ const handleBackToSearch = () => {
   --el-button-hover-border-color: #bcaaa4;
   --el-button-active-bg-color: #907970; /* 点击时的颜色保持深色 */
   --el-button-active-border-color: #907970;
+}
+/* frontend/views/PosterManagerView.vue (新增代码块) */
+
+.button-restore-local {
+  --el-button-text-color: #ffffff;
+  --el-button-bg-color: #8d6e63; /* 深褐色 */
+  --el-button-border-color: #8d6e63;
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: #a1887f; /* 提亮的褐色 */
+  --el-button-hover-border-color: #a1887f;
+  --el-button-active-bg-color: #795548; /* 更深的褐色 */
+  --el-button-active-border-color: #795548;
 }
 
 .button-save-scope {

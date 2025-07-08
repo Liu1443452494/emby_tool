@@ -93,6 +93,30 @@ def start_restore(req: RestoreRequest = Body(...)):
     )
     return {"status": "success", "message": "海报恢复任务已启动。", "task_id": task_id}
 
+# backend/poster_manager_router.py (新增代码块)
+
+class RestoreFromLocalRequest(BaseModel):
+    scope: ScheduledTasksTargetScope
+    content_types: List[str]
+    overwrite: bool
+
+@router.post("/start-restore-from-local")
+def start_restore_from_local(req: RestoreFromLocalRequest = Body(...)):
+    """启动一个任务，从本地缓存恢复图片到 Emby"""
+    logic = get_logic()
+    if not logic.pm_config.local_cache_path:
+        raise HTTPException(status_code=400, detail="未配置本地缓存路径，无法启动恢复。")
+    
+    task_name = f"海报恢复(本地) ({req.scope.mode})"
+    task_id = task_manager.register_task(
+        logic.start_restore_from_local_task,
+        task_name,
+        scope=req.scope,
+        content_types=req.content_types,
+        overwrite=req.overwrite
+    )
+    return {"status": "success", "message": "从本地缓存恢复任务已启动。", "task_id": task_id}
+
 @router.get("/item-details/{item_id}")
 def get_single_item_details(item_id: str):
     """获取单个媒体项的图片详情"""

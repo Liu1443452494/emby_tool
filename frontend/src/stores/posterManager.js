@@ -178,6 +178,22 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
   }
 
 
+  async function startRestoreFromLocal(scope, contentTypes, overwrite) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/poster-manager/start-restore-from-local`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope, content_types: contentTypes, overwrite }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '启动从本地恢复任务失败');
+      showMessage('success', data.message);
+    } catch (error) {
+      showMessage('error', error.message);
+    }
+  }
+
+
 
   async function fetchSingleItemDetails(itemId) {
     try {
@@ -297,6 +313,7 @@ export const usePosterManagerStore = defineStore('posterManager', () => {
     fetchStats,
     startBackup,
     startRestore,
+    startRestoreFromLocal,
     fetchSingleItemDetails,
     backupSingleImage,
     deleteSingleImage,

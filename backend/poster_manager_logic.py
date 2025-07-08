@@ -986,6 +986,175 @@ class PosterManagerLogic:
             raise e
         
 
+    # backend/poster_manager_logic.py (新增代码块)
+
+    def start_restore_from_local_task(
+        self,
+        scope: ScheduledTasksTargetScope,
+        content_types: List[str],
+        overwrite: bool,
+        cancellation_event: threading.Event,
+        task_id: str,
+        task_manager: TaskManager
+    ):
+        """从本地缓存恢复图片到 Emby 的主任务流程"""
+        from concurrent.futures import as_completed
+        
+        task_cat = f"海报恢复(本地)"
+        overwrite_text = "强制覆盖" if overwrite else "智能跳过"
+        ui_logger.info(f"🎉 任务启动，模式: 从本地缓存恢复, 范围: {scope.mode}, 内容: {content_types}, 策略: {overwrite_text}", task_category=task_cat)
+
+        try:
+            # 阶段一：获取目标媒体
+            ui_logger.info("➡️ [阶段1/4] 正在根据范围获取目标媒体...", task_category=task_cat)
+            selector = MediaSelector(self.config)
+            media_ids = selector.get_item_ids(scope)
+            if not media_ids:
+                ui_logger.info("✅ 在指定范围内未找到任何媒体项，任务完成。", task_category=task_cat)
+                return
+
+            # 阶段二：扫描本地缓存
+            ui_logger.info("➡️ [阶段2/4] 正在扫描本地缓存目录...", task_category=task_cat)
+            initial_pending_list = self._scan_local_cache(media_ids, content_types, task_cat)
+            if not initial_pending_list:
+                ui_logger.info("✅ 在本地缓存中未找到与目标媒体匹配的任何图片，任务完成。", task_category=task_cat)
+                return
+
+            # 阶段三：构建恢复计划
+            ui_logger.info(f"➡️ [阶段3/4] 正在检查目标媒体状态并构建恢复计划...", task_category=task_cat)
+            
+            # 将待办列表按 emby_item_id 分组，以便批量获取详情
+            emby_ids_to_check = {item['local_path'].split(os.sep)[-2] for item in initial_pending_list}
+            
+            tmdb_to_emby_map = {}
+            for item_id in media_ids:
+                tmdb_id = self._get_tmdb_id(item_id)
+                if tmdb_id:
+                    if tmdb_id not in tmdb_to_emby_map:
+                        tmdb_to_emby_map[tmdb_id] = []
+                    tmdb_to_emby_map[tmdb_id].append(item_id)
+
+            emby_item_details_map = {}
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "Name,ImageTags"): item_id for item_id in media_ids}
+                for future in as_completed(future_to_id):
+                    item_id = future_to_id[future]
+                    try:
+                        emby_item_details_map[item_id] = future.result()
+                    except Exception as e:
+                        ui_logger.error(f"   - ❌ 获取媒体 (Emby Item ID: {item_id}) 详情失败: {e}", task_category=task_cat)
+
+            restore_plan = []
+            for item in initial_pending_list:
+                tmdb_id = item['tmdb_id']
+                emby_ids = tmdb_to_emby_map.get(tmdb_id, [])
+                for emby_id in emby_ids:
+                    details = emby_item_details_map.get(emby_id)
+                    if not details:
+                        continue
+
+                    image_tags = details.get("ImageTags", {})
+                    item_name = details.get("Name", f"ID {emby_id}")
+                    image_type = item['image_type']
+                    
+                    needs_restore = False
+                    if overwrite:
+                        needs_restore = True
+                    else:
+                        type_map = {"poster": "Primary", "logo": "Logo", "fanart": "Backdrop"}
+                        if not image_tags.get(type_map.get(image_type)):
+                            needs_restore = True
+                        else:
+                            ui_logger.info(f"   - [跳过] 媒体【{item_name}】(Emby Item ID: {emby_id}) 已存在 {image_type} 图片。", task_category=task_cat)
+                    
+                    if needs_restore:
+                        restore_plan.append({
+                            "item_id": emby_id,
+                            "item_name": item_name,
+                            "image_type": image_type,
+                            "local_path": item['local_path']
+                        })
+
+            ui_logger.info(f"✅ 恢复计划构建完成，共需恢复 {len(restore_plan)} 张图片。", task_category=task_cat)
+
+            # 阶段四：执行恢复
+            ui_logger.info("➡️ [阶段4/4] 开始逐一执行恢复...", task_category=task_cat)
+            total_to_restore = len(restore_plan)
+            task_manager.update_task_progress(task_id, 0, total_to_restore)
+
+            for i, plan_item in enumerate(restore_plan):
+                if cancellation_event.is_set():
+                    ui_logger.warning("⚠️ 任务在执行阶段被取消。", task_category=task_cat)
+                    return
+                
+                item_id = plan_item["item_id"]
+                item_name = plan_item["item_name"]
+                image_type = plan_item["image_type"]
+                local_path = plan_item["local_path"]
+                
+                ui_logger.info(f"  -> 正在为【{item_name}】(Emby Item ID: {item_id}) 从本地恢复 {image_type}...", task_category=task_cat)
+                try:
+                    self._restore_single_image_from_local(item_id, image_type, local_path)
+                    ui_logger.info(f"     - ✅ 成功恢复【{item_name}】(Emby Item ID: {item_id}) 的 {image_type} 图片。", task_category=task_cat)
+                except Exception as e:
+                    ui_logger.error(f"     - ❌ 恢复【{item_name}】(Emby Item ID: {item_id}) 的 {image_type} 图片失败: {e}", task_category=task_cat)
+
+                task_manager.update_task_progress(task_id, i + 1, total_to_restore)
+
+            ui_logger.info("🎉 从本地缓存恢复任务执行完毕。", task_category=task_cat)
+
+        except Exception as e:
+            ui_logger.error(f"❌ 从本地缓存恢复任务执行失败: {e}", task_category=task_cat, exc_info=True)
+            raise e
+
+    def _restore_single_image_from_local(self, item_id: str, image_type: str, local_path: str):
+        """从本地文件路径恢复单张图片到Emby"""
+        import requests
+        import mimetypes
+        import base64
+
+        if not os.path.exists(local_path):
+            raise FileNotFoundError(f"本地文件不存在: {local_path}")
+
+        with open(local_path, 'rb') as f:
+            image_data = f.read()
+
+        content_type, _ = mimetypes.guess_type(local_path)
+        if not content_type:
+            content_type = 'image/jpeg' if image_type in ['poster', 'fanart'] else 'image/png'
+
+        emby_image_type_map = {
+            "poster": "Primary",
+            "logo": "Logo",
+            "fanart": "Backdrop"
+        }
+        emby_image_type = emby_image_type_map.get(image_type)
+        if not emby_image_type:
+            return
+
+        upload_url = f"{self.config.server_config.server}/Items/{item_id}/Images/{emby_image_type}"
+        
+        try:
+            delete_proxies = self.proxy_manager.get_proxies(upload_url)
+            self.session.delete(upload_url, params={"api_key": self.config.server_config.api_key}, timeout=20, proxies=delete_proxies)
+        except requests.RequestException:
+            pass
+
+        base64_encoded_data = base64.b64encode(image_data).decode('utf-8')
+        headers = {'Content-Type': content_type}
+        upload_proxies = self.proxy_manager.get_proxies(upload_url)
+        
+        upload_response = self.session.post(
+            upload_url, 
+            params={"api_key": self.config.server_config.api_key}, 
+            data=base64_encoded_data,
+            headers=headers, 
+            timeout=60,
+            proxies=upload_proxies
+        )
+        upload_response.raise_for_status()
+        
+
     def get_stats(self, force_refresh: bool = False) -> Dict:
         """获取状态仪表盘所需的数据"""
         repo_count = len(self.pm_config.github_repos)
