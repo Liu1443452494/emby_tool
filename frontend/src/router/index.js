@@ -46,6 +46,11 @@ const router = createRouter({
       component: () => import('../views/PosterManagerView.vue')
     },
     {
+      path: '/actor-role-mapper',
+      name: 'actor-role-mapper',
+      component: () => import('../views/ActorRoleMapperView.vue')
+    },
+    {
       path: '/episode-renamer',
       name: 'episode-renamer',
       component: () => import('../views/EpisodeRenamerView.vue')
