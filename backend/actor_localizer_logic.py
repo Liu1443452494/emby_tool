@@ -229,6 +229,8 @@ class ActorLocalizerLogic:
                     return None
         return None
     
+    # backend/actor_localizer_logic.py (函数替换)
+
     def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig, task_category: str) -> bool:
         details = self._get_item_details(item_id)
         if not details: return False
@@ -273,11 +275,25 @@ class ActorLocalizerLogic:
                     reversed_latin_name_lower = f"{parts[1]} {parts[0]}".lower()
                     douban_actor_map[reversed_latin_name_lower] = info_package
 
-        new_people_list = copy.deepcopy(people)
+        # --- 核心修改：应用 person_limit 限制 ---
+        all_actors = [p for p in people if p.get('Type') == 'Actor']
+        other_people = [p for p in people if p.get('Type') != 'Actor']
+        
+        actors_to_process = all_actors[:config.person_limit]
+        if len(all_actors) > config.person_limit:
+            ui_logger.debug(f"     -- [演员裁切] 演员总数: {len(all_actors)}，根据设置将处理前 {config.person_limit} 位。", task_category=task_category)
+        
+        # 重新组合需要处理的完整人员列表
+        people_to_process = actors_to_process + other_people
+        new_people_list = copy.deepcopy(people_to_process)
+        # --- 修改结束 ---
+
         has_changes = False
         actors_to_translate = []
 
+        # --- 核心修改：遍历裁切后的列表 ---
         for person in new_people_list:
+        # --- 修改结束 ---
             if person.get('Type') != 'Actor':
                 continue
 
@@ -292,18 +308,14 @@ class ActorLocalizerLogic:
                 correct_chinese_name = matched_douban_actor.get('name')
                 douban_role = matched_douban_actor.get('role')
 
-                # --- 核心修改：调用独立的重命名函数 ---
                 if correct_chinese_name and emby_actor_name != correct_chinese_name:
                     person_id = person.get('Id')
                     if person_id:
                         if self._rename_person_item(person_id, emby_actor_name, correct_chinese_name, task_category):
-                            # 即使重命名成功，也标记 has_changes，以确保后续的角色名更新能被提交
                             has_changes = True
-                            # 更新循环内变量，以便后续角色名日志能显示正确的中文名
                             person['Name'] = correct_chinese_name
                     else:
                         ui_logger.warning(f"     -- ⚠️ 演员 '{emby_actor_name}' 需要重命名，但无法获取其在Emby中的ID，跳过重命名。", task_category=task_category)
-                # --- 修改结束 ---
                 
                 current_actor_name_for_log = person.get('Name', emby_actor_name)
 
@@ -382,8 +394,25 @@ class ActorLocalizerLogic:
         if has_changes:
             full_item_json = self._get_item_details(item_id, full_json=True)
             if full_item_json:
-                # 我们只更新 People 列表中的角色信息，演员名已通过独立API更新
-                full_item_json['People'] = new_people_list
+                # --- 核心修改：将裁切后修改过的列表，更新回完整的 People 列表 ---
+                # 创建一个以 ID 为键的字典，方便快速查找和更新
+                updated_people_map = {p['Id']: p for p in new_people_list}
+                
+                # 遍历原始的完整 People 列表
+                original_full_people = full_item_json.get('People', [])
+                final_people_list = []
+                for original_person in original_full_people:
+                    person_id = original_person.get('Id')
+                    if person_id in updated_people_map:
+                        # 如果这个人在我们处理过的列表中，就用更新后的版本
+                        final_people_list.append(updated_people_map[person_id])
+                    else:
+                        # 否则，保留原始版本（例如，未被裁切掉的演员或其他职员）
+                        final_people_list.append(original_person)
+                
+                full_item_json['People'] = final_people_list
+                # --- 修改结束 ---
+
                 if self._update_item_on_server(item_id, full_item_json):
                     ui_logger.info(f"     -- 成功将角色名更新应用到 Emby。", task_category=task_category)
                     return True
