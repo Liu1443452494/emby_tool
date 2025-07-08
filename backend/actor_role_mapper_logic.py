@@ -51,9 +51,9 @@ class ActorRoleMapperLogic:
         response.raise_for_status()
         return response.json()
 
-    def generate_map_task(self, scope: ScheduledTasksTargetScope, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def generate_map_task(self, scope: ScheduledTasksTargetScope, actor_limit: int, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员角色映射-生成"
-        ui_logger.info(f"🎉 任务启动，范围: {scope.mode}", task_category=task_cat)
+        ui_logger.info(f"🎉 任务启动，范围: {scope.mode}，演员上限: {actor_limit}", task_category=task_cat)
 
         try:
             ui_logger.info("➡️ [阶段1/5] 正在获取媒体列表...", task_category=task_cat)
@@ -83,9 +83,21 @@ class ActorRoleMapperLogic:
                     try:
                         details = future.result()
                         media_details_map[item_id] = details
+                        
+                        # --- 新增：演员裁切逻辑 ---
                         people = details.get("People", [])
                         if people:
-                            all_people_to_fetch_details.extend(people)
+                            actors = [p for p in people if p.get('Type') == 'Actor']
+                            others = [p for p in people if p.get('Type') != 'Actor']
+                            
+                            limited_actors = actors[:actor_limit]
+                            if len(actors) > len(limited_actors):
+                                ui_logger.debug(f"  - [演员裁切] 媒体【{details.get('Name')}】演员总数: {len(actors)}，根据设置将处理前 {len(limited_actors)} 位。", task_category=task_cat)
+                            
+                            people_to_process = limited_actors + others
+                            all_people_to_fetch_details.extend(people_to_process)
+                        # --- 新增结束 ---
+
                     except Exception as e:
                         ui_logger.error(f"   - ❌ 获取媒体 {item_id} 基础详情时出错: {e}", task_category=task_cat)
 
@@ -111,26 +123,30 @@ class ActorRoleMapperLogic:
                 for item_id, details in media_details_map.items():
                     item_name = details.get("Name", f"ID {item_id}")
                     tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
+                    
+                    # --- 修改：使用裁切后的演员列表 ---
                     people = details.get("People", [])
+                    actors = [p for p in people if p.get('Type') == 'Actor']
+                    others = [p for p in people if p.get('Type') != 'Actor']
+                    people_to_process = actors[:actor_limit] + others
+                    # --- 修改结束 ---
 
                     if not tmdb_id:
                         ui_logger.debug(f"  - [跳过] 媒体【{item_name}】缺少 TMDB ID。", task_category=task_cat)
                         continue
                     
-                    # --- 核心修改：处理 Emby_itemid ---
                     if tmdb_id in actor_role_map:
-                        # 如果 TMDB ID 已存在，只追加 Emby Item ID
                         if item_id not in actor_role_map[tmdb_id]["Emby_itemid"]:
                             actor_role_map[tmdb_id]["Emby_itemid"].append(item_id)
                         processed_count += 1
                         task_manager.update_task_progress(task_id, processed_count, total_items)
-                        continue # 跳过后续的角色映射处理，因为已经处理过一次
+                        continue
                     
-                    if not people:
+                    if not people_to_process:
                         continue
 
                     work_map = {}
-                    for person in people:
+                    for person in people_to_process:
                         if person.get('Type') != 'Actor':
                             continue
                         
@@ -157,7 +173,7 @@ class ActorRoleMapperLogic:
                     if work_map:
                         actor_role_map[tmdb_id] = {
                             "title": item_name,
-                            "Emby_itemid": [item_id], # 初始化 Emby_itemid 列表
+                            "Emby_itemid": [item_id],
                             "map": work_map
                         }
                     

@@ -1,7 +1,7 @@
 # backend/actor_role_mapper_router.py (新文件)
 
 from fastapi import APIRouter, HTTPException, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict
 import os
 import json
@@ -30,6 +30,8 @@ def get_map():
 
 class TaskRequest(BaseModel):
     scope: ScheduledTasksTargetScope
+    # --- 新增行 ---
+    actor_limit: int = Field(default=50, ge=1, description="每个媒体项处理的演员数量上限")
 
 @router.post("/generate")
 def generate_map(req: TaskRequest):
@@ -38,7 +40,9 @@ def generate_map(req: TaskRequest):
     task_id = task_manager.register_task(
         logic.generate_map_task,
         "生成演员角色映射表",
-        scope=req.scope
+        scope=req.scope,
+        # --- 新增行 ---
+        actor_limit=req.actor_limit
     )
     return {"status": "success", "message": "生成映射表任务已启动。", "task_id": task_id}
 

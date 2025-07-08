@@ -38,9 +38,7 @@ export const useActorRoleMapperStore = defineStore('actorRoleMapper', () => {
     }
   }
 
-// frontend/src/stores/actorRoleMapper.js (函数替换)
-
-  async function startTask(endpoint, payload) {
+ async function startTask(endpoint, payload) {
     try {
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         method: 'POST',
@@ -59,7 +57,6 @@ export const useActorRoleMapperStore = defineStore('actorRoleMapper', () => {
     }
   }
 
-  // frontend/src/stores/actorRoleMapper.js (新增函数)
 
   async function startSingleRestore(mapData) {
     try {

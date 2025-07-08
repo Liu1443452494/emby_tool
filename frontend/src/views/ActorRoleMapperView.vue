@@ -1,4 +1,3 @@
-<!-- ❗ 注意：以下是 frontend/src/views/ActorRoleMapperView.vue 文件的完整文件代码，请直接覆盖整个文件内容。 -->
 <template>
   <div class="actor-role-mapper-page">
     <div class="page-header">
@@ -96,6 +95,26 @@
           <template #header>
             <div class="card-header">
               <span>操作中心</span>
+              <!-- --- 新增：设置按钮 --- -->
+              <el-popover
+                placement="bottom-end"
+                title="生成设置"
+                :width="250"
+                trigger="click"
+              >
+                <template #reference>
+                  <el-button :icon="Setting" circle text class="settings-button" />
+                </template>
+                <div class="settings-popover">
+                  <el-form-item label="演员映射条数">
+                    <el-input-number v-model="actorLimit" :min="1" :max="200" controls-position="right" style="width: 100%;" />
+                    <div class="form-item-description">
+                      为提高效率，仅处理每个媒体项的前 N 位演员。
+                    </div>
+                  </el-form-item>
+                </div>
+              </el-popover>
+              <!-- --- 新增结束 --- -->
             </div>
           </template>
           <div class="action-grid">
@@ -148,21 +167,17 @@
                     </el-button>
                   </div>
                 </template>
-                <!-- --- 新增：保存按钮和提示 --- -->
                 <div class="actor-list-toolbar">
                   <el-button type="success" size="small" @click="handleSaveItem(item)" :loading="isSavingItem[item.tmdb_id]">保存此作品的修改</el-button>
                   <span class="toolbar-tip">可直接在下方表格中修改角色名</span>
                 </div>
-                <!-- --- 新增结束 --- -->
                 <div class="actor-list">
                   <div v-for="(actor, name) in item.map" :key="name" class="actor-item">
                     <el-avatar :size="40" :src="getActorAvatar(item.tmdb_id, name)" shape="square">
                       <el-icon><User /></el-icon>
                     </el-avatar>
                     <span class="actor-name">{{ name }}</span>
-                    <!-- --- 修改：将角色名改为 el-input --- -->
                     <el-input v-model="actor.role" class="actor-role-input" placeholder="无角色名" />
-                    <!-- --- 修改结束 --- -->
                     <el-tag v-if="actor.tmdb_id" size="small" class="actor-tmdb-id">ID: {{ actor.tmdb_id }}</el-tag>
                   </div>
                 </div>
@@ -205,6 +220,7 @@
   </div>
 </template>
 
+
 <script setup>
 import { ref, onMounted, computed, watch, markRaw, reactive } from 'vue';
 import { useRouter } from 'vue-router';
@@ -214,9 +230,11 @@ import { useTaskStore } from '@/stores/task';
 import { useActorRoleMapperStore } from '@/stores/actorRoleMapper';
 import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { DocumentAdd, Upload, Download, MagicStick, Search, QuestionFilled, User } from '@element-plus/icons-vue';
+import { DocumentAdd, Upload, Download, MagicStick, Search, QuestionFilled, User, Setting } from '@element-plus/icons-vue';
 import _ from 'lodash';
 import { API_BASE_URL } from '@/config/apiConfig';
+// --- 新增 ---
+import { useStorage } from '@vueuse/core';
 
 const router = useRouter();
 
@@ -234,6 +252,8 @@ const dialogSelection = ref([]);
 const mapSearchQuery = ref('');
 const activeCollapseNames = ref([]);
 
+// --- 修改：使用 useStorage 持久化 actorLimit ---
+const actorLimit = useStorage('actor-role-mapper-limit', 50);
 
 const actorAvatarsCache = reactive({});
 
@@ -318,8 +338,12 @@ async function startTask(endpoint, payload, confirmOptions) {
 }
 
 const handleGenerate = () => {
-  startTask('/api/actor-role-mapper/generate', { scope: scope.value }, {
-    message: '即将根据当前选择的范围扫描媒体库并生成映射表，此操作会覆盖本地已有的 `actor_role_map.json` 文件。是否继续？',
+  const payload = { 
+    scope: scope.value,
+    actor_limit: actorLimit.value 
+  };
+  startTask('/api/actor-role-mapper/generate', payload, {
+    message: `即将根据当前选择的范围和设置（仅处理前 ${actorLimit.value} 位演员）扫描媒体库并生成映射表，此操作会覆盖本地已有的 \`actor_role_map.json\` 文件。是否继续？`,
     title: '确认生成映射表'
   }).then(() => actorRoleMapperStore.fetchMap());
 };
@@ -390,8 +414,6 @@ const actions = ref([
   }
 ]);
 
-// frontend/src/views/ActorRoleMapperView.vue (函数替换)
-
 const handleCollapseChange = (activeNames) => {
   console.log('➡️ [调试] el-collapse 的 @change 事件已触发。当前所有展开的面板 name 列表:', activeNames);
 
@@ -400,25 +422,19 @@ const handleCollapseChange = (activeNames) => {
     return;
   }
 
-  // 遍历所有当前展开的面板
   activeNames.forEach(tmdbId => {
-    // 检查缓存，如果已加载过数据，则跳过
     if (actorAvatarsCache[tmdbId]) {
       console.log(`➡️ [调试] 面板 ${tmdbId} 的数据已在缓存中，跳过。`);
       return;
     }
     
-    // 现在调用是安全的，因为 fetchAvatars 已经被声明
     fetchAvatars(tmdbId);
   });
 };
-// frontend/src/views/ActorRoleMapperView.vue (新增函数)
 
-// 将数据获取的异步逻辑定义在 handleCollapseChange 之前或平级
 const fetchAvatars = async (tmdbId) => {
   console.log(`➡️ [调试] 开始为 TMDB ID: ${tmdbId} 获取演员头像...`);
 
-  // 关键：立即占位，防止重复请求
   actorAvatarsCache[tmdbId] = {}; 
 
   const mapItem = actorRoleMapperStore.actorMap.find(item => item.tmdb_id === tmdbId);
@@ -455,14 +471,12 @@ const fetchAvatars = async (tmdbId) => {
       }
     });
     
-    // 更新缓存
     actorAvatarsCache[tmdbId] = avatarMap;
     console.log(`✅ [调试] TMDB ID: ${tmdbId} 的头像数据已处理并存入缓存。`);
 
   } catch (error) {
     console.error(`❌ [调试] 获取或处理《${mapItem.title}》的演员头像时发生错误:`, error);
     ElMessage.error(`获取《${mapItem.title}》的演员头像失败。`);
-    // 即使失败也保留空对象占位，避免重复请求
   }
 };
 
@@ -475,7 +489,6 @@ const handleSingleRestore = (item) => {
   actorRoleMapperStore.startSingleRestore(item);
 };
 const handleSaveItem = (item) => {
-  // 直接调用 store action，不再管理本地 loading 状态
   actorRoleMapperStore.saveMapChanges(item);
 };
 </script>
@@ -658,10 +671,7 @@ const handleSaveItem = (item) => {
 .map-list-container :deep(.el-collapse-item__header) {
   padding: 0 20px;
   border-bottom: 1px solid var(--el-border-color-lighter);
-  /* --- 核心修改 --- */
-  /* 1. 明确宽度为100%，防止其内容撑开自身 */
   width: 100%;
-  /* 2. 确保盒模型计算正确 */
   box-sizing: border-box;
 }
 .map-list-container :deep(.el-collapse-item__wrap) {
@@ -675,24 +685,22 @@ const handleSaveItem = (item) => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* 移除所有 flex 相关属性，因为其父容器现在负责布局 */
 }
 .collapse-title-container {
   display: flex;
   align-items: center;
-  flex: 1; /* 让包裹容器成为可伸缩项 */
-  min-width: 0; /* 允许包裹容器收缩 */
+  flex: 1;
+  min-width: 0;
   margin-right: 10px;
 }
 .restore-button {
-  margin-left: auto; /* 将按钮推到最右侧 */
-  flex-shrink: 0; /* 防止按钮被压缩 */
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .actor-list {
   padding: 0 10px;
 }
-/* frontend/src/views/ActorRoleMapperView.vue (CSS 替换) */
 .actor-item {
   display: flex;
   align-items: center;
@@ -700,16 +708,14 @@ const handleSaveItem = (item) => {
   padding: 8px 0;
   border-bottom: 1px solid var(--el-border-color-extra-light);
 }
-/* --- 新增：为 el-avatar 组件设置尺寸和样式 --- */
 .actor-item .el-avatar {
   width: 98px;
   height: 148px;
-  flex-shrink: 0; /* 防止被压缩 */
-  border-radius: 4px; /* 保持与卡片一致的圆角 */
+  flex-shrink: 0;
+  border-radius: 4px;
 }
-/* --- 新增：通过深度选择器修改内部 img 的填充模式 --- */
 .actor-item .el-avatar :deep(img) {
-  object-fit: cover; /* 确保图片铺满并裁剪 */
+  object-fit: cover;
 }
 
 .actor-item:last-child {
@@ -770,5 +776,19 @@ const handleSaveItem = (item) => {
 }
 .actor-role-input :deep(.el-input__wrapper.is-focus) {
   box-shadow: 0 0 0 1px var(--el-color-primary) inset;
+}
+/* --- 新增：设置按钮样式 --- */
+.settings-button {
+  margin-left: auto;
+  color: var(--el-text-color-secondary);
+}
+.settings-popover .el-form-item {
+  margin-bottom: 0;
+}
+.settings-popover .form-item-description {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
+  margin-top: 4px;
 }
 </style>
