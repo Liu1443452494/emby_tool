@@ -5,7 +5,7 @@ import json
 import requests
 import base64
 from io import BytesIO
-from typing import Dict, List, Any, Tuple, Literal
+from typing import Dict, List, Any, Tuple, Literal, Optional
 from urllib.parse import unquote, urlparse, parse_qs
 
 try:
@@ -20,9 +20,8 @@ except ImportError:
 from log_manager import ui_logger
 from models import AppConfig, CombinedImage, CombinedImageResponse, CombinedAvatarResponse, CombinedActorImage, ActorTmdbImageFlowRequest, CombinedAvatarRequest
 from douban_manager import DOUBAN_CACHE_FILE
-from tmdb_logic import TmdbLogic
+from tmdb_logic import TmdbLogic, TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES
 from proxy_manager import ProxyManager
-
 EmbyImageType = Literal["Primary", "Backdrop", "Logo"]
 
 class ActorGalleryLogic:
@@ -118,17 +117,34 @@ class ActorGalleryLogic:
 
         if not req.skip_tmdb:
             ui_logger.info("=> 阶段2: 进入TMDB匹配...", task_category=task_cat)
-            tmdb_result = self._handle_tmdb_flow(person_id, req, background_tasks, task_cat)
-            if isinstance(tmdb_result, CombinedAvatarResponse):
-                ui_logger.info("   - TMDB匹配需要用户干预，流程中断。", task_category=task_cat)
-                tmdb_result.intervention_details['next_request_patch'] = {
+            tmdb_response = self._handle_tmdb_flow(person_id, req, background_tasks, task_cat)
+            
+            if isinstance(tmdb_response, tuple):
+                # 这是 _handle_tmdb_flow 找不到演员的情况
+                tmdb_images, tmdb_warnings = tmdb_response
+                warnings.extend(tmdb_warnings)
+            elif tmdb_response.status == 'success':
+                # 这是 _handle_tmdb_flow 成功找到图片的情况
+                tmdb_images = tmdb_response.images
+                warnings.extend(tmdb_response.warnings)
+                # 将成功的响应也返回，以便前端可以获取 context
+                tmdb_response.intervention_details['next_request_patch'] = {
                     'skip_douban': True,
                     'confirmed_douban_images': [img.model_dump() for img in douban_images]
                 }
-                return tmdb_result
-                
-            tmdb_images, tmdb_warnings = tmdb_result
-            warnings.extend(tmdb_warnings)
+                # 合并图片并返回
+                combined_images = douban_images + tmdb_images
+                tmdb_response.images = combined_images
+                return tmdb_response
+            else:
+                # 这是需要用户干预的情况
+                ui_logger.info("   - TMDB匹配需要用户干预，流程中断。", task_category=task_cat)
+                tmdb_response.intervention_details['next_request_patch'] = {
+                    'skip_douban': True,
+                    'confirmed_douban_images': [img.model_dump() for img in douban_images]
+                }
+                return tmdb_response
+            
             ui_logger.info(f"=> 阶段2完成，找到 {len(tmdb_images)} 张TMDB图片。", task_category=task_cat)
 
         ui_logger.info("=> 阶段3: 合并图片...", task_category=task_cat)
@@ -197,7 +213,14 @@ class ActorGalleryLogic:
                     actor_name=actor_name
                 ) for img in tmdb_result.images
             ]
-            return images, warnings
+            # --- 核心修改：将 tmdb_result 整体作为 intervention_details 返回 ---
+            # 这样 context 就能被传递到最终的 CombinedAvatarResponse
+            return CombinedAvatarResponse(
+                status='success',
+                images=images,
+                warnings=warnings,
+                intervention_details=tmdb_result.model_dump()
+            )
         
         elif tmdb_result.status == 'not_found':
             warnings.append(f"TMDB未能找到演员 '{req.emby_person_name}'。")
@@ -238,6 +261,27 @@ class ActorGalleryLogic:
             raise ValueError("该豆瓣条目没有海报信息。")
         ui_logger.info(f"成功匹配到海报URL: {poster_url}", task_category=task_cat)
         return {"poster_url": poster_url}
+    
+    def _get_emby_item_details(self, item_id: str, fields: str = "ProviderIds,Name") -> Dict:
+        """
+        从 Emby 获取媒体项的详细信息。
+        这是一个通用的内部方法，可以被其他逻辑复用。
+        """
+        from proxy_manager import ProxyManager
+        proxy_manager = ProxyManager(self.app_config)
+        
+        try:
+            url = f"{self.base_url}/Users/{self.user_id}/Items/{item_id}"
+            params = {**self.params, "Fields": fields}
+            
+            proxies = proxy_manager.get_proxies(url)
+            
+            response = self.session.get(url, params=params, timeout=15, proxies=proxies)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            logging.error(f"【媒体画廊】获取媒体项 {item_id} 的详情失败: {e}")
+            raise e
 
     def _update_person_name(self, person_id: str, new_name: str):
         task_cat = f"姓名更新({person_id})"
@@ -280,8 +324,12 @@ class ActorGalleryLogic:
         task_cat = f"图片上传({item_id})"
         if new_name: self._update_person_name(item_id, new_name)
         ui_logger.info(f"正在从URL下载图片: {image_url} (来源: {source})", task_category=task_cat)
-        image_data, content_type = self.get_image_from_url(image_url, task_cat)
-        return self._upload_image_to_emby(item_id, image_data, content_type, image_type)
+        try:
+            image_data, content_type = self.get_image_from_url(image_url, task_cat)
+            return self._upload_image_to_emby(item_id, image_data, content_type, image_type)
+        except Exception as e:
+            ui_logger.error(f"从URL下载或上传图片时失败: {e}", task_category=task_cat, exc_info=True)
+            return False
 
     def upload_image_from_local(self, item_id: str, file_content: bytes, new_name: str = None) -> bool:
         if new_name: self._update_person_name(item_id, new_name)

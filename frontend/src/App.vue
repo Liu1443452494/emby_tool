@@ -56,6 +56,10 @@
             <el-icon><UserFilled /></el-icon>
             <template #title>演员角色映射</template>
           </el-menu-item>
+          <el-menu-item index="/actor-avatar-mapper">
+            <el-icon><SwitchFilled /></el-icon>
+            <template #title>演员头像映射</template>
+          </el-menu-item>
 
           <!-- --- 新增菜单项 --- -->
           <el-menu-item index="/douban-fixer">
@@ -111,7 +115,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { ElConfigProvider, ElIcon } from 'element-plus'
 // --- 新增图标 ---
-import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen, Picture, UserFilled } from '@element-plus/icons-vue'
+import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen, Picture, UserFilled, SwitchFilled } from '@element-plus/icons-vue'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { useStorage } from '@vueuse/core'
 import { useConfigStore } from '@/stores/config'

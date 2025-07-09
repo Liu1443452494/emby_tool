@@ -12,6 +12,7 @@ from models import (
     UpdateDoubanIdRequest, CombinedImageResponse, CombinedAvatarRequest, CombinedAvatarResponse
 )
 from actor_gallery_logic import ActorGalleryLogic
+from actor_avatar_mapper_logic import ActorAvatarMapperLogic
 from tmdb_logic import TmdbLogic
 import config as app_config
 
@@ -61,6 +62,7 @@ def avatar_flow_route(person_id: str, req: CombinedAvatarRequest, background_tas
         ui_logger.error(f"执行头像流程({person_id})失败: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=500, detail=f"执行头像获取流程时发生内部错误: {e}")
 
+
 @router.post("/actors/upload-from-url")
 def upload_avatar_from_url_route(req: ActorGalleryUploadRequest, background_tasks: BackgroundTasks):
     task_cat = "API-画廊"
@@ -68,9 +70,43 @@ def upload_avatar_from_url_route(req: ActorGalleryUploadRequest, background_task
         logic = get_logic()
         logic.upload_image_from_url(req.person_id, req.image_url, "Primary", req.new_name, req.source)
         
-        if req.source == 'tmdb' and req.tmdb_person_id:
-            tmdb_logic = get_tmdb_logic()
-            background_tasks.add_task(tmdb_logic.update_person_ids_task, req.person_id, req.tmdb_person_id)
+        if req.tmdb_person_id:
+            try:
+                avatar_mapper_logic = ActorAvatarMapperLogic(app_config.load_app_config())
+                
+                from urllib.parse import urlparse
+                image_path = ""
+                if req.source == 'tmdb':
+                    parsed_url = urlparse(req.image_url)
+                    path_parts = parsed_url.path.split('/')
+                    if len(path_parts) > 1:
+                        # 提取最后一个部分作为文件名，并加上前导斜杠
+                        image_path = "/" + path_parts[-1]
+                    else:
+                        image_path = parsed_url.path
+                else: # douban
+                    image_path = req.image_url
+
+                actor_details = logic._get_emby_item_details(req.person_id, "Name")
+                actor_name = req.new_name or actor_details.get("Name", "未知")
+
+                image_info = {
+                    "actor_name": actor_name,
+                    "source": req.source,
+                    "image_path": image_path
+                }
+                
+                background_tasks.add_task(
+                    avatar_mapper_logic.save_avatar_choice_to_map,
+                    req.tmdb_person_id, 
+                    image_info
+                )
+                
+                tmdb_logic = get_tmdb_logic()
+                background_tasks.add_task(tmdb_logic.update_person_ids_task, req.person_id, req.tmdb_person_id)
+
+            except Exception as e:
+                ui_logger.error(f"❌ 保存演员头像选择到映射表时失败: {e}", task_category=task_cat, exc_info=True)
 
         message = "头像上传成功！"
         if req.new_name:

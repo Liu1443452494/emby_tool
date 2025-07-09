@@ -51,6 +51,11 @@ const router = createRouter({
       component: () => import('../views/ActorRoleMapperView.vue')
     },
     {
+      path: '/actor-avatar-mapper',
+      name: 'actor-avatar-mapper',
+      component: () => import('../views/ActorAvatarMapperView.vue')
+    },
+    {
       path: '/episode-renamer',
       name: 'episode-renamer',
       component: () => import('../views/EpisodeRenamerView.vue')

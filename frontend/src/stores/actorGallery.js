@@ -50,9 +50,10 @@ export const useActorGalleryStore = defineStore('actorGallery', () => {
 
   const updateAvatarFlowState = (updates) => {
     avatarFlowState.value = { ...avatarFlowState.value, ...updates };
+    console.log('➡️ [调试-Store] 步骤2: Pinia状态已更新。当前 avatarFlowState:', JSON.parse(JSON.stringify(avatarFlowState.value)));
   };
 
-  // frontend/stores/actorGallery.js (部分修改)
+  // frontend/stores/actorGallery.js (函数替换)
 
   async function fetchAvatarFlow() {
     const personId = avatarFlowState.value.emby_person_id;
@@ -82,15 +83,19 @@ export const useActorGalleryStore = defineStore('actorGallery', () => {
         updateAvatarFlowState(details.next_request_patch);
       }
 
+      // --- 核心修改：简化ID更新逻辑 ---
+      if (details.context && details.context.person && details.context.person.id) {
+        console.log(`➡️ [调试-Store] 步骤2.1: 从后端响应中提取到 TMDB Person ID: ${details.context.person.id}`);
+        updateAvatarFlowState({ confirmed_tmdb_person_id: details.context.person.id });
+      }
+      // --- 修改结束 ---
+
       if (data.status === 'success') {
         tmdbActorImages.value = data.images;
       } else if (data.status.startsWith('tmdb_')) {
-        // TMDB的干预逻辑保持不变
         if (details.status === 'single_actor_confirm') tmdbSingleActorCandidate.value = details.context;
         else if (details.status === 'context_manual_selection' || details.status === 'manual_actor_selection') tmdbActorCandidates.value = details.candidates;
       }
-      // --- 最终修复：移除对 douban_manual_selection 的处理 ---
-      // 这个状态将由调用它的视图组件(ActorGalleryView.vue)直接处理
       
       return data;
     } catch (error) {
@@ -156,7 +161,8 @@ export const useActorGalleryStore = defineStore('actorGallery', () => {
     }
   }
 
-  // --- 核心修改 3：更新 uploadAvatar 的 payload ---
+  // frontend/src/stores/actorGallery.js (函数替换)
+
   const uploadAvatar = async (personId, image, newName = null) => {
     isUploading.value = true;
     try {
@@ -172,10 +178,13 @@ export const useActorGalleryStore = defineStore('actorGallery', () => {
         image_url: imageUrl,
         new_name: newName,
         source: image.source,
-        // 将已确认的 tmdb_person_id 加入 payload，用于ID关联的双重保障
         tmdb_person_id: avatarFlowState.value.confirmed_tmdb_person_id || null,
       };
       
+      // --- 新增 ---
+      console.log('➡️ [调试-Store] 步骤3: 构建上传Payload。最终发送给后端的数据:', payload);
+      // --- 新增结束 ---
+
       const response = await fetch(`${API_BASE_URL}/api/gallery/actors/upload-from-url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

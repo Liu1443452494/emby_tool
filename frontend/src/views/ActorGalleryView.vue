@@ -653,6 +653,7 @@ const handleDoubanDialogCancel = async () => {
 };
 
 const handleActorIdConfirm = async (tmdbPersonId) => {
+console.log(`➡️ [调试-视图] 步骤1: 确认演员ID。捕获到 tmdbPersonId: ${tmdbPersonId}`);
   isSingleActorConfirmDialogVisible.value = false;
   isActorListDialogVisible.value = false;
   isActorManualMatchDialogVisible.value = false;
@@ -668,7 +669,12 @@ const handleActorIdConfirm = async (tmdbPersonId) => {
 };
 
 const handleSingleActorReject = async () => {
-  galleryStore.updateAvatarFlowState({ force_tmdb_context_list: true });
+  // --- 核心修改：在拒绝时，清除已建议的ID ---
+  galleryStore.updateAvatarFlowState({ 
+    force_tmdb_context_list: true,
+    confirmed_tmdb_person_id: null 
+  });
+  // --- 修改结束 ---
   isSingleActorConfirmDialogVisible.value = false;
   await runAvatarFlow();
 };

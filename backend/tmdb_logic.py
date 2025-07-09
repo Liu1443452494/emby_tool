@@ -8,13 +8,20 @@ from typing import Dict, List, Any, Optional, Tuple
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# --- 核心修改：导入 ui_logger ---
+
 from log_manager import ui_logger
 from models import (
     AppConfig, TmdbImageResponse, TmdbCandidate, TmdbImage,
     ActorTmdbImageFlowRequest, ActorTmdbImageFlowResponse, TmdbPersonCandidate, SingleActorConfirmContext
 )
 from proxy_manager import ProxyManager
+TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/"
+TMDB_IMAGE_SIZES = {
+    "poster": "w780",
+    "backdrop": "w1280",
+    "avatar": "h632",
+    "original": "original"
+}
 
 CACHE: Dict[str, Tuple[Any, float]] = {}
 CACHE_DURATION = 3600
@@ -265,7 +272,7 @@ class TmdbLogic:
             background_tasks.add_task(self.update_person_ids_task, req.emby_person_id, req.confirmed_tmdb_person_id)
             images = self._fetch_person_images(req.confirmed_tmdb_person_id)
             person_details = self._tmdb_request(f"person/{req.confirmed_tmdb_person_id}")
-            context = SingleActorConfirmContext(media={}, person={"name": person_details.get("name")})
+            context = SingleActorConfirmContext(media={}, person={"id": person_details.get("id"), "name": person_details.get("name")})
             return ActorTmdbImageFlowResponse(status="success", images=images, context=context)
 
         if req.force_manual_search:
@@ -283,7 +290,7 @@ class TmdbLogic:
             ui_logger.info(f"步骤A: 命中！找到TMDB演员ID: {person_tmdb_id}。", task_category=task_cat)
             images = self._fetch_person_images(int(person_tmdb_id))
             person_details = self._tmdb_request(f"person/{person_tmdb_id}")
-            context = SingleActorConfirmContext(media={}, person={"name": person_details.get("name")})
+            context = SingleActorConfirmContext(media={}, person={"id": int(person_tmdb_id), "name": person_details.get("name")})
             return ActorTmdbImageFlowResponse(status="success", images=images, context=context)
         
         ui_logger.info("步骤A: 演员自身无TMDB ID。", task_category=task_cat)
