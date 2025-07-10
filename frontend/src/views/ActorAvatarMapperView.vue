@@ -115,7 +115,14 @@
         <el-card class="box-card map-preview" shadow="never">
           <template #header>
             <div class="card-header">
-              <span>头像映射表预览</span>
+              <!-- --- 核心修改：在标题旁边显示总数 --- -->
+              <div class="header-with-count">
+                <span>头像映射表预览</span>
+                <el-tag v-if="avatarMapperStore.totalMapCount > 0" type="info" size="small" effect="plain">
+                  共 {{ avatarMapperStore.totalMapCount }} 条
+                </el-tag>
+              </div>
+              <!-- --- 修改结束 --- -->
               <div class="preview-toolbar">
                 <el-input v-model="mapSearchQuery" placeholder="搜索演员名..." clearable :prefix-icon="Search" />
                 <el-button @click="avatarMapperStore.fetchMap()" :loading="avatarMapperStore.isLoading">刷新列表</el-button>
@@ -528,5 +535,10 @@ const actions = ref([
 .load-more-sentinel :deep(.el-loading-spinner .circular) {
   width: 24px;
   height: 24px;
+}
+.header-with-count {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 </style>

@@ -14,6 +14,7 @@ export const useActorAvatarMapperStore = defineStore('actorAvatarMapper', () => 
   const displayedAvatarMap = ref([]); // 当前在页面上显示的列表
   const itemsPerLoad = 10; // 每次加载的数量
   const isFullyLoaded = ref(false); // 是否已全部加载完毕
+  const totalMapCount = computed(() => fullAvatarMap.value.length);
   // --- 新增结束 ---
 
   const showMessage = (type, message) => {
@@ -33,6 +34,7 @@ export const useActorAvatarMapperStore = defineStore('actorAvatarMapper', () => 
     fullAvatarMap.value = [];
     displayedAvatarMap.value = [];
     isFullyLoaded.value = false;
+    
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/actor-avatar-mapper/map`);
@@ -150,6 +152,7 @@ export const useActorAvatarMapperStore = defineStore('actorAvatarMapper', () => 
     fullAvatarMap,
     displayedAvatarMap,
     isFullyLoaded,
+    totalMapCount,
     sortedAvatarMap,
     fetchMap,
     loadMore,

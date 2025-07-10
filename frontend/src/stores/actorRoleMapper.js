@@ -17,6 +17,7 @@ export const useActorRoleMapperStore = defineStore('actorRoleMapper', () => {
   const displayedActorMap = ref([]); // 当前在页面上显示的列表
   const itemsPerLoad = 30; // 每次加载的数量
   const isFullyLoaded = ref(false); // 是否已全部加载完毕
+  const totalMapCount = computed(() => fullActorMap.value.length);
   // --- 新增结束 ---
 
   // --- Actions ---
@@ -156,6 +157,7 @@ export const useActorRoleMapperStore = defineStore('actorRoleMapper', () => {
     fullActorMap,
     displayedActorMap,
     isFullyLoaded,
+    totalMapCount,
     fetchMap,
     loadMore,
     startTask,
