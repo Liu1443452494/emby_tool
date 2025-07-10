@@ -1,4 +1,4 @@
-// frontend/src/stores/actorAvatarMapper.js (新文件)
+// frontend/src/stores/actorAvatarMapper.js (完整文件覆盖)
 
 import { ref, computed } from 'vue';
 import { defineStore } from 'pinia';
@@ -6,24 +6,38 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { API_BASE_URL, TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES } from '@/config/apiConfig';
 
 export const useActorAvatarMapperStore = defineStore('actorAvatarMapper', () => {
+  // --- State ---
   const isLoading = ref(false);
-  const avatarMap = ref([]); // 原始数据是对象，将转换为数组
+  const fullAvatarMap = ref([]); // 原始的、完整的映射表数据
+  
+  // --- 新增：用于分页懒加载的状态 ---
+  const displayedAvatarMap = ref([]); // 当前在页面上显示的列表
+  const itemsPerLoad = 10; // 每次加载的数量
+  const isFullyLoaded = ref(false); // 是否已全部加载完毕
+  // --- 新增结束 ---
 
   const showMessage = (type, message) => {
     ElMessage({ message, type, showClose: true, duration: 3000 });
   };
 
+  // --- 修改：sortedAvatarMap 现在基于 displayedAvatarMap ---
   const sortedAvatarMap = computed(() => {
-    return avatarMap.value.sort((a, b) => a.actor_name.localeCompare(b.actor_name, 'zh-CN'));
+    // 注意：这里的排序只对当前已显示的列表生效，如果需要全局排序，应在 fetchMap 中对 fullAvatarMap 排序
+    return displayedAvatarMap.value.slice().sort((a, b) => a.actor_name.localeCompare(b.actor_name, 'zh-CN'));
   });
+  // --- 修改结束 ---
 
   async function fetchMap() {
     isLoading.value = true;
+    // 重置所有状态
+    fullAvatarMap.value = [];
+    displayedAvatarMap.value = [];
+    isFullyLoaded.value = false;
+
     try {
       const response = await fetch(`${API_BASE_URL}/api/actor-avatar-mapper/map`);
       if (response.status === 404) {
-        avatarMap.value = [];
-        showMessage('info', '本地不存在演员头像映射文件。');
+        ElMessage.info('本地不存在演员头像映射文件。');
         return;
       }
       if (!response.ok) {
@@ -31,18 +45,43 @@ export const useActorAvatarMapperStore = defineStore('actorAvatarMapper', () => 
         throw new Error(err.detail || '获取头像映射表失败');
       }
       const data = await response.json();
-      // 将对象转换为数组以便于排序和 v-for
-      avatarMap.value = Object.entries(data).map(([tmdb_id, value]) => ({
+      
+      // 将原始数据存储在 fullAvatarMap 中，并预先排序
+      fullAvatarMap.value = Object.entries(data).map(([tmdb_id, value]) => ({
         tmdb_id,
         ...value
-      }));
+      })).sort((a, b) => a.actor_name.localeCompare(b.actor_name, 'zh-CN'));
+
+      // 初始化第一页显示的数据
+      displayedAvatarMap.value = fullAvatarMap.value.slice(0, itemsPerLoad);
+      
+      if (displayedAvatarMap.value.length >= fullAvatarMap.value.length) {
+        isFullyLoaded.value = true;
+      }
+
     } catch (error) {
       showMessage('error', error.message);
-      avatarMap.value = [];
     } finally {
       isLoading.value = false;
     }
   }
+
+  // --- 新增：加载更多数据的 action ---
+  function loadMore() {
+    if (isLoading.value || isFullyLoaded.value) return;
+
+    const currentLength = displayedAvatarMap.value.length;
+    const nextItems = fullAvatarMap.value.slice(currentLength, currentLength + itemsPerLoad);
+    
+    if (nextItems.length > 0) {
+      displayedAvatarMap.value.push(...nextItems);
+    }
+
+    if (displayedAvatarMap.value.length >= fullAvatarMap.value.length) {
+      isFullyLoaded.value = true;
+    }
+  }
+  // --- 新增结束 ---
 
   async function startTask(endpoint, payload, confirmOptions) {
     try {
@@ -73,7 +112,6 @@ export const useActorAvatarMapperStore = defineStore('actorAvatarMapper', () => 
     if (item.source === 'tmdb') {
       return `${TMDB_IMAGE_BASE_URL}${TMDB_IMAGE_SIZES.avatar}${item.image_path}`;
     }
-    // 对于豆瓣，image_path 已经是完整 URL，但为了安全，我们通过后端代理访问
     return `${API_BASE_URL}/api/image-proxy?url=${encodeURIComponent(item.image_path)}`;
   }
 
@@ -109,9 +147,12 @@ export const useActorAvatarMapperStore = defineStore('actorAvatarMapper', () => 
 
   return {
     isLoading,
-    avatarMap,
+    fullAvatarMap,
+    displayedAvatarMap,
+    isFullyLoaded,
     sortedAvatarMap,
     fetchMap,
+    loadMore,
     startTask,
     getFullImageUrl,
     startSingleRestore,

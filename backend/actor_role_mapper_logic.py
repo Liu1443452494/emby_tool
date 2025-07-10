@@ -7,6 +7,7 @@ import threading
 import time
 import re
 import base64
+import subprocess
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from filelock import FileLock, Timeout
@@ -84,7 +85,6 @@ class ActorRoleMapperLogic:
                         details = future.result()
                         media_details_map[item_id] = details
                         
-                        # --- 新增：演员裁切逻辑 ---
                         people = details.get("People", [])
                         if people:
                             actors = [p for p in people if p.get('Type') == 'Actor']
@@ -96,7 +96,6 @@ class ActorRoleMapperLogic:
                             
                             people_to_process = limited_actors + others
                             all_people_to_fetch_details.extend(people_to_process)
-                        # --- 新增结束 ---
 
                     except Exception as e:
                         ui_logger.error(f"   - ❌ 获取媒体 {item_id} 基础详情时出错: {e}", task_category=task_cat)
@@ -124,12 +123,10 @@ class ActorRoleMapperLogic:
                     item_name = details.get("Name", f"ID {item_id}")
                     tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
                     
-                    # --- 修改：使用裁切后的演员列表 ---
                     people = details.get("People", [])
                     actors = [p for p in people if p.get('Type') == 'Actor']
                     others = [p for p in people if p.get('Type') != 'Actor']
                     people_to_process = actors[:actor_limit] + others
-                    # --- 修改结束 ---
 
                     if not tmdb_id:
                         ui_logger.debug(f"  - [跳过] 媒体【{item_name}】缺少 TMDB ID。", task_category=task_cat)
@@ -145,7 +142,8 @@ class ActorRoleMapperLogic:
                     if not people_to_process:
                         continue
 
-                    work_map = {}
+                    # --- 核心修改：将 work_map 改为 work_list (数组) ---
+                    work_list = []
                     for person in people_to_process:
                         if person.get('Type') != 'Actor':
                             continue
@@ -164,18 +162,19 @@ class ActorRoleMapperLogic:
                         role = person.get("Role", "")
                         logging.debug(f"【调试-最终数据】演员: {actor_name}, 角色: {role}, TMDB ID: {person_tmdb_id}")
 
-                        if actor_name not in work_map:
-                            work_map[actor_name] = {
-                                "tmdb_id": person_tmdb_id,
-                                "role": person.get("Role", "")
-                            }
+                        work_list.append({
+                            "name": actor_name,
+                            "tmdb_id": person_tmdb_id,
+                            "role": role
+                        })
                     
-                    if work_map:
+                    if work_list:
                         actor_role_map[tmdb_id] = {
                             "title": item_name,
                             "Emby_itemid": [item_id],
-                            "map": work_map
+                            "map": work_list # 使用新的数组结构
                         }
+                    # --- 修改结束 ---
                     
                     processed_count += 1
                     task_manager.update_task_progress(task_id, processed_count, total_items)
@@ -184,7 +183,7 @@ class ActorRoleMapperLogic:
             try:
                 with FileLock(ACTOR_ROLE_MAP_LOCK_FILE, timeout=10):
                     with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
-                        json.dump(actor_role_map, f, ensure_ascii=False, indent=2)
+                        json.dump(actor_role_map, f, ensure_ascii=False)
             except Timeout:
                 raise IOError("获取文件锁超时，另一个进程可能正在访问该文件。")
 
@@ -213,6 +212,66 @@ class ActorRoleMapperLogic:
         response = self.session.request(method, url, headers=headers, timeout=30, proxies=proxies, **kwargs)
         response.raise_for_status()
         return response.json() if response.content else None
+    
+    def _execute_github_write_request(self, method: str, url: str, pat: str, payload: Optional[Dict] = None) -> Dict:
+        """通过 curl 执行 GitHub 写入操作（无重试）"""
+        command = [
+            'curl', '-L', '-X', method,
+            '-H', 'Accept: application/vnd.github.v3+json',
+            '-H', f'Authorization: token {pat}',
+            '-H', 'Content-Type: application/json'
+        ]
+        
+        json_payload_str = ""
+        if payload:
+            command.extend(['--data-binary', '@-'])
+            json_payload_str = json.dumps(payload)
+
+        proxies = self.proxy_manager.get_proxies(url)
+        if proxies.get('https'):
+            command.extend(['--proxy', proxies['https']])
+
+        command.append(url)
+
+        result = subprocess.run(command, input=json_payload_str, capture_output=True, text=True, check=False)
+        
+        response_data = {}
+        try:
+            if result.stdout:
+                response_data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            raise Exception(f"cURL 返回了非JSON响应: {result.stdout or '无输出'} | 错误: {result.stderr or '无错误信息'}")
+
+        if result.returncode != 0 or (response_data.get("message") and response_data.get("documentation_url")):
+            error_message = response_data.get('message', f"cURL 错误: {result.stderr}")
+            if response_data.get('status') == '422' and "sha" in error_message:
+                error_message = f"无效请求 (422)。服务器提示 'sha' 参数有问题。这可能是因为在您操作期间，文件被其他进程修改。请重试。({error_message})"
+            elif "409 Conflict" in result.stderr:
+                error_message = "GitHub API 返回 409 Conflict 错误，这通常是并发写入冲突导致的。请稍后重试。"
+            elif "schannel: failed to receive handshake" in result.stderr or "curl: (35)" in result.stderr:
+                error_message = f"SSL/TLS 握手失败。这通常是临时的网络或代理问题。错误: {result.stderr}"
+            raise Exception(f"GitHub API 错误: {error_message}")
+
+        return response_data
+    
+    def _execute_github_write_request_with_retry(self, method: str, url: str, pat: str, payload: Optional[Dict] = None, task_cat: str = "GitHub写入") -> Dict:
+        """
+        执行 GitHub 写入操作，并增加了针对网络错误的重试逻辑。
+        """
+        max_retries = 3
+        retry_delay = 5  # seconds
+        for attempt in range(max_retries):
+            try:
+                return self._execute_github_write_request(method, url, pat, payload)
+            except Exception as e:
+                error_str = str(e).lower()
+                if "ssl/tls" in error_str or "handshake" in error_str or "curl: (35)" in error_str:
+                    if attempt < max_retries - 1:
+                        ui_logger.warning(f"  - ⚠️ 网络操作失败 (尝试 {attempt + 1}/{max_retries})，将在 {retry_delay} 秒后重试... 原因: {e}", task_category=task_cat)
+                        time.sleep(retry_delay)
+                        continue
+                raise e
+        raise Exception("重试逻辑执行完毕但未能成功。")
 
     def upload_to_github_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员角色映射-上传"
@@ -253,7 +312,10 @@ class ActorRoleMapperLogic:
             if sha:
                 payload["sha"] = sha
             
-            self._github_request("PUT", api_url, json=payload)
+            # --- 核心修改：调用新的基于 curl 的上传方法 ---
+            self._execute_github_write_request_with_retry("PUT", api_url, self.github_config.personal_access_token, payload, task_cat=task_cat)
+            # --- 修改结束 ---
+            
             ui_logger.info("✅ 上传成功！映射表已同步到 GitHub 仓库。", task_category=task_cat)
 
         except Exception as e:

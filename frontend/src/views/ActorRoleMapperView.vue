@@ -1,3 +1,4 @@
+
 <template>
   <div class="actor-role-mapper-page">
     <div class="page-header">
@@ -95,7 +96,6 @@
           <template #header>
             <div class="card-header">
               <span>操作中心</span>
-              <!-- --- 新增：设置按钮 --- -->
               <el-popover
                 placement="bottom-end"
                 title="生成设置"
@@ -114,7 +114,6 @@
                   </el-form-item>
                 </div>
               </el-popover>
-              <!-- --- 新增结束 --- -->
             </div>
           </template>
           <div class="action-grid">
@@ -146,12 +145,14 @@
           </template>
          <div 
             class="map-list-container energy-ring-loading-container" 
-            v-loading="actorRoleMapperStore.isLoading"
+            ref="mapListContainerRef"
+            @scroll="handleScroll"
+            v-loading="actorRoleMapperStore.isLoading && filteredMap.length === 0"
             element-loading-text="正在加载映射表..."
             element-loading-background="rgba(var(--custom-bg-overlay-rgb), 0.7)"
           >
             <el-collapse v-if="filteredMap.length > 0" v-model="activeCollapseNames" @change="handleCollapseChange">
-           <el-collapse-item v-for="item in filteredMap" :key="item.tmdb_id" :name="item.tmdb_id">
+              <el-collapse-item v-for="item in filteredMap" :key="item.tmdb_id" :name="item.tmdb_id">
                 <template #title>
                   <div class="collapse-title-container">
                     <span class="collapse-title">{{ item.title }}</span>
@@ -182,9 +183,18 @@
                   </div>
                 </div>
               </el-collapse-item>
-              
             </el-collapse>
-            <el-empty v-else description="本地无映射表或搜索无结果" />
+
+            <!-- --- 新增：加载更多提示 --- -->
+            <div v-if="filteredMap.length > 0 && !isFullyLoadedForCurrentView" class="load-more-sentinel" v-loading="isLazyLoading">
+              <span v-if="!isLazyLoading">滚动加载更多...</span>
+            </div>
+            <div v-if="filteredMap.length > 0 && isFullyLoadedForCurrentView" class="load-more-sentinel all-loaded">
+              <span>🎉 已全部加载</span>
+            </div>
+            <!-- --- 新增结束 --- -->
+
+            <el-empty v-if="filteredMap.length === 0 && !actorRoleMapperStore.isLoading" description="本地无映射表或搜索无结果" />
           </div>
         </el-card>
       </div>
@@ -221,6 +231,7 @@
 </template>
 
 
+// frontend/src/views/ActorRoleMapperView.vue (script替换)
 <script setup>
 import { ref, onMounted, computed, watch, markRaw, reactive } from 'vue';
 import { useRouter } from 'vue-router';
@@ -233,7 +244,6 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { DocumentAdd, Upload, Download, MagicStick, Search, QuestionFilled, User, Setting } from '@element-plus/icons-vue';
 import _ from 'lodash';
 import { API_BASE_URL } from '@/config/apiConfig';
-// --- 新增 ---
 import { useStorage } from '@vueuse/core';
 
 const router = useRouter();
@@ -242,7 +252,7 @@ const configStore = useConfigStore();
 const mediaStore = useMediaStore();
 const taskStore = useTaskStore();
 const actorRoleMapperStore = useActorRoleMapperStore();
-const { isSavingItem } = storeToRefs(actorRoleMapperStore);
+const { isSavingItem, fullActorMap, displayedActorMap, isFullyLoaded } = storeToRefs(actorRoleMapperStore);
 
 const scope = ref({});
 const isSavingScope = ref(false);
@@ -251,11 +261,28 @@ const searchQuery = ref('');
 const dialogSelection = ref([]);
 const mapSearchQuery = ref('');
 const activeCollapseNames = ref([]);
-
-// --- 修改：使用 useStorage 持久化 actorLimit ---
 const actorLimit = useStorage('actor-role-mapper-limit', 50);
-
 const actorAvatarsCache = reactive({});
+
+const mapListContainerRef = ref(null);
+// --- 新增：懒加载状态 ---
+const isLazyLoading = ref(false);
+
+const handleScroll = _.throttle((event) => {
+  if (isLazyLoading.value) return;
+  const container = event.target;
+  if (container.scrollHeight - container.scrollTop - container.clientHeight < 200) {
+    isLazyLoading.value = true;
+    setTimeout(() => {
+      if (mapSearchQuery.value) {
+        loadMoreFiltered();
+      } else {
+        actorRoleMapperStore.loadMore();
+      }
+      isLazyLoading.value = false;
+    }, 500); // 模拟网络延迟，让加载动画可见
+  }
+}, 200);
 
 const isGithubConfigured = computed(() => {
   return !!configStore.appConfig.episode_refresher_config?.github_config?.repo_url;
@@ -265,18 +292,56 @@ const isTaskRunning = (keyword) => {
   return taskStore.tasks.some(t => t.name.includes('演员角色映射') && t.name.includes(keyword) && t.status === 'running');
 };
 
-const filteredMap = computed(() => {
-  if (!mapSearchQuery.value) {
-    return actorRoleMapperStore.actorMap;
+const filteredMap = ref([]);
+const filteredFullList = ref([]);
+const itemsPerFilterLoad = 30;
+
+// --- 新增：计算属性，判断当前视图是否已全部加载 ---
+const isFullyLoadedForCurrentView = computed(() => {
+  if (mapSearchQuery.value) {
+    return filteredMap.value.length >= filteredFullList.value.length;
   }
-  const query = mapSearchQuery.value.toLowerCase();
-  return actorRoleMapperStore.actorMap.filter(item => {
-    const titleMatch = item.title.toLowerCase().includes(query);
+  return isFullyLoaded.value;
+});
+
+watch(mapSearchQuery, _.debounce((query) => {
+  if (!query) {
+    // --- 核心修改：当搜索清空时，从 store 中获取当前已展示的数据 ---
+    // 这样可以保持与懒加载状态的同步
+    filteredMap.value = displayedActorMap.value;
+    // --- 修改结束 ---
+    return;
+  }
+  const lowerQuery = query.toLowerCase();
+  filteredFullList.value = fullActorMap.value.filter(item => {
+    const titleMatch = item.title.toLowerCase().includes(lowerQuery);
     if (titleMatch) return true;
-    const actorMatch = Object.keys(item.map).some(name => name.toLowerCase().includes(query));
+    const actorMatch = Object.keys(item.map).some(name => name.toLowerCase().includes(lowerQuery));
     return actorMatch;
   });
+  filteredMap.value = filteredFullList.value.slice(0, itemsPerFilterLoad);
+}, 300));
+
+function loadMoreFiltered() {
+  if (filteredMap.value.length >= filteredFullList.value.length) return;
+  const currentLength = filteredMap.value.length;
+  const nextItems = filteredFullList.value.slice(currentLength, currentLength + itemsPerFilterLoad);
+  filteredMap.value.push(...nextItems);
+}
+
+watch(() => mapSearchQuery.value === '', (isCleared) => {
+  if (isCleared) {
+    filteredMap.value = displayedActorMap.value;
+  }
 });
+
+// --- 修改：当 store 中的 displayedActorMap 变化时，同步更新 filteredMap ---
+watch(displayedActorMap, (newVal) => {
+  if (!mapSearchQuery.value) {
+    filteredMap.value = newVal;
+  }
+}, { deep: true });
+
 
 const updateScopeFromConfig = () => {
   const defaultConfig = {
@@ -289,7 +354,9 @@ const updateScopeFromConfig = () => {
 
 onMounted(() => {
   mediaStore.fetchLibraries();
-  actorRoleMapperStore.fetchMap();
+  actorRoleMapperStore.fetchMap().then(() => {
+    filteredMap.value = displayedActorMap.value;
+  });
   watch(() => configStore.isLoaded, (loaded) => {
     if (loaded) updateScopeFromConfig();
   }, { immediate: true });
@@ -415,67 +482,36 @@ const actions = ref([
 ]);
 
 const handleCollapseChange = (activeNames) => {
-  console.log('➡️ [调试] el-collapse 的 @change 事件已触发。当前所有展开的面板 name 列表:', activeNames);
-
-  if (!activeNames || activeNames.length === 0) {
-    console.log('➡️ [调试] 所有面板都已折叠，流程结束。');
-    return;
+  if (!activeNames || activeNames.length === 0) return;
+  const newActiveId = activeNames[activeNames.length - 1];
+  if (newActiveId && !actorAvatarsCache[newActiveId]) {
+    fetchAvatars(newActiveId);
   }
-
-  activeNames.forEach(tmdbId => {
-    if (actorAvatarsCache[tmdbId]) {
-      console.log(`➡️ [调试] 面板 ${tmdbId} 的数据已在缓存中，跳过。`);
-      return;
-    }
-    
-    fetchAvatars(tmdbId);
-  });
 };
 
 const fetchAvatars = async (tmdbId) => {
-  console.log(`➡️ [调试] 开始为 TMDB ID: ${tmdbId} 获取演员头像...`);
-
   actorAvatarsCache[tmdbId] = {}; 
-
-  const mapItem = actorRoleMapperStore.actorMap.find(item => item.tmdb_id === tmdbId);
+  const mapItem = fullActorMap.value.find(item => item.tmdb_id === tmdbId);
   if (!mapItem || !mapItem.Emby_itemid || mapItem.Emby_itemid.length === 0) {
-    console.warn(`⚠️ [调试] 未在映射表中找到有效的 Emby Item ID。TMDB ID: ${tmdbId}`);
     return;
   }
-
   const embyItemId = mapItem.Emby_itemid[0];
-  console.log(`➡️ [调试] 准备向后端发起请求，Emby Item ID: ${embyItemId}`);
-
   try {
     const response = await fetch(`${API_BASE_URL}/api/actor-role-mapper/media/${embyItemId}/actors`);
-    console.log(`➡️ [调试] 后端响应状态: ${response.status}`);
-    if (!response.ok) {
-      throw new Error(`获取演员头像信息失败，状态码: ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`获取演员头像信息失败`);
     const actorsData = await response.json();
-    console.log(`✅ [调试] 成功从后端获取到 ${actorsData.length} 位演员的数据。`);
-    
     const avatarMap = {};
     const apiKey = configStore.appConfig.server_config.api_key;
-    if (!apiKey) {
-      console.warn("⚠️ [调试] 无法获取 Emby API Key，演员头像可能无法显示。");
-    }
-
     actorsData.forEach(actor => {
       if (actor.PrimaryImageTag) {
         const imagePath = `Items/${actor.Id}/Images/Primary?tag=${actor.PrimaryImageTag}&api_key=${apiKey}`;
-        const finalUrl = `${API_BASE_URL}/api/emby-image-proxy?path=${encodeURIComponent(imagePath)}`;
-        avatarMap[actor.Name] = finalUrl;
+        avatarMap[actor.Name] = `${API_BASE_URL}/api/emby-image-proxy?path=${encodeURIComponent(imagePath)}`;
       } else {
         avatarMap[actor.Name] = '';
       }
     });
-    
     actorAvatarsCache[tmdbId] = avatarMap;
-    console.log(`✅ [调试] TMDB ID: ${tmdbId} 的头像数据已处理并存入缓存。`);
-
   } catch (error) {
-    console.error(`❌ [调试] 获取或处理《${mapItem.title}》的演员头像时发生错误:`, error);
     ElMessage.error(`获取《${mapItem.title}》的演员头像失败。`);
   }
 };
@@ -790,5 +826,22 @@ const handleSaveItem = (item) => {
   color: var(--el-text-color-secondary);
   line-height: 1.5;
   margin-top: 4px;
+}
+
+.load-more-sentinel {
+  padding: 20px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+}
+.load-more-sentinel.all-loaded {
+  color: var(--el-color-success);
+}
+.load-more-sentinel :deep(.el-loading-mask) {
+  background-color: transparent;
+}
+.load-more-sentinel :deep(.el-loading-spinner .circular) {
+  width: 24px;
+  height: 24px;
 }
 </style>

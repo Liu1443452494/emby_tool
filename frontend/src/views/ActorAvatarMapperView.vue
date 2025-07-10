@@ -1,4 +1,3 @@
-<!-- frontend/src/views/ActorAvatarMapperView.vue (template替换) -->
 <template>
   <div class="actor-avatar-mapper-page">
     <div class="page-header">
@@ -123,9 +122,10 @@
               </div>
             </div>
           </template>
-          <div 
+         <div 
             class="map-list-container energy-ring-loading-container" 
-            v-loading="avatarMapperStore.isLoading"
+            ref="mapListContainerRef"
+            v-loading="avatarMapperStore.isLoading && filteredMap.length === 0"
             element-loading-text="正在加载映射表..."
             element-loading-background="rgba(var(--custom-bg-overlay-rgb), 0.7)"
           >
@@ -135,6 +135,10 @@
               style="width: 100%"
               height="100%"
               stripe
+              @scroll="handleScroll"
+              v-loading="isLazyLoading"
+              element-loading-text="正在加载更多..."
+              element-loading-background="rgba(var(--custom-bg-overlay-rgb), 0.8)"
             >
               <el-table-column label="头像" width="120">
                 <template #default="scope">
@@ -157,7 +161,6 @@
                   {{ new Date(scope.row.last_updated).toLocaleString() }}
                 </template>
               </el-table-column>
-              <!-- --- 新增 --- -->
               <el-table-column label="操作" width="100" fixed="right">
                 <template #default="scope">
                   <el-button 
@@ -171,9 +174,9 @@
                   </el-button>
                 </template>
               </el-table-column>
-              <!-- --- 新增结束 --- -->
             </el-table>
-            <el-empty v-else description="本地无头像映射表或搜索无结果" />
+            
+            <el-empty v-if="filteredMap.length === 0 && !avatarMapperStore.isLoading" description="本地无头像映射表或搜索无结果" />
           </div>
         </el-card>
       </div>
@@ -216,6 +219,7 @@ import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
 import { useTaskStore } from '@/stores/task';
 import { useActorAvatarMapperStore } from '@/stores/actorAvatarMapper';
+import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Upload, Download, MagicStick, Search, QuestionFilled, User } from '@element-plus/icons-vue';
 import _ from 'lodash';
@@ -226,6 +230,8 @@ const configStore = useConfigStore();
 const mediaStore = useMediaStore();
 const taskStore = useTaskStore();
 const avatarMapperStore = useActorAvatarMapperStore();
+// --- 核心修改 1：直接从 store 中解构出需要的响应式状态 ---
+const { displayedAvatarMap, isFullyLoaded } = storeToRefs(avatarMapperStore);
 
 const scope = ref({});
 const isSavingScope = ref(false);
@@ -233,6 +239,36 @@ const isSearchDialogVisible = ref(false);
 const searchQuery = ref('');
 const dialogSelection = ref([]);
 const mapSearchQuery = ref('');
+
+const mapListContainerRef = ref(null);
+const isLazyLoading = ref(false);
+
+// frontend/src/views/ActorAvatarMapperView.vue (函数替换)
+
+const handleScroll = _.throttle(({ scrollTop }) => {
+  if (isLazyLoading.value) return;
+  
+  const container = mapListContainerRef.value;
+  if (!container) return;
+  
+  // el-table 内部滚动的元素
+  const tableBodyWrapper = container.querySelector('.el-scrollbar__wrap');
+  if (!tableBodyWrapper) return;
+
+  const { scrollHeight, clientHeight } = tableBodyWrapper;
+  
+  if (scrollHeight - scrollTop - clientHeight < 200) {
+    isLazyLoading.value = true;
+    setTimeout(() => {
+      if (mapSearchQuery.value) {
+        loadMoreFiltered();
+      } else {
+        avatarMapperStore.loadMore();
+      }
+      isLazyLoading.value = false;
+    }, 500);
+  }
+}, 200);
 
 const isGithubConfigured = computed(() => {
   return !!configStore.appConfig.episode_refresher_config?.github_config?.repo_url;
@@ -242,15 +278,53 @@ const isTaskRunning = (keyword) => {
   return taskStore.tasks.some(t => t.name.includes('演员头像映射') && t.name.includes(keyword) && t.status === 'running');
 };
 
-const filteredMap = computed(() => {
-  if (!mapSearchQuery.value) {
-    return avatarMapperStore.sortedAvatarMap;
+// --- 核心修改 2：重构搜索和过滤逻辑 ---
+const filteredMap = ref([]);
+const filteredFullList = ref([]);
+const itemsPerFilterLoad = 10;
+
+const isFullyLoadedForCurrentView = computed(() => {
+  if (mapSearchQuery.value) {
+    return filteredMap.value.length >= filteredFullList.value.length;
   }
-  const query = mapSearchQuery.value.toLowerCase();
-  return avatarMapperStore.sortedAvatarMap.filter(item => 
-    item.actor_name.toLowerCase().includes(query)
-  );
+  return isFullyLoaded.value;
 });
+
+watch(mapSearchQuery, _.debounce((query) => {
+  if (!query) {
+    filteredMap.value = displayedAvatarMap.value;
+    return;
+  }
+  const lowerQuery = query.toLowerCase();
+  // 搜索时，直接从 store 的 fullAvatarMap 中过滤
+  filteredFullList.value = avatarMapperStore.fullAvatarMap.filter(item => 
+    item.actor_name.toLowerCase().includes(lowerQuery)
+  );
+  filteredMap.value = filteredFullList.value.slice(0, itemsPerFilterLoad);
+}, 300));
+
+function loadMoreFiltered() {
+  if (filteredMap.value.length >= filteredFullList.value.length) return;
+  const currentLength = filteredMap.value.length;
+  const nextItems = filteredFullList.value.slice(currentLength, currentLength + itemsPerFilterLoad);
+  filteredMap.value.push(...nextItems);
+}
+
+// 当搜索框清空时，恢复到原始的分页列表
+watch(() => mapSearchQuery.value === '', (isCleared) => {
+  if (isCleared) {
+    filteredMap.value = displayedAvatarMap.value;
+  }
+});
+
+// 当 store 中的 displayedAvatarMap 变化时（由 loadMore 触发），同步更新 filteredMap
+watch(displayedAvatarMap, (newVal) => {
+  if (!mapSearchQuery.value) {
+    filteredMap.value = newVal;
+  }
+}, { deep: true });
+// --- 核心修改结束 ---
+
 
 const updateScopeFromConfig = () => {
   const defaultConfig = {
@@ -263,7 +337,10 @@ const updateScopeFromConfig = () => {
 
 onMounted(() => {
   mediaStore.fetchLibraries();
-  avatarMapperStore.fetchMap();
+  avatarMapperStore.fetchMap().then(() => {
+    // 初始加载后，将分页数据显示到 filteredMap
+    filteredMap.value = displayedAvatarMap.value;
+  });
   watch(() => configStore.isLoaded, (loaded) => {
     if (loaded) updateScopeFromConfig();
   }, { immediate: true });
@@ -317,11 +394,9 @@ const handleRestore = () => {
   });
 };
 
-// --- 新增 ---
 const handleSingleRestore = (actorInfo) => {
   avatarMapperStore.startSingleRestore(actorInfo, scope.value);
 };
-// --- 新增结束 ---
 
 const actions = ref([
   { 
@@ -422,7 +497,10 @@ const actions = ref([
 .map-preview { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; }
 .map-preview > :deep(.el-card__body) { flex-grow: 1; overflow: hidden; display: flex; flex-direction: column; padding: 0; }
 .preview-toolbar { display: flex; gap: 10px; padding: 10px 20px; border-bottom: 1px solid var(--el-border-color-lighter); }
-.map-list-container { flex-grow: 1; overflow-y: auto; }
+.map-list-container {
+  flex-grow: 1;
+  overflow-y: auto;
+}
 .search-dialog-content { display: flex; flex-direction: column; gap: 15px; height: 65vh; }
 .search-form { display: flex; gap: 10px; flex-shrink: 0; }
 .search-results-table { flex-grow: 1; border: 1px solid var(--el-border-color-light); border-radius: 4px; overflow: hidden; }
@@ -434,5 +512,21 @@ const actions = ref([
 }
 .actor-avatar :deep(img) {
   object-fit: cover;
+}
+.load-more-sentinel {
+  padding: 20px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+}
+.load-more-sentinel.all-loaded {
+  color: var(--el-color-success);
+}
+.load-more-sentinel :deep(.el-loading-mask) {
+  background-color: transparent;
+}
+.load-more-sentinel :deep(.el-loading-spinner .circular) {
+  width: 24px;
+  height: 24px;
 }
 </style>

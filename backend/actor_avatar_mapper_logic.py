@@ -7,6 +7,7 @@ import threading
 import time
 import re
 import base64
+import subprocess
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from filelock import FileLock, Timeout
@@ -108,6 +109,66 @@ class ActorAvatarMapperLogic:
         response = self.session.request(method, url, headers=headers, timeout=30, proxies=proxies, **kwargs)
         response.raise_for_status()
         return response.json() if response.content else None
+    
+    def _execute_github_write_request(self, method: str, url: str, pat: str, payload: Optional[Dict] = None) -> Dict:
+        """通过 curl 执行 GitHub 写入操作（无重试）"""
+        command = [
+            'curl', '-L', '-X', method,
+            '-H', 'Accept: application/vnd.github.v3+json',
+            '-H', f'Authorization: token {pat}',
+            '-H', 'Content-Type: application/json'
+        ]
+        
+        json_payload_str = ""
+        if payload:
+            command.extend(['--data-binary', '@-'])
+            json_payload_str = json.dumps(payload)
+
+        proxies = self.proxy_manager.get_proxies(url)
+        if proxies.get('https'):
+            command.extend(['--proxy', proxies['https']])
+
+        command.append(url)
+
+        result = subprocess.run(command, input=json_payload_str, capture_output=True, text=True, check=False)
+        
+        response_data = {}
+        try:
+            if result.stdout:
+                response_data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            raise Exception(f"cURL 返回了非JSON响应: {result.stdout or '无输出'} | 错误: {result.stderr or '无错误信息'}")
+
+        if result.returncode != 0 or (response_data.get("message") and response_data.get("documentation_url")):
+            error_message = response_data.get('message', f"cURL 错误: {result.stderr}")
+            if response_data.get('status') == '422' and "sha" in error_message:
+                error_message = f"无效请求 (422)。服务器提示 'sha' 参数有问题。这可能是因为在您操作期间，文件被其他进程修改。请重试。({error_message})"
+            elif "409 Conflict" in result.stderr:
+                error_message = "GitHub API 返回 409 Conflict 错误，这通常是并发写入冲突导致的。请稍后重试。"
+            elif "schannel: failed to receive handshake" in result.stderr or "curl: (35)" in result.stderr:
+                error_message = f"SSL/TLS 握手失败。这通常是临时的网络或代理问题。错误: {result.stderr}"
+            raise Exception(f"GitHub API 错误: {error_message}")
+
+        return response_data
+    
+    def _execute_github_write_request_with_retry(self, method: str, url: str, pat: str, payload: Optional[Dict] = None, task_cat: str = "GitHub写入") -> Dict:
+        """
+        执行 GitHub 写入操作，并增加了针对网络错误的重试逻辑。
+        """
+        max_retries = 3
+        retry_delay = 5  # seconds
+        for attempt in range(max_retries):
+            try:
+                return self._execute_github_write_request(method, url, pat, payload)
+            except Exception as e:
+                error_str = str(e).lower()
+                if "ssl/tls" in error_str or "handshake" in error_str or "curl: (35)" in error_str:
+                    if attempt < max_retries - 1:
+                        ui_logger.warning(f"  - ⚠️ 网络操作失败 (尝试 {attempt + 1}/{max_retries})，将在 {retry_delay} 秒后重试... 原因: {e}", task_category=task_cat)
+                        time.sleep(retry_delay)
+                        continue
+                raise e
+        raise Exception("重试逻辑执行完毕但未能成功。")
 
     def upload_to_github_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员头像映射-上传"
@@ -148,7 +209,10 @@ class ActorAvatarMapperLogic:
             if sha:
                 payload["sha"] = sha
             
-            self._github_request("PUT", api_url, json=payload)
+            # --- 核心修改：调用新的基于 curl 的上传方法 ---
+            self._execute_github_write_request_with_retry("PUT", api_url, self.github_config.personal_access_token, payload, task_cat=task_cat)
+            # --- 修改结束 ---
+            
             ui_logger.info("✅ 上传成功！演员头像映射表已同步到 GitHub 仓库。", task_category=task_cat)
 
         except Exception as e:
