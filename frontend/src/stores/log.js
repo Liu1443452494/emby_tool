@@ -1,9 +1,9 @@
-// frontend/src/stores/log.js (修改后)
+// frontend/src/stores/log.js (完整文件覆盖)
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { API_BASE_URL, WS_BASE_URL } from '@/config/apiConfig';
-import { useStorage } from '@vueuse/core'; // 导入 useStorage
+import { useStorage } from '@vueuse/core';
 
 export const useLogStore = defineStore('log', () => {
   const logs = ref([])
@@ -11,7 +11,6 @@ export const useLogStore = defineStore('log', () => {
   const currentPage = ref(1)
   const isConnected = ref(false)
   const logLevel = ref('INFO')
-  // --- 核心修改 1: 使用 useStorage 来持久化用户选择的页面大小 ---
   const pageSize = useStorage('log-page-size', 1000); 
   let ws = null
   let reconnectTimer = null
@@ -22,15 +21,16 @@ export const useLogStore = defineStore('log', () => {
     ElMessage({ message, type, showClose: true, duration: 3000 })
   }
 
-  // --- 核心修改 2: 修改 fetchHistoricalLogs 以使用动态的 pageSize ---
   async function fetchHistoricalLogs(page = 1) {
     try {
-      // 在请求中使用 store 中存储的 pageSize
       const response = await fetch(`${API_BASE_URL}/api/logs?page=${page}&page_size=${pageSize.value}&level=${logLevel.value}`)
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || '获取历史日志失败')
       
+      // --- 核心修改：不再需要添加 id ---
       logs.value = data.logs
+      // --- 修改结束 ---
+      
       totalLogs.value = data.total
       currentPage.value = page
     } catch (error) {
@@ -43,10 +43,8 @@ export const useLogStore = defineStore('log', () => {
     await fetchHistoricalLogs(1);
   }
 
-  // --- 核心修改 3: 新增一个方法来更新 pageSize 并重新获取数据 ---
   async function setPageSizeAndFetch(newPageSize) {
     pageSize.value = newPageSize;
-    // 当页面大小改变时，通常回到第一页是最佳实践
     await fetchHistoricalLogs(1); 
   }
 
@@ -70,8 +68,9 @@ export const useLogStore = defineStore('log', () => {
         totalLogs.value++;
 
         if (currentPage.value === 1) {
+          // --- 核心修改：不再需要添加 id ---
           logs.value.unshift(logData);
-          // --- 核心修改 4: WebSocket 推送逻辑也使用动态的 pageSize ---
+          // --- 修改结束 ---
           if (logs.value.length > pageSize.value) {
             logs.value.pop();
           }
@@ -115,8 +114,8 @@ export const useLogStore = defineStore('log', () => {
   }
 
   return { 
-    logs, totalLogs, currentPage, totalPages, isConnected, logLevel, pageSize, // 导出 pageSize
+    logs, totalLogs, currentPage, totalPages, isConnected, logLevel, pageSize,
     fetchHistoricalLogs, connect, disconnect, clearLogs, setLogLevelAndFetch,
-    setPageSizeAndFetch // 导出新方法
+    setPageSizeAndFetch
   }
 })

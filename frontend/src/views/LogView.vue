@@ -1,4 +1,4 @@
-<!-- frontend/src/views/LogView.vue (修改后) -->
+<!-- frontend/src/views/LogView.vue (完整文件覆盖 - 最终修正版) -->
 <template>
   <div class="log-page">
     <div class="page-header">
@@ -17,7 +17,6 @@
         </el-radio-group>
       </div>
       <div class="right-controls">
-        <!-- --- 核心修改 1: 增加每页条数选择器 --- -->
         <el-select 
           v-model="pageSizeProxy" 
           @change="handlePageSizeChange" 
@@ -33,6 +32,7 @@
       </div>
     </div>
 
+    <!-- --- 核心修改：恢复为原生 v-for 循环 --- -->
     <div class="log-container">
       <div v-if="logStore.logs.length > 0" class="log-content">
         <div v-for="(log, index) in logStore.logs" :key="index" class="log-line">
@@ -47,6 +47,7 @@
       </div>
       <el-empty v-else description="暂无日志" />
     </div>
+    <!-- --- 修改结束 --- -->
 
     <!-- 分页器 -->
     <div class="pagination-footer">
@@ -74,7 +75,6 @@ const logLevelProxy = computed({
   set: (val) => {}
 });
 
-// --- 核心修改 2: 增加 pageSize 的计算属性代理 ---
 const pageSizeProxy = computed({
   get: () => logStore.pageSize,
   set: (val) => {}
@@ -97,13 +97,11 @@ const handleLevelChange = (newLevel) => {
   logStore.setLogLevelAndFetch(newLevel);
 };
 
-// --- 核心修改 3: 增加处理页面大小变化的函数 ---
 const handlePageSizeChange = (newPageSize) => {
   logStore.setPageSizeAndFetch(newPageSize);
 };
 
 const getLineNumber = (index) => {
-  // --- 核心修改 4: 行号计算使用动态的 pageSize ---
   return (logStore.currentPage - 1) * logStore.pageSize + index + 1;
 };
 </script>
@@ -132,7 +130,6 @@ const getLineNumber = (index) => {
   flex-shrink: 0;
 }
 
-/* --- 核心修改 5: 增加 right-controls 样式 --- */
 .left-controls, .right-controls {
   display: flex;
   align-items: center;
@@ -144,8 +141,9 @@ const getLineNumber = (index) => {
   background-color: #292A2D; 
   border-radius: 8px;
   padding: 10px 0;
-  overflow-y: auto;
+  overflow-y: auto; /* 容器自身可以滚动 */
   border: 1px solid var(--el-border-color-lighter);
+  position: relative;
 }
 
 .log-content {
@@ -159,7 +157,7 @@ const getLineNumber = (index) => {
   align-items: baseline;
   line-height: 1.6;
   padding: 2px 10px;
-  white-space: pre;
+  /* 移除 white-space: pre; */
 }
 .log-line:hover {
   background-color: rgba(255, 255, 255, 0.05);
@@ -223,6 +221,13 @@ const getLineNumber = (index) => {
   justify-content: center;
   padding: 15px 0;
   flex-shrink: 0;
+}
+
+.log-container :deep(.el-empty) {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .log-page :deep(.el-pagination.is-background .el-pager li.is-active) {
