@@ -794,6 +794,9 @@ class PosterManagerLogic:
             ui_logger.error(f"❌ 恢复任务执行失败: {e}", task_category=task_cat, exc_info=True)
             raise e
 
+
+    # backend/poster_manager_logic.py (函数替换)
+
     def _restore_single_image_from_plan(self, item_id: str, image_type: str, tmdb_id: str, remote_map: Dict, task_cat: str):
         """根据计划，恢复单张指定类型的图片"""
         import requests
@@ -802,6 +805,7 @@ class PosterManagerLogic:
         image_info = remote_map.get(key)
 
         if not image_info:
+            # --- 核心修改：修正日志打印中的变量位置 ---
             ui_logger.debug(f"     - 跳过: 在远程备份中未找到 TMDB ID {tmdb_id} 的 {image_type} 图片。", task_category=task_cat)
             return
 
@@ -1438,7 +1442,8 @@ class PosterManagerLogic:
 
             remote_map = self._get_aggregated_remote_index(task_cat)
             
-            self._restore_single_item(item_id, tmdb_id, [image_type], remote_map, task_cat)
+            # --- 核心修改：确保传递给 image_type 的是字符串，而不是列表 ---
+            self._restore_single_image_from_plan(item_id, image_type, tmdb_id, remote_map, task_cat)
             
             ui_logger.info(f"🎉 为【{item_name}】恢复【{image_type_cn}】的任务已完成。", task_category=task_cat)
         
