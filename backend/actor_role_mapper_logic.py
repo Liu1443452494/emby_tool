@@ -52,6 +52,7 @@ class ActorRoleMapperLogic:
         response.raise_for_status()
         return response.json()
 
+
     def generate_map_task(self, scope: ScheduledTasksTargetScope, actor_limit: int, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员角色映射-生成"
         ui_logger.info(f"🎉 任务启动，范围: {scope.mode}，演员上限: {actor_limit}", task_category=task_cat)
@@ -133,8 +134,7 @@ class ActorRoleMapperLogic:
                         continue
                     
                     if tmdb_id in actor_role_map:
-                        if item_id not in actor_role_map[tmdb_id]["Emby_itemid"]:
-                            actor_role_map[tmdb_id]["Emby_itemid"].append(item_id)
+                        # --- 核心修改：由于不再存储 Emby Item ID，这里不再需要追加 ---
                         processed_count += 1
                         task_manager.update_task_progress(task_id, processed_count, total_items)
                         continue
@@ -142,8 +142,7 @@ class ActorRoleMapperLogic:
                     if not people_to_process:
                         continue
 
-                    # --- 核心修改：将 work_map 改为 work_list (数组) ---
-                    work_list = []
+                    work_map = {}
                     for person in people_to_process:
                         if person.get('Type') != 'Actor':
                             continue
@@ -162,19 +161,17 @@ class ActorRoleMapperLogic:
                         role = person.get("Role", "")
                         logging.debug(f"【调试-最终数据】演员: {actor_name}, 角色: {role}, TMDB ID: {person_tmdb_id}")
 
-                        work_list.append({
-                            "name": actor_name,
+                        work_map[actor_name] = {
                             "tmdb_id": person_tmdb_id,
                             "role": role
-                        })
+                        }
                     
-                    if work_list:
+                    if work_map:
                         actor_role_map[tmdb_id] = {
                             "title": item_name,
-                            "Emby_itemid": [item_id],
-                            "map": work_list # 使用新的数组结构
+                            # --- 核心修改：不再包含 Emby_itemid 字段 ---
+                            "map": work_map
                         }
-                    # --- 修改结束 ---
                     
                     processed_count += 1
                     task_manager.update_task_progress(task_id, processed_count, total_items)
@@ -183,7 +180,7 @@ class ActorRoleMapperLogic:
             try:
                 with FileLock(ACTOR_ROLE_MAP_LOCK_FILE, timeout=10):
                     with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
-                        json.dump(actor_role_map, f, ensure_ascii=False)
+                        json.dump(actor_role_map, f, ensure_ascii=False, indent=2)
             except Timeout:
                 raise IOError("获取文件锁超时，另一个进程可能正在访问该文件。")
 
@@ -355,24 +352,21 @@ class ActorRoleMapperLogic:
             ui_logger.error(f"❌ 从 GitHub 下载失败: {e}", task_category=task_cat, exc_info=True)
             raise e
         
-    def restore_single_map_task(self, single_map_data: Dict, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
-        根据单条映射关系，恢复指定 Emby 媒体项的演员角色名。
+        根据映射关系，恢复指定 Emby 媒体项列表的演员角色名。
         新版逻辑：以映射表为驱动，ID优先，名称降级。
         """
-        task_cat = "演员角色映射-单体恢复"
+        task_cat = "演员角色映射-恢复"
         
-        item_ids = single_map_data.get("Emby_itemid", [])
-        role_map = single_map_data.get("map", {})
-        title = single_map_data.get("title", "未知作品")
-
         if not item_ids or not role_map:
             ui_logger.error(f"❌ 任务失败：传入的映射数据不完整。作品: {title}", task_category=task_cat)
             raise ValueError("映射数据不完整")
 
         total_items = len(item_ids)
-        task_manager.update_task_progress(task_id, 0, total_items)
-        ui_logger.info(f"🎉 任务启动，开始为作品《{title}》恢复演员角色，共涉及 {total_items} 个Emby媒体项。", task_category=task_cat)
+        # 注意：这里的进度条是针对单个作品的多个Emby实例，而不是整个批量任务
+        # task_manager.update_task_progress(task_id, 0, total_items)
+        ui_logger.info(f"  ➡️ 开始为作品《{title}》恢复演员角色，共涉及 {total_items} 个Emby媒体项。", task_category=task_cat)
 
         for i, item_id in enumerate(item_ids):
             if cancellation_event.is_set():
@@ -380,13 +374,13 @@ class ActorRoleMapperLogic:
                 return
 
             try:
-                ui_logger.info(f"  ➡️ 正在处理第 {i+1}/{total_items} 个媒体项 (ID: {item_id})...", task_category=task_cat)
+                ui_logger.info(f"     - 正在处理第 {i+1}/{total_items} 个媒体项 (ID: {item_id})...", task_category=task_cat)
                 
                 # 1. 获取并预处理 Emby 演员列表
                 item_details = self._get_emby_item_details(item_id, "People")
                 current_people = item_details.get("People", [])
                 if not current_people:
-                    ui_logger.info(f"     - [跳过] 媒体项 {item_id} 没有演职员信息。", task_category=task_cat)
+                    ui_logger.info(f"       - [跳过] 媒体项 {item_id} 没有演职员信息。", task_category=task_cat)
                     continue
 
                 emby_actors_by_id = {}
@@ -425,7 +419,7 @@ class ActorRoleMapperLogic:
                         if current_role != target_role:
                             target_emby_person["Role"] = target_role
                             has_changes = True
-                            updated_logs.append(f"     - ✅ 演员 [{target_emby_person.get('Name')}] 角色已更新: '{current_role}' → '{target_role}'")
+                            updated_logs.append(f"       - ✅ 演员 [{target_emby_person.get('Name')}] 角色已更新: '{current_role}' → '{target_role}'")
                     else:
                         logging.debug(f"【调试】[匹配失败] 在 Emby 媒体项 {item_id} 中未找到演员 [{map_actor_name}]。")
 
@@ -450,10 +444,7 @@ class ActorRoleMapperLogic:
 
             except Exception as e:
                 ui_logger.error(f"  - ❌ 处理媒体项 {item_id} 时发生错误: {e}", task_category=task_cat, exc_info=True)
-            
-            task_manager.update_task_progress(task_id, i + 1, total_items)
-        
-        ui_logger.info(f"🎉 作品《{title}》的角色恢复任务执行完毕。", task_category=task_cat)
+
 
     def update_single_map_file(self, single_map_data: Dict):
         """
@@ -475,10 +466,9 @@ class ActorRoleMapperLogic:
                 else:
                     full_map = {}
                 
-                # 2. 更新指定条目
+                # 2. 更新指定条目 (不再包含 Emby_itemid)
                 full_map[tmdb_id] = {
                     "title": single_map_data.get("title", "未知作品"),
-                    "Emby_itemid": single_map_data.get("Emby_itemid", []),
                     "map": single_map_data.get("map", {})
                 }
 
@@ -499,52 +489,49 @@ class ActorRoleMapperLogic:
     def restore_roles_from_map_task(self, scope: ScheduledTasksTargetScope, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
         根据通用范围和本地映射表，批量恢复演员角色名。
-        新版逻辑：以映射表为驱动，ID优先，名称降级，兼容多版本。
+        新版逻辑：以映射表为驱动，通过 id_map.json 查找 ItemId。
         """
         task_cat = "演员角色映射-批量恢复"
         ui_logger.info(f"🎉 任务启动，范围: {scope.mode}", task_category=task_cat)
 
         # 1. 加载本地映射表
-        ui_logger.info("➡️ [阶段1/4] 正在加载本地映射表...", task_category=task_cat)
+        ui_logger.info("➡️ [阶段1/4] 正在加载本地角色映射表...", task_category=task_cat)
         if not os.path.exists(ACTOR_ROLE_MAP_FILE):
-            raise FileNotFoundError("本地映射表文件 actor_role_map.json 不存在，请先生成。")
+            raise FileNotFoundError("本地角色映射表文件 actor_role_map.json 不存在，请先生成。")
         
         with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
-            full_map = json.load(f)
+            role_map = json.load(f)
         
-        if not full_map:
-            ui_logger.warning("⚠️ 本地映射表为空，任务中止。", task_category=task_cat)
+        if not role_map:
+            ui_logger.warning("⚠️ 本地角色映射表为空，任务中止。", task_category=task_cat)
             return
 
-        # 2. 获取目标媒体项并构建反向映射
-        ui_logger.info("➡️ [阶段2/4] 正在根据范围获取媒体列表并构建处理计划...", task_category=task_cat)
+        # --- 核心修改：加载 id_map.json ---
+        ui_logger.info("➡️ [阶段2/4] 正在加载 TMDB-Emby ID 映射表...", task_category=task_cat)
+        id_map_file = os.path.join('/app/data', 'id_map.json')
+        if not os.path.exists(id_map_file):
+            ui_logger.error("❌ 关键文件 id_map.json 不存在！请先在“定时任务”页面生成该映射表。", task_category=task_cat)
+            raise FileNotFoundError("ID映射表 (id_map.json) 不存在。")
+        with open(id_map_file, 'r', encoding='utf-8') as f:
+            id_map = json.load(f)
+        ui_logger.info("   - ❗ 提示：恢复操作将基于您上一次生成的 `id_map.json`。为确保结果准确，建议在恢复前重新生成ID映射表。", task_category=task_cat)
+        # --- 修改结束 ---
+
+        # 2. 获取目标媒体项
+        ui_logger.info("➡️ [阶段3/4] 正在根据范围获取媒体列表...", task_category=task_cat)
         selector = MediaSelector(self.config)
-        media_ids_in_scope = selector.get_item_ids(scope)
+        media_ids_in_scope = set(selector.get_item_ids(scope))
         if not media_ids_in_scope:
             ui_logger.info("✅ 在指定范围内未找到任何媒体项，任务完成。", task_category=task_cat)
             return
 
-        # 构建 TMDB ID -> [Emby Item IDs] 的反向映射
-        tmdb_to_emby_map = {}
-        for item_id in media_ids_in_scope:
-            try:
-                details = self._get_emby_item_details(item_id, "ProviderIds")
-                tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
-                if tmdb_id:
-                    tmdb_id_str = str(tmdb_id)
-                    if tmdb_id_str not in tmdb_to_emby_map:
-                        tmdb_to_emby_map[tmdb_id_str] = []
-                    tmdb_to_emby_map[tmdb_id_str].append(item_id)
-            except Exception as e:
-                logging.error(f"【调试】获取媒体项 {item_id} 的TMDB ID时失败: {e}")
-
         # 3. 遍历本地映射表，执行恢复
-        ui_logger.info("➡️ [阶段3/4] 开始根据处理计划，逐一恢复作品...", task_category=task_cat)
-        total_works_to_process = len(full_map)
+        ui_logger.info("➡️ [阶段4/4] 开始根据处理计划，逐一恢复作品...", task_category=task_cat)
+        total_works_to_process = len(role_map)
         task_manager.update_task_progress(task_id, 0, total_works_to_process)
         processed_works_count = 0
 
-        for tmdb_id, map_data in full_map.items():
+        for tmdb_id, map_data in role_map.items():
             if cancellation_event.is_set():
                 ui_logger.warning("⚠️ 任务被用户取消。", task_category=task_cat)
                 return
@@ -552,22 +539,24 @@ class ActorRoleMapperLogic:
             processed_works_count += 1
             task_manager.update_task_progress(task_id, processed_works_count, total_works_to_process)
 
-            # 检查此作品是否在处理范围内
-            item_ids_to_process = tmdb_to_emby_map.get(tmdb_id)
+            # --- 核心修改：通过 id_map 查找 ItemId，并与范围求交集 ---
+            emby_ids_from_map = id_map.get(str(tmdb_id), [])
+            item_ids_to_process = list(media_ids_in_scope.intersection(emby_ids_from_map))
+            # --- 修改结束 ---
+            
             if not item_ids_to_process:
                 continue
 
             title = map_data.get("title", f"TMDB ID {tmdb_id}")
-            ui_logger.info(f"  ➡️ 开始处理作品《{title}》，涉及 {len(item_ids_to_process)} 个Emby版本。", task_category=task_cat)
             
             # 复用单体恢复的逻辑
-            single_map_data = {
-                "Emby_itemid": item_ids_to_process,
-                "map": map_data.get("map", {}),
-                "title": title
-            }
-            # 创建一个临时的子任务，但日志类别保持一致
-            self.restore_single_map_task(single_map_data, cancellation_event, task_id, task_manager)
+            self.restore_single_map_task(
+                item_ids=item_ids_to_process,
+                role_map=map_data.get("map", {}),
+                title=title,
+                cancellation_event=cancellation_event,
+                task_id=task_id,
+                task_manager=task_manager
+            )
 
-        ui_logger.info("➡️ [阶段4/4] 所有在范围内的作品均已处理完毕。", task_category=task_cat)
         ui_logger.info("🎉 批量恢复演员角色任务执行完毕。", task_category=task_cat)

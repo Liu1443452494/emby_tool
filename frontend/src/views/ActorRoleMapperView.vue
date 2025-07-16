@@ -496,30 +496,43 @@ const handleCollapseChange = (activeNames) => {
   }
 };
 
+
 const fetchAvatars = async (tmdbId) => {
+  // 初始化缓存，防止重复请求
   actorAvatarsCache[tmdbId] = {}; 
-  const mapItem = fullActorMap.value.find(item => item.tmdb_id === tmdbId);
-  if (!mapItem || !mapItem.Emby_itemid || mapItem.Emby_itemid.length === 0) {
-    return;
-  }
-  const embyItemId = mapItem.Emby_itemid[0];
+  
   try {
-    const response = await fetch(`${API_BASE_URL}/api/actor-role-mapper/media/${embyItemId}/actors`);
-    if (!response.ok) throw new Error(`获取演员头像信息失败`);
+    // --- 核心修改：调用新的后端接口 ---
+    const response = await fetch(`${API_BASE_URL}/api/actor-role-mapper/avatars/${tmdbId}`);
+    if (!response.ok) {
+      // 如果接口返回404或500等，静默失败，不在UI上报错
+      console.error(`获取 TMDB ID ${tmdbId} 的演员头像信息失败`);
+      return;
+    }
+    
     const actorsData = await response.json();
+    if (!actorsData || actorsData.length === 0) {
+      return; // 没有找到演员或头像信息
+    }
+
     const avatarMap = {};
     const apiKey = configStore.appConfig.server_config.api_key;
+    
     actorsData.forEach(actor => {
       if (actor.PrimaryImageTag) {
         const imagePath = `Items/${actor.Id}/Images/Primary?tag=${actor.PrimaryImageTag}&api_key=${apiKey}`;
+        // 使用 encodeURIComponent 确保 URL 安全
         avatarMap[actor.Name] = `${API_BASE_URL}/api/emby-image-proxy?path=${encodeURIComponent(imagePath)}`;
       } else {
-        avatarMap[actor.Name] = '';
+        avatarMap[actor.Name] = ''; // 保持无头像的为空字符串
       }
     });
+    
     actorAvatarsCache[tmdbId] = avatarMap;
+
   } catch (error) {
-    ElMessage.error(`获取《${mapItem.title}》的演员头像失败。`);
+    // 网络层面的错误，也静默处理
+    console.error(`获取 TMDB ID ${tmdbId} 的演员头像时发生网络错误:`, error);
   }
 };
 

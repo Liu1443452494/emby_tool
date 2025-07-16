@@ -100,26 +100,75 @@ def get_media_actors(item_id: str):
         ui_logger.error(f"❌ 在 /media/{item_id}/actors 接口获取演员列表失败: {e}", task_category="API-角色映射", exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取演员列表失败: {e}")
     
+
+@router.get("/avatars/{tmdb_id}")
+def get_avatars_by_tmdb_id(tmdb_id: str):
+    """通过 TMDB ID 获取演员头像信息，用于前端展示"""
+    id_map_file = os.path.join('/app/data', 'id_map.json')
+    if not os.path.exists(id_map_file):
+        # 如果映射表不存在，返回空列表是正常的，前端会处理
+        return []
+    
+    with open(id_map_file, 'r', encoding='utf-8') as f:
+        id_map = json.load(f)
+    
+    item_ids = id_map.get(tmdb_id)
+    if not item_ids:
+        # 如果在映射表中找不到该TMDB ID，也返回空列表
+        return []
+
+    # 只需要用第一个 Emby Item ID 来获取演员列表即可
+    first_item_id = item_ids[0]
+    return get_media_actors(first_item_id)
+    
 class SingleMapRequest(BaseModel):
     map_data: Dict
+
 
 @router.post("/restore-single")
 def restore_single_map(req: SingleMapRequest):
     """启动一个任务，恢复单条映射关系"""
     logic = get_logic()
     title = req.map_data.get("title", "未知作品")
+    tmdb_id = req.map_data.get("tmdb_id")
+    role_map = req.map_data.get("map", {})
+
+    if not tmdb_id:
+        raise HTTPException(status_code=400, detail="请求数据缺少 tmdb_id")
+
+    # --- 核心修改：从 id_map.json 加载 Item ID ---
+    id_map_file = os.path.join('/app/data', 'id_map.json')
+    if not os.path.exists(id_map_file):
+        raise HTTPException(status_code=404, detail="ID映射表 (id_map.json) 不存在，无法进行单体恢复。请先在“定时任务”页面生成映射表。")
+    
+    with open(id_map_file, 'r', encoding='utf-8') as f:
+        id_map = json.load(f)
+    
+    item_ids = id_map.get(str(tmdb_id))
+    if not item_ids:
+        raise HTTPException(status_code=404, detail=f"在您的 Emby 库中未找到与作品《{title}》匹配的媒体项。请确认 ID 映射表是否为最新。")
+    # --- 修改结束 ---
+
     task_id = task_manager.register_task(
         logic.restore_single_map_task,
         f"恢复演员角色 - {title}",
-        single_map_data=req.map_data
+        item_ids=item_ids,
+        role_map=role_map,
+        title=title
     )
     return {"status": "success", "message": f"为《{title}》恢复角色的任务已启动。", "task_id": task_id}
+
 
 @router.post("/update-single-map")
 def update_single_map_file_route(req: SingleMapRequest):
     """更新 actor_role_map.json 文件中的单条记录"""
     try:
         logic = get_logic()
-        return logic.update_single_map_file(req.map_data)
+        # --- 核心修改：从请求体中移除 Emby_itemid ---
+        map_data_to_save = req.map_data.copy()
+        if "Emby_itemid" in map_data_to_save:
+            del map_data_to_save["Emby_itemid"]
+        # --- 修改结束 ---
+        return logic.update_single_map_file(map_data_to_save)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
