@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel, Field
-from typing import List, Dict
+from typing import List, Dict, Literal
 import os
 import json
 from log_manager import ui_logger
@@ -30,8 +30,8 @@ def get_map():
 
 class TaskRequest(BaseModel):
     scope: ScheduledTasksTargetScope
-    # --- 新增行 ---
     actor_limit: int = Field(default=50, ge=1, description="每个媒体项处理的演员数量上限")
+    generation_mode: Literal['incremental', 'overwrite'] = Field(default='incremental', description="生成模式：incremental-增量, overwrite-覆盖")
 
 @router.post("/generate")
 def generate_map(req: TaskRequest):
@@ -41,8 +41,8 @@ def generate_map(req: TaskRequest):
         logic.generate_map_task,
         "生成演员角色映射表",
         scope=req.scope,
-        # --- 新增行 ---
-        actor_limit=req.actor_limit
+        actor_limit=req.actor_limit,
+        generation_mode=req.generation_mode
     )
     return {"status": "success", "message": "生成映射表任务已启动。", "task_id": task_id}
 

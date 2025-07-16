@@ -91,7 +91,6 @@
           </div>
         </el-card>
 
-        <!-- 操作中心 -->
         <el-card class="box-card action-center" shadow="never">
           <template #header>
             <div class="card-header">
@@ -99,7 +98,7 @@
               <el-popover
                 placement="bottom-end"
                 title="生成设置"
-                :width="250"
+                :width="300"
                 trigger="click"
               >
                 <template #reference>
@@ -112,6 +111,21 @@
                       为提高效率，仅处理每个媒体项的前 N 位演员。
                     </div>
                   </el-form-item>
+                  <!-- --- 新增：生成模式选择 --- -->
+                  <el-divider />
+                  <el-form-item label="生成模式">
+                     <el-radio-group v-model="generationMode">
+                        <el-radio value="incremental">增量模式</el-radio>
+                        <el-radio value="overwrite">覆盖模式</el-radio>
+                      </el-radio-group>
+                      <div class="form-item-description">
+                        <b>增量模式 (默认):</b> 扫描时跳过映射表中已存在的作品，仅将新发现的作品追加到文件中。适合日常更新。
+                      </div>
+                      <div class="form-item-description" style="margin-top: 5px;">
+                        <b>覆盖模式:</b> 用本次扫描的结果完全替换旧的映射文件。适合在媒体库有大量变动或首次生成时使用。
+                      </div>
+                  </el-form-item>
+                  <!-- --- 新增结束 --- -->
                 </div>
               </el-popover>
             </div>
@@ -269,6 +283,7 @@ const dialogSelection = ref([]);
 const mapSearchQuery = ref('');
 const activeCollapseNames = ref([]);
 const actorLimit = useStorage('actor-role-mapper-limit', 50);
+const generationMode = useStorage('actor-role-mapper-generation-mode', 'incremental');
 const actorAvatarsCache = reactive({});
 
 const mapListContainerRef = ref(null);
@@ -414,12 +429,24 @@ async function startTask(endpoint, payload, confirmOptions) {
 const handleGenerate = () => {
   const payload = { 
     scope: scope.value,
-    actor_limit: actorLimit.value 
+    actor_limit: actorLimit.value,
+    generation_mode: generationMode.value
   };
+  
+  const modeText = generationMode.value === 'overwrite' ? '覆盖模式' : '增量模式';
+  const confirmMessage = generationMode.value === 'overwrite'
+    ? `即将以【覆盖模式】扫描媒体库并生成映射表，此操作会完全替换本地已有的 \`actor_role_map.json\` 文件。是否继续？`
+    : `即将以【增量模式】扫描媒体库，仅将新发现的作品追加到映射表中，不会影响已有记录。是否继续？`;
+
   startTask('/api/actor-role-mapper/generate', payload, {
-    message: `即将根据当前选择的范围和设置（仅处理前 ${actorLimit.value} 位演员）扫描媒体库并生成映射表，此操作会覆盖本地已有的 \`actor_role_map.json\` 文件。是否继续？`,
-    title: '确认生成映射表'
-  }).then(() => actorRoleMapperStore.fetchMap());
+    message: confirmMessage,
+    title: `确认生成映射表 (${modeText})`
+  }).then(() => {
+    // 任务启动后，延迟一段时间再刷新列表，给后端一点处理时间
+    setTimeout(() => {
+      actorRoleMapperStore.fetchMap();
+    }, 2000);
+  });
 };
 
 const handleUpload = () => {

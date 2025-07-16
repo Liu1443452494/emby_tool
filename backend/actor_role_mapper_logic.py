@@ -52,31 +52,75 @@ class ActorRoleMapperLogic:
         response.raise_for_status()
         return response.json()
 
-
-    def generate_map_task(self, scope: ScheduledTasksTargetScope, actor_limit: int, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def generate_map_task(self, scope: ScheduledTasksTargetScope, actor_limit: int, generation_mode: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员角色映射-生成"
-        ui_logger.info(f"🎉 任务启动，范围: {scope.mode}，演员上限: {actor_limit}", task_category=task_cat)
+        mode_text = "覆盖模式" if generation_mode == 'overwrite' else "增量模式"
+        ui_logger.info(f"🎉 任务启动 ({mode_text})，范围: {scope.mode}，演员上限: {actor_limit}", task_category=task_cat)
 
         try:
-            ui_logger.info("➡️ [阶段1/5] 正在获取媒体列表...", task_category=task_cat)
+            actor_role_map = {}
+            if generation_mode == 'incremental':
+                ui_logger.info("➡️ [阶段1/6] 增量模式：正在加载现有映射表...", task_category=task_cat)
+                if os.path.exists(ACTOR_ROLE_MAP_FILE):
+                    try:
+                        with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
+                            actor_role_map = json.load(f)
+                        ui_logger.info(f"  - ✅ 已成功加载 {len(actor_role_map)} 条现有记录。", task_category=task_cat)
+                    except (json.JSONDecodeError, IOError) as e:
+                        ui_logger.warning(f"  - ⚠️ 加载现有映射表失败，将作为首次生成处理。错误: {e}", task_category=task_cat)
+                else:
+                    ui_logger.info("  - 本地映射表不存在，将作为首次生成处理。", task_category=task_cat)
+
+            ui_logger.info("➡️ [阶段2/6] 正在获取媒体列表...", task_category=task_cat)
             selector = MediaSelector(self.config)
             media_ids = selector.get_item_ids(scope)
             if not media_ids:
                 ui_logger.info("✅ 在指定范围内未找到任何媒体项，任务完成。", task_category=task_cat)
                 return
+            
+            ui_logger.info(f"🔍 已获取 {len(media_ids)} 个媒体项，开始预处理...", task_category=task_cat)
 
-            total_items = len(media_ids)
+            media_ids_to_process = []
+            tmdb_id_to_item_id_map = {}
+            skipped_count = 0
+            
+            ui_logger.info("➡️ [阶段3/6] 正在并发获取所有媒体的 TMDB ID 并进行预过滤...", task_category=task_cat)
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "ProviderIds"): item_id for item_id in media_ids}
+                for future in as_completed(future_to_id):
+                    if cancellation_event.is_set(): return
+                    item_id = future_to_id[future]
+                    try:
+                        details = future.result()
+                        tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
+                        if not tmdb_id:
+                            continue
+                        
+                        if generation_mode == 'incremental' and str(tmdb_id) in actor_role_map:
+                            skipped_count += 1
+                            continue
+                        
+                        media_ids_to_process.append(item_id)
+                        tmdb_id_to_item_id_map[item_id] = tmdb_id
+                    except Exception as e:
+                        logging.error(f"【调试】预处理媒体 {item_id} 时出错: {e}")
+
+            if not media_ids_to_process:
+                ui_logger.info(f"✅ 预处理完成，所有 {len(media_ids)} 个媒体项均已存在于映射表中，任务结束。", task_category=task_cat)
+                return
+            
+            ui_logger.info(f"  - 预处理完成，需要新增/更新 {len(media_ids_to_process)} 个媒体项 (已跳过 {skipped_count} 个)。", task_category=task_cat)
+
+            total_items = len(media_ids_to_process)
             task_manager.update_task_progress(task_id, 0, total_items)
-            ui_logger.info(f"🔍 已获取 {total_items} 个媒体项，开始并发处理...", task_category=task_cat)
-
-            actor_role_map = {}
+            
             processed_count = 0
 
             with ThreadPoolExecutor(max_workers=10) as executor:
-                ui_logger.info("➡️ [阶段2/5] 正在并发获取每个媒体项的基础详情...", task_category=task_cat)
-                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "ProviderIds,People,Name"): item_id for item_id in media_ids}
+                ui_logger.info("➡️ [阶段4/6] 正在并发获取待处理媒体项的基础详情并裁切演员...", task_category=task_cat)
+                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "People,Name"): item_id for item_id in media_ids_to_process}
                 
-                all_people_to_fetch_details = []
+                all_actors_to_fetch_details = []
                 media_details_map = {}
 
                 for future in as_completed(future_to_id):
@@ -89,64 +133,50 @@ class ActorRoleMapperLogic:
                         people = details.get("People", [])
                         if people:
                             actors = [p for p in people if p.get('Type') == 'Actor']
-                            others = [p for p in people if p.get('Type') != 'Actor']
-                            
                             limited_actors = actors[:actor_limit]
+                            
                             if len(actors) > len(limited_actors):
                                 ui_logger.debug(f"  - [演员裁切] 媒体【{details.get('Name')}】演员总数: {len(actors)}，根据设置将处理前 {len(limited_actors)} 位。", task_category=task_cat)
                             
-                            people_to_process = limited_actors + others
-                            all_people_to_fetch_details.extend(people_to_process)
+                            all_actors_to_fetch_details.extend(limited_actors)
 
                     except Exception as e:
                         ui_logger.error(f"   - ❌ 获取媒体 {item_id} 基础详情时出错: {e}", task_category=task_cat)
 
                 if cancellation_event.is_set(): return
                 
-                unique_people_ids = {person['Id'] for person in all_people_to_fetch_details if person.get('Id')}
-                ui_logger.info(f"➡️ [阶段3/5] 媒体详情获取完毕，开始为 {len(unique_people_ids)} 个唯一演员并发获取 ProviderIds...", task_category=task_cat)
+                unique_actors_to_fetch_details = {actor['Id']: actor for actor in all_actors_to_fetch_details}.values()
+                ui_logger.info(f"➡️ [阶段5/6] 媒体详情获取完毕，开始为 {len(unique_actors_to_fetch_details)} 个唯一演员并发获取 ProviderIds...", task_category=task_cat)
                 
                 person_details_map = {}
-                future_to_person_id = {executor.submit(self._get_emby_item_details, person_id, "ProviderIds"): person_id for person_id in unique_people_ids}
+                future_to_person_id = {executor.submit(self._get_emby_item_details, person['Id'], "ProviderIds"): person for person in unique_actors_to_fetch_details}
 
                 for future in as_completed(future_to_person_id):
                     if cancellation_event.is_set(): return
-                    person_id = future_to_person_id[future]
+                    person = future_to_person_id[future]
                     try:
-                        person_details_map[person_id] = future.result()
+                        person_details_map[person['Id']] = future.result()
                     except Exception as e:
-                        logging.debug(f"【调试】获取演员 {person_id} 的 ProviderIds 失败: {e}")
+                        logging.debug(f"【调试】获取演员 {person.get('Name')} (ID: {person.get('Id')}) 的 ProviderIds 失败: {e}")
 
                 if cancellation_event.is_set(): return
 
-                ui_logger.info("➡️ [阶段4/5] 开始构建最终映射表...", task_category=task_cat)
+                ui_logger.info("➡️ [阶段6/6] 开始构建最终映射表...", task_category=task_cat)
                 for item_id, details in media_details_map.items():
                     item_name = details.get("Name", f"ID {item_id}")
-                    tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
+                    tmdb_id = tmdb_id_to_item_id_map.get(item_id)
                     
                     people = details.get("People", [])
                     actors = [p for p in people if p.get('Type') == 'Actor']
-                    others = [p for p in people if p.get('Type') != 'Actor']
-                    people_to_process = actors[:actor_limit] + others
-
-                    if not tmdb_id:
-                        ui_logger.debug(f"  - [跳过] 媒体【{item_name}】缺少 TMDB ID。", task_category=task_cat)
-                        continue
-                    
-                    if tmdb_id in actor_role_map:
-                        # --- 核心修改：由于不再存储 Emby Item ID，这里不再需要追加 ---
-                        processed_count += 1
-                        task_manager.update_task_progress(task_id, processed_count, total_items)
-                        continue
+                    people_to_process = actors[:actor_limit]
                     
                     if not people_to_process:
+                        processed_count += 1
+                        task_manager.update_task_progress(task_id, processed_count, total_items)
                         continue
 
                     work_map = {}
                     for person in people_to_process:
-                        if person.get('Type') != 'Actor':
-                            continue
-                        
                         actor_name = person.get("Name")
                         if not actor_name:
                             continue
@@ -167,16 +197,15 @@ class ActorRoleMapperLogic:
                         }
                     
                     if work_map:
-                        actor_role_map[tmdb_id] = {
+                        actor_role_map[str(tmdb_id)] = {
                             "title": item_name,
-                            # --- 核心修改：不再包含 Emby_itemid 字段 ---
                             "map": work_map
                         }
                     
                     processed_count += 1
                     task_manager.update_task_progress(task_id, processed_count, total_items)
 
-            ui_logger.info("➡️ [阶段5/5] 正在写入本地文件...", task_category=task_cat)
+            ui_logger.info("➡️ [阶段7/7] 正在写入本地文件...", task_category=task_cat)
             try:
                 with FileLock(ACTOR_ROLE_MAP_LOCK_FILE, timeout=10):
                     with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
@@ -186,7 +215,11 @@ class ActorRoleMapperLogic:
 
             total_works = len(actor_role_map)
             total_actors = sum(len(work['map']) for work in actor_role_map.values())
-            ui_logger.info(f"✅ 映射表生成完毕！共记录 {total_works} 部作品，{total_actors} 条演员角色关系。", task_category=task_cat)
+            
+            final_log_message = f"✅ 映射表生成完毕！共记录 {total_works} 部作品，{total_actors} 条演员角色关系。"
+            if generation_mode == 'incremental' and skipped_count > 0:
+                final_log_message += f" (跳过 {skipped_count} 个已存在的作品)"
+            ui_logger.info(final_log_message, task_category=task_cat)
 
         except Exception as e:
             ui_logger.error(f"❌ 生成映射表任务失败: {e}", task_category=task_cat, exc_info=True)
