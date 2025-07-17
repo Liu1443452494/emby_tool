@@ -70,7 +70,8 @@ class PosterManagerLogic:
             response = self.session.get(url, params=params, timeout=15, proxies=proxies)
             response.raise_for_status()
             provider_ids = response.json().get("ProviderIds", {})
-            return provider_ids.get("Tmdb")
+            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+            return provider_ids_lower.get("tmdb")
         except Exception as e:
             logging.error(f"【海报备份】获取媒体项 {item_id} 的 TMDB ID 失败: {e}")
             return None
@@ -652,9 +653,6 @@ class PosterManagerLogic:
             ui_logger.info("   - [容量更新] 所有仓库容量均无变化。", task_category=task_cat)
 
    
-    # backend/poster_manager_logic.py (函数替换)
-
-    # backend/poster_manager_logic.py (函数替换)
 
     def start_restore_from_remote_task(
         self,
@@ -734,7 +732,9 @@ class PosterManagerLogic:
                         details = future.result()
                         item_name = details.get("Name", f"ID {item_id}")
                         image_tags = details.get("ImageTags", {})
-                        tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
+                        provider_ids = details.get("ProviderIds", {})
+                        provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                        tmdb_id = provider_ids_lower.get("tmdb")
 
                         if not tmdb_id:
                             ui_logger.debug(f"   - [跳过] 媒体【{item_name}】(Emby Item ID: {item_id}) 缺少 TMDB ID。", task_category=task_cat)
@@ -878,8 +878,7 @@ class PosterManagerLogic:
             # --- 核心修改：补上缺失的 task_manager 参数 ---
             self.start_restore_from_remote_task(scope, content_types, cancellation_event, task_id, task_manager)
             return
-        # --- 修改结束 ---
-
+    
         """从 GitHub 恢复图片到 Emby 的主任务流程 (标准模式)"""
         overwrite = self.pm_config.overwrite_on_restore
         task_cat = f"海报恢复({scope.mode})"
@@ -926,7 +925,8 @@ class PosterManagerLogic:
 
                 item_name = details.get("Name", f"ID {item_id}")
                 image_tags = details.get("ImageTags", {})
-                tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
+                provider_ids_lower = {k.lower(): v for k, v in details.get("ProviderIds", {}).items()}
+                tmdb_id = provider_ids_lower.get("tmdb")
 
                 if not tmdb_id:
                     ui_logger.debug(f"   - [跳过] 媒体【{item_name}】缺少 TMDB ID。", task_category=task_cat)
@@ -1295,7 +1295,8 @@ class PosterManagerLogic:
         
 
         github_images = {}
-        tmdb_id = emby_details.get("ProviderIds", {}).get("Tmdb")
+        provider_ids_lower = {k.lower(): v for k, v in emby_details.get("ProviderIds", {}).items()}
+        tmdb_id = provider_ids_lower.get("tmdb")
         if tmdb_id:
             remote_map = self._get_aggregated_remote_index(f"单体查询({emby_details.get('Name')})")
             for img_type in ["poster", "logo", "fanart"]:
@@ -1326,7 +1327,8 @@ class PosterManagerLogic:
         task_cat = f"单体备份-{item_name}"
         ui_logger.info(f"➡️ 开始为【{item_name}】执行单体备份 ({image_type_cn})...", task_category=task_cat)
         
-        tmdb_id = item_details.get("ProviderIds", {}).get("Tmdb")
+        provider_ids_lower = {k.lower(): v for k, v in item_details.get("ProviderIds", {}).items()}
+        tmdb_id = provider_ids_lower.get("tmdb")
         if not tmdb_id: raise ValueError("媒体项缺少 TMDB ID。")
         
         emby_key = {"poster": "Primary", "logo": "Logo", "fanart": "Backdrop"}.get(image_type)
@@ -1436,13 +1438,15 @@ class PosterManagerLogic:
         ui_logger.info(f"➡️ 开始为【{item_name}】恢复【{image_type_cn}】...", task_category=task_cat)
 
         try:
-            tmdb_id = item_details.get("ProviderIds", {}).get("Tmdb")
+            provider_ids = item_details.get("ProviderIds", {})
+            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+            tmdb_id = provider_ids_lower.get("tmdb")
             if not tmdb_id:
                 raise ValueError("媒体项缺少 TMDB ID，无法进行恢复。")
 
             remote_map = self._get_aggregated_remote_index(task_cat)
             
-            # --- 核心修改：确保传递给 image_type 的是字符串，而不是列表 ---
+            
             self._restore_single_image_from_plan(item_id, image_type, tmdb_id, remote_map, task_cat)
             
             ui_logger.info(f"🎉 为【{item_name}】恢复【{image_type_cn}】的任务已完成。", task_category=task_cat)

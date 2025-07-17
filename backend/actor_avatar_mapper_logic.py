@@ -285,7 +285,8 @@ class ActorAvatarMapperLogic:
                             # 为每个演员获取其 ProviderIds
                             person_details = selector._get_emby_item_details(person['Id'], "ProviderIds")
                             provider_ids = person_details.get("ProviderIds", {})
-                            person_tmdb_id = provider_ids.get("Tmdb") or provider_ids.get("tmdb")
+                            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                            person_tmdb_id = provider_ids_lower.get("tmdb")
                             if str(person_tmdb_id) == str(tmdb_id_to_find):
                                 emby_actor_to_update = person_details
                                 ui_logger.info(f"   - ✅ 在媒体项 {future_to_id[future]} 中找到了目标演员【{actor_name}】(Emby ID: {emby_actor_to_update['Id']})。", task_category=task_cat)
@@ -396,7 +397,8 @@ class ActorAvatarMapperLogic:
 
             try:
                 provider_ids = actor.get("ProviderIds", {})
-                tmdb_id = provider_ids.get("Tmdb") or provider_ids.get("tmdb")
+                provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                tmdb_id = provider_ids_lower.get("tmdb")
                 
                 if not tmdb_id:
                     continue

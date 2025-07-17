@@ -192,8 +192,9 @@ class WebhookLogic:
         item_name = item_details.get("Name", f"Item {item_id}")
         
         provider_ids = item_details.get("ProviderIds", {})
-        if self.processed_flag_key in provider_ids:
-            processed_time = provider_ids[self.processed_flag_key]
+        provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+        if self.processed_flag_key.lower() in provider_ids_lower:
+            processed_time = provider_ids_lower[self.processed_flag_key.lower()]
             ui_logger.info(f"检测到媒体【{item_name}】已于 {processed_time} 被处理过，本次任务跳过。", task_category=task_cat)
             return
 

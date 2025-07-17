@@ -55,7 +55,8 @@ class DoubanFixerLogic:
             if "ProviderIds" not in item_details:
                 item_details["ProviderIds"] = {}
             
-            original_id = item_details["ProviderIds"].get("Douban")
+            provider_ids_lower = {k.lower(): v for k, v in item_details.get("ProviderIds", {}).items()}
+            original_id = provider_ids_lower.get("douban")
             item_name = item_details.get('Name', '未知媒体')
             if original_id == douban_id:
                 ui_logger.info(f"媒体【{item_name}】的豆瓣ID已是 {douban_id}，无需更新。", task_category=task_cat)

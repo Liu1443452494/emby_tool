@@ -628,22 +628,33 @@ class EpisodeRefresherLogic:
         except Exception as e:
             ui_logger.error(f"     - [失败❌] 写入图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
 
+
     def _clear_image_source_tag(self, item_id: str, task_category: str):
         try:
             item_details = self.tmdb_logic._get_emby_item_details(item_id, fields="ProviderIds")
             if not item_details: return
 
             provider_ids = item_details.get("ProviderIds", {})
-            if 'ToolboxImageSource' in provider_ids:
-                del provider_ids['ToolboxImageSource']
+            
+            # --- 新增：查找需要删除的键 ---
+            key_to_delete = None
+            for key in provider_ids.keys():
+                if key.lower() == "toolboximagesource":
+                    key_to_delete = key
+                    break
+            # --- 新增结束 ---
+            
+            # --- 修改：使用找到的键进行删除 ---
+            if key_to_delete:
+                del provider_ids[key_to_delete]
                 update_url = f"{self.base_url}/Items/{item_id}"
                 headers = {'Content-Type': 'application/json'}
                 self.session.post(update_url, params=self.params, json=item_details, headers=headers, timeout=20).raise_for_status()
                 ui_logger.debug(f"     - [标记] 成功从 Emby (ID: {item_id}) 移除图片来源标记。", task_category=task_category)
+            # --- 修改结束 ---
         except Exception as e:
             ui_logger.error(f"     - [失败❌] 移除图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
 
-        # 在 backend/episode_refresher_logic.py 文件中
 
     def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str) -> int:
         updated_count = 0
@@ -704,7 +715,8 @@ class EpisodeRefresherLogic:
                 else:
                     comparison_log['首播日期'] = f"Emby({emby_premiere_date[:10] if emby_premiere_date else '无'}) | TMDB(无)"
 
-                current_image_source = emby_episode.get("ProviderIds", {}).get("ToolboxImageSource")
+                provider_ids_lower = {k.lower(): v for k, v in emby_episode.get("ProviderIds", {}).items()}
+                current_image_source = provider_ids_lower.get("toolboximagesource")
                 emby_has_image = bool(emby_episode.get("ImageTags", {}).get("Primary"))
                 tmdb_still_path = tmdb_episode.get("still_path") if tmdb_episode else None
 
@@ -835,17 +847,37 @@ class EpisodeRefresherLogic:
 
         episodes_to_process = []
         if config.skip_if_complete:
+            ui_logger.info("智能跳过已开启，正在逐一分析分集完整性...", task_category=task_category)
             for ep in all_episode_details:
                 is_title_ok = bool(ep.get("Name")) and not self._is_generic_episode_title(ep.get("Name"))
                 is_overview_ok = bool(ep.get("Overview"))
                 
+                provider_ids = ep.get("ProviderIds", {})
+                # --- 核心修改：不区分大小写地查找 ToolboxImageSource ---
+                provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                image_source = provider_ids_lower.get("toolboximagesource", "无")
+                # --- 修改结束 ---
+
                 has_primary_image = bool(ep.get("ImageTags", {}).get("Primary"))
-                image_source = ep.get("ProviderIds", {}).get("ToolboxImageSource")
                 is_image_ok = has_primary_image and image_source != "screenshot"
+                
+                decision = "跳过" if (is_title_ok and is_overview_ok and is_image_ok) else "处理"
+                log_prefix = f"《{ep.get('SeriesName', '未知')}》 S{ep.get('ParentIndexNumber', 0):02d}E{ep.get('IndexNumber', 0):02d}"
+                
+                debug_message = (
+                    f"  - [智能跳过-分析] {log_prefix}\n"
+                    f"    - 标题检查: {'✅' if is_title_ok else '❌'} (当前: '{ep.get('Name', '无')}')\n"
+                    f"    - 简介检查: {'✅' if is_overview_ok else '❌'} (当前: {'有' if is_overview_ok else '无'})\n"
+                    f"    - 图片检查: {'✅' if is_image_ok else '❌'} (Emby有图: {'是' if has_primary_image else '否'}, 来源标记: '{image_source}')\n"
+                    f"    - 完整的 ProviderIds: {provider_ids}\n"
+                    f"    - 最终决定: {decision}"
+                )
+                ui_logger.debug(debug_message, task_category=task_category)
                 
                 if not (is_title_ok and is_overview_ok and is_image_ok):
                     episodes_to_process.append(ep)
-            ui_logger.info(f"智能跳过已开启，共筛选出 {len(episodes_to_process)} / {len(all_episode_details)} 个需要处理的分集。", task_category=task_category)
+            
+            ui_logger.info(f"智能跳过分析完成，共筛选出 {len(episodes_to_process)} / {len(all_episode_details)} 个需要处理的分集。", task_category=task_category)
         else:
             episodes_to_process = all_episode_details
 
@@ -962,7 +994,8 @@ class EpisodeRefresherLogic:
                 log_prefix = f"  -> 正在处理《{ep_details.get('SeriesName', '未知剧集')}》S{ep_details.get('ParentIndexNumber', 0):02d}E{ep_details.get('IndexNumber', 0):02d}:"
 
                 provider_ids = ep_details.get("ProviderIds", {})
-                if provider_ids.get("ToolboxImageSource") != "screenshot":
+                provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                if provider_ids_lower.get("toolboximagesource") != "screenshot":
                     ui_logger.debug(f"{log_prefix} 非工具箱截图，跳过。", task_category=task_cat)
                     skipped_count += 1
                     continue

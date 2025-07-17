@@ -92,7 +92,8 @@ class ActorRoleMapperLogic:
                     item_id = future_to_id[future]
                     try:
                         details = future.result()
-                        tmdb_id = details.get("ProviderIds", {}).get("Tmdb")
+                        provider_ids_lower = {k.lower(): v for k, v in details.get("ProviderIds", {}).items()}
+                        tmdb_id = provider_ids_lower.get("tmdb")
                         if not tmdb_id:
                             continue
                         

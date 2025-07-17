@@ -103,7 +103,8 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
             try:
                 details = future.result()
                 provider_ids = details.get("ProviderIds", {})
-                tmdb_id = provider_ids.get("Tmdb")
+                provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                tmdb_id = provider_ids_lower.get("tmdb")
                 if tmdb_id:
                     # --- 核心修改 2: 构建一对多的映射关系 ---
                     tmdb_id_str = str(tmdb_id)

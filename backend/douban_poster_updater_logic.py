@@ -168,7 +168,8 @@ class DoubanPosterUpdaterLogic:
                 continue
 
             if not config.overwrite_existing:
-                current_poster_tag = provider_ids.get('DbPosterTag')
+                provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                current_poster_tag = provider_ids_lower.get('dbpostertag')
                 if current_poster_tag == expected_poster_tag:
                     ui_logger.debug("     -- 跳过，当前海报已是最新豆瓣海报。", task_category=task_cat)
                     continue

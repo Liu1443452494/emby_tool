@@ -10,6 +10,7 @@ from log_manager import ui_logger
 from models import AppConfig
 from task_manager import TaskManager
 
+
 def create_nfo_from_details(details: dict) -> str:
     from xml.sax.saxutils import escape
     item_type = details.get("Type", "Movie")
@@ -35,20 +36,27 @@ def create_nfo_from_details(details: dict) -> str:
     for person in details.get('People', []):
         if not person.get('Name'): continue
         p_type = person.get('Type')
+        # --- 核心修改：在处理演员的 ProviderIds 时也进行大小写不敏感处理 ---
+        person_provider_ids_lower = {k.lower(): v for k, v in person.get('ProviderIds', {}).items()}
         if p_type == 'Actor':
             actor_parts = ["    <actor>", f"        <name>{escape(person['Name'])}</name>", f"        <role>{escape(person.get('Role', ''))}</role>", "        <type>Actor</type>"]
-            if person.get('ProviderIds', {}).get('Tmdb'): actor_parts.append(f"        <tmdbid>{person['ProviderIds']['Tmdb']}</tmdbid>")
+            if person_provider_ids_lower.get('tmdb'): actor_parts.append(f"        <tmdbid>{person_provider_ids_lower['tmdb']}</tmdbid>")
             actor_parts.append("    </actor>")
             xml_parts.append('\n'.join(actor_parts))
+        # --- 修改结束 ---
         elif p_type == 'Director':
             xml_parts.append(f"    <director>{escape(person['Name'])}</director>")
         elif p_type == 'Writer':
             xml_parts.append(f"    <writer>{escape(person['Name'])}</writer>")
     if details.get('CommunityRating'): xml_parts.append(f"    <rating>{details['CommunityRating']}</rating>")
     if details.get('ProductionYear'): xml_parts.append(f"    <year>{details['ProductionYear']}</year>")
-    provider_ids = details.get('ProviderIds', {})
-    if provider_ids.get('Imdb'): xml_parts.append(f'    <uniqueid type="imdb">{provider_ids["Imdb"]}</uniqueid>')
-    if provider_ids.get('Tmdb'): xml_parts.append(f'    <uniqueid type="tmdb">{provider_ids["Tmdb"]}</uniqueid>')
+    
+    # --- 核心修改：不区分大小写地获取 ProviderIds ---
+    provider_ids_lower = {k.lower(): v for k, v in details.get('ProviderIds', {}).items()}
+    if provider_ids_lower.get('imdb'): xml_parts.append(f'    <uniqueid type="imdb">{provider_ids_lower["imdb"]}</uniqueid>')
+    if provider_ids_lower.get('tmdb'): xml_parts.append(f'    <uniqueid type="tmdb">{provider_ids_lower["tmdb"]}</uniqueid>')
+    # --- 修改结束 ---
+
     for genre in details.get('Genres', []): xml_parts.append(f"    <genre>{escape(genre)}</genre>")
     xml_parts.append(f'</{root_tag}>')
     return '\n'.join(xml_parts)
