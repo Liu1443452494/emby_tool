@@ -1,4 +1,4 @@
-// frontend/src/stores/signInCenter.js (完整文件覆盖 - 恢复版)
+// frontend/src/stores/signInCenter.js (新文件)
 
 import { ref, reactive } from 'vue';
 import { defineStore } from 'pinia';
@@ -8,16 +8,18 @@ import { API_BASE_URL } from '@/config/apiConfig';
 import _ from 'lodash';
 
 export const useSignInCenterStore = defineStore('signInCenter', () => {
+  // --- State ---
   const modules = ref([]);
   const isLoading = ref(false);
   const isSaving = ref(false);
   const configStore = useConfigStore();
-  
+  // 用于存储各个模块的独立数据
   const historyData = reactive({});
   const logData = reactive({});
   const isHistoryLoading = ref(false);
   const isLogLoading = ref(false);
 
+  // --- Actions ---
   const showMessage = (type, message) => {
     ElMessage({ message, type, showClose: true, duration: 3000 });
   };
@@ -36,10 +38,14 @@ export const useSignInCenterStore = defineStore('signInCenter', () => {
     }
   }
 
+  // frontend/src/stores/signInCenter.js (函数替换)
+
   async function saveConfig(moduleId, configToSave) {
     isSaving.value = true;
     try {
+      // 找到当前 appConfig 中的签到配置
       const fullSigninConfig = _.cloneDeep(configStore.appConfig.signin_config) || {};
+      // 更新指定模块的配置
       fullSigninConfig[moduleId] = configToSave;
 
       const response = await fetch(`${API_BASE_URL}/api/signin/config`, {
@@ -51,6 +57,7 @@ export const useSignInCenterStore = defineStore('signInCenter', () => {
       if (!response.ok) throw new Error(data.detail || '保存配置失败');
       showMessage('success', data.message);
       
+      // 更新本地 Pinia 状态，避免重新请求
       const moduleIndex = modules.value.findIndex(m => m.id === moduleId);
       if (moduleIndex !== -1) {
         modules.value[moduleIndex].config = configToSave;
@@ -126,7 +133,7 @@ export const useSignInCenterStore = defineStore('signInCenter', () => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '重置失败');
       showMessage('success', data.message);
-      await fetchModules();
+      await fetchModules(); // 重置后刷新状态
     } catch (error) {
       if (error !== 'cancel') {
         showMessage('error', error.message);

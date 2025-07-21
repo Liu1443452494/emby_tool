@@ -1,4 +1,4 @@
-# backend/signin_modules/hdhive_signin.py (完整文件覆盖 - 最终正确版)
+# backend/signin_modules/hdhive_signin.py (新文件)
 
 import time
 import requests
@@ -17,6 +17,7 @@ class HdhiveSignInModule:
     """
     影巢(HDHive)签到模块
     """
+    # 模块元数据
     module_id = "hdhive"
     module_name = "影巢签到"
     
@@ -25,7 +26,6 @@ class HdhiveSignInModule:
         self.data = signin_data
         self.scraper = cloudscraper.create_scraper(delay=10)
         self._signin_api = "https://hdhive.online/api/customer/user/checkin"
-        self._user_info_api = "https://hdhive.online/api/customer/user/info"
         self.task_category = "签到-影巢"
 
     def get_summary(self) -> Dict[str, Any]:
@@ -35,33 +35,11 @@ class HdhiveSignInModule:
             "consecutive_days": self.data.get("consecutive_days", 0),
         }
 
-    def _fetch_current_points(self) -> Any:
-        """内部辅助方法：获取当前总积分"""
-        if not self.config.cookie:
-            return None
-
-        cookies = {item.split('=')[0]: item.split('=')[1] for item in self.config.cookie.split('; ') if '=' in item}
-        token = cookies.get('token')
-        if not token:
-            return None
-
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Authorization': f'Bearer {token}',
-        }
-        try:
-            res = self.scraper.get(url=self._user_info_api, headers=headers, cookies=cookies, timeout=30)
-            res.raise_for_status()
-            data = res.json()
-            if data.get('success'):
-                return data.get('data', {}).get('credit')
-        except Exception as e:
-            ui_logger.warning(f"⚠️ 获取最新总积分失败: {e}", task_category=self.task_category)
-        return None
-
     def sign(self, retry_count=0) -> Dict[str, Any]:
-        """执行签到核心逻辑"""
+        """
+        执行签到核心逻辑。
+        返回一个包含签到结果的字典。
+        """
         ui_logger.info(f"➡️ 开始执行签到...", task_category=self.task_category)
         
         if not self.config.cookie:
@@ -75,6 +53,7 @@ class HdhiveSignInModule:
                 ui_logger.info(f"✅ API返回消息: {message}", task_category=self.task_category)
                 sign_status = "已签到" if "签到过" in message else "签到成功"
                 
+                # 计算连续签到天数
                 today_str = datetime.now().strftime('%Y-%m-%d')
                 last_date_str = self.data.get('last_success_date')
                 consecutive_days = self.data.get('consecutive_days', 0)
@@ -89,20 +68,11 @@ class HdhiveSignInModule:
                     self.data['consecutive_days'] = consecutive_days
                     self.data['last_success_date'] = today_str
 
+                # 解析奖励积分
                 points_match = re.search(r'获得 (\d+) 积分', message)
                 points = int(points_match.group(1)) if points_match else "—"
-                
-                record = self._create_record(sign_status, message, points, consecutive_days)
 
-                # --- 核心修改：仅在签到成功时获取总积分 ---
-                if sign_status == "签到成功":
-                    time.sleep(1) # 短暂等待，确保服务器积分已更新
-                    current_points = self._fetch_current_points()
-                    if current_points is not None:
-                        record['current_points'] = current_points
-                # --- 修改结束 ---
-                
-                return record
+                return self._create_record(sign_status, message, points, consecutive_days)
 
             else: # 签到失败
                 ui_logger.error(f"❌ 签到失败: {message}", task_category=self.task_category)

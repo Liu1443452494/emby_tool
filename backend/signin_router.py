@@ -16,6 +16,7 @@ def get_signin_modules():
     return signin_manager.get_all_modules_summary()
 
 
+
 @router.post("/config")
 def save_signin_config(config: SigninModulesConfig):
     """保存所有签到模块的配置"""

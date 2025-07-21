@@ -1,4 +1,4 @@
-<!-- frontend/src/components/SignInCard.vue (完整文件覆盖 - 恢复版) -->
+<!-- frontend/src/components/SignInCard.vue (完整文件覆盖 - 简化版) -->
 <template>
   <el-card class="box-card task-card" shadow="never">
     <template #header>
@@ -31,9 +31,11 @@
         <div class="form-item-description">
           留空则禁用此任务的定时执行。
           <a href="https://crontab.guru/" target="_blank">CRON表达式帮助</a>
+          <!-- --- 新增：CRON 描述 --- -->
           <span v-if="cronDescription.text" class="cron-description" :class="{ 'error': cronDescription.error }">
             {{ cronDescription.text }}
           </span>
+          <!-- --- 新增结束 --- -->
         </div>
       </el-form-item>
       
@@ -61,11 +63,15 @@
 </template>
 
 <script setup>
+// frontend/src/components/SignInCard.vue (script setup 替换)
+
 import { ref, reactive, watch, defineAsyncComponent, computed } from 'vue';
 import { useSignInCenterStore } from '@/stores/signInCenter';
 import { MoreFilled, Setting, Refresh } from '@element-plus/icons-vue';
 import _ from 'lodash';
+// --- 新增：导入 cronstrue ---
 import cronstrue from 'cronstrue/i18n';
+// --- 新增结束 ---
 
 const props = defineProps({
   moduleData: {
@@ -80,17 +86,20 @@ const isSettingsDialogVisible = ref(false);
 
 const SignInSettingsDialog = defineAsyncComponent(() => import('./SignInSettingsDialog.vue'));
 
+// --- 新增：CRON 表达式描述的计算属性 ---
 const cronDescription = computed(() => {
   if (!localConfig.cron || localConfig.cron.trim() === '') {
     return { text: '', error: false };
   }
   try {
+    // 使用中文解析
     const description = cronstrue.toString(localConfig.cron, { locale: "zh_CN" });
     return { text: description, error: false };
   } catch (e) {
     return { text: `表达式无效: ${e}`, error: true };
   }
 });
+// --- 新增结束 ---
 
 watch(() => props.moduleData, (newData) => {
   if (newData && newData.config) {
@@ -125,7 +134,7 @@ const handleConfigUpdate = (newConfig) => {
   border: 1px solid var(--el-border-color-lighter);
   display: flex;
   flex-direction: column;
-  height: 260px;
+  height: 260px; /* 减小固定高度 */
 }
 .task-card :deep(.el-card__header) {
   padding: 15px 20px;
@@ -182,8 +191,7 @@ const handleConfigUpdate = (newConfig) => {
   padding-top: 10px;
   text-align: right;
   border-top: 1px solid var(--el-border-color-lighter);
-}
-.cron-description {
+}.cron-description {
   font-size: 12px;
   color: var(--el-color-success);
   margin-top: 5px;
@@ -191,8 +199,9 @@ const handleConfigUpdate = (newConfig) => {
   background-color: var(--el-color-success-light-9);
   border-radius: 4px;
   line-height: 1.4;
-  display: inline-block;
+  display: inline-block; /* 让背景色包裹文字 */
 }
+
 .cron-description.error {
   color: var(--el-color-error);
   background-color: var(--el-color-error-light-9);
