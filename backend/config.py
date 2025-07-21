@@ -155,6 +155,9 @@ def load_app_config() -> AppConfig:
     if "poster_manager_config" not in config_data:
         config_data["poster_manager_config"] = {}
 
+    if "telegram_config" not in config_data:
+        config_data["telegram_config"] = {}
+
     if "signin_config" not in config_data:
         config_data["signin_config"] = {}
         migration_needed = True

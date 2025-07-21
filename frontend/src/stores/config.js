@@ -75,6 +75,11 @@ export const useConfigStore = defineStore('config', () => {
       emby_path_root: '/media',
       clouddrive_path_root: '/cd2',
       clouddrive_rename_cooldown: 1.0
+    },
+    telegram_config: {
+      enabled: false,
+      bot_token: '',
+      chat_id: ''
     }
   })
   const isConnected = ref(false)
@@ -176,6 +181,10 @@ export const useConfigStore = defineStore('config', () => {
             clouddrive_path_root: '/cd2',
             clouddrive_rename_cooldown: 1.0
           };
+        }
+
+        if (!fullConfig.telegram_config) {
+          fullConfig.telegram_config = { enabled: false, bot_token: '', chat_id: '' };
         }
         
         appConfig.value = fullConfig
@@ -409,6 +418,38 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+   async function saveTelegramConfig(newConfig) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/config/telegram`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '未知错误');
+      
+      appConfig.value.telegram_config = newConfig;
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  async function testTelegramConfig(configToTest) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/notification/test-telegram`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configToTest),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '测试请求失败');
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
   return { 
     appConfig, 
     isLoaded,
@@ -426,6 +467,8 @@ export const useConfigStore = defineStore('config', () => {
     saveDoubanPosterUpdaterConfig,
     saveWebhookConfig,
     saveEpisodeRefresherConfig,
-    saveEpisodeRenamerConfig
+    saveEpisodeRenamerConfig,
+    saveTelegramConfig,
+    testTelegramConfig
   }
 })

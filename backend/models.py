@@ -283,6 +283,12 @@ class WebhookConfig(BaseModel):
     initial_wait_time: int = Field(default=30, description="收到通知后，等待 Emby 刮削的初始时间（秒）")
     plugin_wait_time: int = Field(default=60, description="ID修复后，等待豆瓣插件下载数据的时间（秒）")
 
+class TelegramConfig(BaseModel):
+    """Telegram 通知配置"""
+    enabled: bool = Field(default=False, description="是否启用Telegram通知")
+    bot_token: str = Field(default="", description="Telegram Bot Token")
+    chat_id: str = Field(default="", description="接收通知的Chat ID")
+
 
 class HdhiveSigninConfig(BaseModel):
     """影巢签到模块的配置"""
@@ -319,6 +325,7 @@ class AppConfig(BaseModel):
     episode_refresher_config: EpisodeRefresherConfig = Field(default_factory=EpisodeRefresherConfig)
     episode_renamer_config: EpisodeRenamerConfig = Field(default_factory=EpisodeRenamerConfig)
     poster_manager_config: PosterManagerConfig = Field(default_factory=PosterManagerConfig)
+    telegram_config: TelegramConfig = Field(default_factory=TelegramConfig)
     signin_config: SigninModulesConfig = Field(default_factory=SigninModulesConfig)
 
 class TargetScope(BaseModel):

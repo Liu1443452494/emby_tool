@@ -1412,7 +1412,37 @@ def save_episode_renamer_config_api(config: EpisodeRenamerConfig):
     except Exception as e:
         logging.error(f"保存剧集文件重命名器设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
-# --- 结束新增 ---
+
+
+from models import TelegramConfig
+from notification_manager import notification_manager, escape_markdown
+
+@app.post("/api/config/telegram")
+def save_telegram_config_api(config: TelegramConfig):
+    """保存 Telegram 通知配置"""
+    try:
+        ui_logger.info("正在保存 Telegram 通知设置...", task_category="系统配置")
+        current_app_config = app_config.load_app_config()
+        current_app_config.telegram_config = config
+        app_config.save_app_config(current_app_config)
+        ui_logger.info("✅ Telegram 通知设置保存成功！", task_category="系统配置")
+        return {"success": True, "message": "设置已保存！"}
+    except Exception as e:
+        logging.error(f"保存 Telegram 设置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+
+@app.post("/api/notification/test-telegram")
+def test_telegram_api(config: TelegramConfig):
+    """测试发送一条 Telegram 消息"""
+    # --- 核心修改：对原始文本进行转义 ---
+    raw_message = "🎉 这是一条来自 Emby-Toolkit 的测试消息！\n如果能看到我，说明您的通知配置正确无误。"
+    test_message = escape_markdown(raw_message)
+    # --- 修改结束 ---
+    result = notification_manager.send_telegram_message(test_message, config)
+    if result["success"]:
+        return result
+    else:
+        raise HTTPException(status_code=500, detail=result["message"])
 
 @app.get("/api/episodes/{series_id}")
 def get_series_episodes(series_id: str):
