@@ -4,14 +4,14 @@ import requests
 import re
 from typing import Dict
 
-from models import TelegramConfig
+from models import TelegramConfig, AppConfig
 from log_manager import ui_logger
+from proxy_manager import ProxyManager
 
 def escape_markdown(text: str) -> str:
     """
     转义 Telegram MarkdownV2 所需的特殊字符。
     """
-    # 根据 Telegram Bot API 文档，这些是需要转义的字符
     escape_chars = r'([_*\[\]()~`>#\+\-=|{}.!])'
     return re.sub(escape_chars, r'\\\1', text)
 
@@ -20,12 +20,12 @@ class NotificationManager:
     中央通知管理器，用于处理向不同渠道发送消息。
     """
     
-    def send_telegram_message(self, message: str, config: TelegramConfig) -> Dict:
+    def send_telegram_message(self, message: str, app_config: AppConfig) -> Dict:
         """
         发送消息到 Telegram。
-        注意：传入的 message 应该已经是正确格式化和转义后的字符串。
         """
         task_cat = "通知-Telegram"
+        config = app_config.telegram_config
         
         if not all([config.enabled, config.bot_token, config.chat_id]):
             ui_logger.debug("   - [调试] Telegram通知未启用或配置不完整，跳过发送。", task_category=task_cat)
@@ -35,14 +35,22 @@ class NotificationManager:
         payload = {
             'chat_id': config.chat_id,
             'text': message,
-            'parse_mode': 'MarkdownV2' # 使用更严格的 MarkdownV2 解析器
+            'parse_mode': 'MarkdownV2'
         }
         
-        ui_logger.info(f"➡️ 正在尝试发送Telegram通知...", task_category=task_cat)
+        # --- 核心修改：集成 ProxyManager ---
+        proxy_manager = ProxyManager(app_config)
+        proxies = proxy_manager.get_proxies(api_url)
+        
+        if proxies:
+            ui_logger.info(f"➡️ 正在尝试通过代理 {proxies.get('http')} 发送Telegram通知...", task_category=task_cat)
+        else:
+            ui_logger.info(f"➡️ 正在尝试直接连接并发送Telegram通知...", task_category=task_cat)
+        # --- 修改结束 ---
         
         try:
-            response = requests.post(api_url, json=payload, timeout=15)
-            # raise_for_status 会对 4xx 和 5xx 状态码抛出异常
+            # --- 核心修改：在请求中加入 proxies 参数 ---
+            response = requests.post(api_url, json=payload, timeout=15, proxies=proxies)
             response.raise_for_status()
             
             result = response.json()
@@ -55,11 +63,9 @@ class NotificationManager:
                 return {"success": False, "message": f"API错误: {error_msg}"}
 
         except requests.exceptions.RequestException as e:
-            # 包含了 HTTPError, ConnectionError 等
             error_details = f"网络错误: {e}"
             if e.response is not None:
                 try:
-                    # 尝试解析 Telegram 返回的更详细的错误信息
                     error_body = e.response.json()
                     error_details = f"API请求失败: {error_body.get('description', e.response.text)}"
                 except Exception:

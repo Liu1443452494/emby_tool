@@ -1434,11 +1434,15 @@ def save_telegram_config_api(config: TelegramConfig):
 @app.post("/api/notification/test-telegram")
 def test_telegram_api(config: TelegramConfig):
     """测试发送一条 Telegram 消息"""
-    # --- 核心修改：对原始文本进行转义 ---
+    # --- 核心修改：加载完整配置，并将临时测试配置覆盖上去 ---
+    current_app_config = app_config.load_app_config()
+    current_app_config.telegram_config = config # 使用用户正在测试的配置
+    
     raw_message = "🎉 这是一条来自 Emby-Toolkit 的测试消息！\n如果能看到我，说明您的通知配置正确无误。"
     test_message = escape_markdown(raw_message)
+    
+    result = notification_manager.send_telegram_message(test_message, current_app_config)
     # --- 修改结束 ---
-    result = notification_manager.send_telegram_message(test_message, config)
     if result["success"]:
         return result
     else:
