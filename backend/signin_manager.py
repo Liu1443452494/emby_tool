@@ -92,11 +92,10 @@ class SigninManager:
             ui_logger.info(f"✅ 模块 [{module_id}] 的统计数据已重置。", task_category="签到管理器")
             return True
         return False
-
+    
     
 
-    # backend/signin_manager.py (函数替换 - 最终修复版)
-
+    
     def run_signin(self, module_id: str, cancellation_event: threading.Event, task_id: str, task_manager: Any, is_manual_trigger: bool = False):
         """由 TaskManager 调用的签到执行函数"""
         module = self.modules.get(module_id)
@@ -160,18 +159,21 @@ class SigninManager:
             
             status_icon = "✅" if "成功" in status or "已签到" in status else "❌"
             
-            # --- 核心修改：转义所有动态内容，并修复硬编码的分割线 ---
             escaped_module_name = escape_markdown(module.module_name)
             escaped_status = escape_markdown(status)
             escaped_message = escape_markdown(message)
             
-            # 分割线也需要转义
-            separator = escape_markdown("--------------------------------------")
+            separator = escape_markdown("---------------")
             
-            points_info = f"\n*积分*: `{result.get('points', 'N/A')}`" if result.get('points') != "—" else ""
-            days_info = f"\n*连续*: `{result.get('days', 'N/A')} 天`" if result.get('days') != "—" else ""
+            points_info = f"\n*本次获得*: `{result.get('points', 'N/A')}`" if result.get('points') != "—" else ""
+            days_info = f"\n*连续签到*: `{result.get('days', 'N/A')} 天`" if result.get('days') != "—" else ""
             
-            # 构造最终消息
+            # --- 核心修改：增加总积分信息 ---
+            current_points_info = ""
+            if 'current_points' in result:
+                current_points_info = f"\n*当前总计*: `{result['current_points']}`"
+            # --- 修改结束 ---
+            
             notification_message = (
                 f"*{escaped_module_name}*\n"
                 f"{separator}\n"
@@ -179,8 +181,8 @@ class SigninManager:
                 f"*详情*: `{escaped_message}`"
                 f"{points_info}"
                 f"{days_info}"
+                f"{current_points_info}" # 添加到消息末尾
             )
-            # --- 修改结束 ---
             notification_manager.send_telegram_message(notification_message, current_config.telegram_config)
         except Exception as e:
             ui_logger.error(f"❗ 发送签到通知时发生未知错误: {e}", task_category=task_cat, exc_info=True)
