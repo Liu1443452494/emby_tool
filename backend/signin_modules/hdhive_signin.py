@@ -35,7 +35,7 @@ class HdhiveSignInModule:
             "consecutive_days": self.data.get("consecutive_days", 0),
         }
 
-    def sign(self, retry_count=0) -> Dict[str, Any]:
+    def sign(self, retry_count=0, proxies=None) -> Dict[str, Any]:
         """
         执行签到核心逻辑。
         返回一个包含签到结果的字典。
@@ -47,13 +47,13 @@ class HdhiveSignInModule:
             return self._create_record("签到失败", "未配置Cookie")
 
         try:
-            state, message = self._signin_base()
+            # --- 核心修改：传递 proxies ---
+            state, message = self._signin_base(proxies=proxies)
             
             if state:
                 ui_logger.info(f"✅ API返回消息: {message}", task_category=self.task_category)
                 sign_status = "已签到" if "签到过" in message else "签到成功"
                 
-                # 计算连续签到天数
                 today_str = datetime.now().strftime('%Y-%m-%d')
                 last_date_str = self.data.get('last_success_date')
                 consecutive_days = self.data.get('consecutive_days', 0)
@@ -68,7 +68,6 @@ class HdhiveSignInModule:
                     self.data['consecutive_days'] = consecutive_days
                     self.data['last_success_date'] = today_str
 
-                # 解析奖励积分
                 points_match = re.search(r'获得 (\d+) 积分', message)
                 points = int(points_match.group(1)) if points_match else "—"
 
@@ -79,7 +78,8 @@ class HdhiveSignInModule:
                 if retry_count < self.config.max_retries:
                     ui_logger.warning(f"🔄 将在 {self.config.retry_interval} 秒后进行第 {retry_count + 1} 次重试...", task_category=self.task_category)
                     time.sleep(self.config.retry_interval)
-                    return self.sign(retry_count + 1)
+                    # --- 核心修改：在重试时也传递 proxies ---
+                    return self.sign(retry_count + 1, proxies=proxies)
                 else:
                     ui_logger.error("❗ 所有重试均已失败。", task_category=self.task_category)
                     return self._create_record("签到失败", f"{message} (已达最大重试次数)")
@@ -88,7 +88,7 @@ class HdhiveSignInModule:
             ui_logger.error(f"❗ 签到过程中发生未知异常: {e}", task_category=self.task_category, exc_info=True)
             return self._create_record("签到失败", f"未知异常: {e}")
 
-    def _signin_base(self) -> Tuple[bool, str]:
+    def _signin_base(self, proxies=None) -> Tuple[bool, str]:
         """实际的HTTP请求逻辑"""
         cookies = {item.split('=')[0]: item.split('=')[1] for item in self.config.cookie.split('; ') if '=' in item}
         token = cookies.get('token')
@@ -117,7 +117,8 @@ class HdhiveSignInModule:
             headers['x-csrf-token'] = csrf_token
 
         try:
-            res = self.scraper.post(url=self._signin_api, headers=headers, cookies=cookies, timeout=60)
+            # --- 核心修改：增加 proxies 参数 ---
+            res = self.scraper.post(url=self._signin_api, headers=headers, cookies=cookies, timeout=60, proxies=proxies)
             ui_logger.debug(f"   - [调试] 请求完成，HTTP状态码: {res.status_code}", task_category=self.task_category)
             
             if res.status_code not in [200, 400]:

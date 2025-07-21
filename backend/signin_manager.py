@@ -95,8 +95,6 @@ class SigninManager:
 
     
 
-    # backend/signin_manager.py (函数替换 - 最终修复版)
-
     def run_signin(self, module_id: str, cancellation_event: threading.Event, task_id: str, task_manager: Any, is_manual_trigger: bool = False):
         """由 TaskManager 调用的签到执行函数"""
         module = self.modules.get(module_id)
@@ -122,9 +120,22 @@ class SigninManager:
             except Exception as e:
                 ui_logger.warning(f"⚠️ 解析随机延迟配置失败 ({module.config.random_delay})，将立即执行。错误: {e}", task_category=task_cat)
 
-        ui_logger.info(f"▶️ 开始执行模块 [{module.module_name}] 的签到任务...", task_category=task_cat)
+        # --- 核心修改：集成代理管理器 ---
+        current_config = app_config.load_app_config()
+        from proxy_manager import ProxyManager
+        proxy_manager = ProxyManager(current_config)
+        # 获取模块的API地址来判断是否需要代理
+        target_url = getattr(module, '_signin_api', '')
+        proxies = proxy_manager.get_proxies(target_url) if target_url else {}
         
-        result = module.sign()
+        if proxies:
+            ui_logger.info(f"➡️ 检测到代理配置，将通过代理 {proxies.get('http')} 执行签到...", task_category=task_cat)
+        else:
+            ui_logger.info(f"▶️ 开始执行模块 [{module.module_name}] 的签到任务...", task_category=task_cat)
+        
+        # 将代理配置传递给签到方法
+        result = module.sign(proxies=proxies)
+        # --- 修改结束 ---
         
         module_data = self.signin_data.setdefault(module_id, {})
         history = module_data.setdefault("history", [])
@@ -155,23 +166,23 @@ class SigninManager:
             ui_logger.error(f"❌ 任务执行失败！详情: {message}", task_category=task_cat)
         
         try:
-            current_config = app_config.load_app_config()
             from notification_manager import notification_manager, escape_markdown
             
             status_icon = "✅" if "成功" in status or "已签到" in status else "❌"
             
-            # --- 核心修改：转义所有动态内容，并修复硬编码的分割线 ---
             escaped_module_name = escape_markdown(module.module_name)
             escaped_status = escape_markdown(status)
             escaped_message = escape_markdown(message)
             
-            # 分割线也需要转义
             separator = escape_markdown("--------------------------------------")
             
-            points_info = f"\n*积分*: `{result.get('points', 'N/A')}`" if result.get('points') != "—" else ""
-            days_info = f"\n*连续*: `{result.get('days', 'N/A')} 天`" if result.get('days') != "—" else ""
+            points_info = f"\n*本次获得*: `{result.get('points', 'N/A')}`" if result.get('points') != "—" else ""
+            days_info = f"\n*连续签到*: `{result.get('days', 'N/A')} 天`" if result.get('days') != "—" else ""
             
-            # 构造最终消息
+            current_points_info = ""
+            if 'current_points' in result:
+                current_points_info = f"\n*当前总计*: `{result['current_points']}`"
+            
             notification_message = (
                 f"*{escaped_module_name}*\n"
                 f"{separator}\n"
@@ -179,13 +190,12 @@ class SigninManager:
                 f"*详情*: `{escaped_message}`"
                 f"{points_info}"
                 f"{days_info}"
+                f"{current_points_info}"
             )
-            # --- 修改结束 ---
             notification_manager.send_telegram_message(notification_message, current_config)
         except Exception as e:
             ui_logger.error(f"❗ 发送签到通知时发生未知错误: {e}", task_category=task_cat, exc_info=True)
         
         ui_logger.info(f"🎉 签到任务流程执行完毕。", task_category=task_cat)
-
 # 创建一个单例
 signin_manager = SigninManager()
