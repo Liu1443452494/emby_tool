@@ -1,4 +1,4 @@
-<!-- frontend/src/views/LogView.vue (完整文件覆盖 - 最终修正版) -->
+<!-- frontend/src/views/LogView.vue (完整文件覆盖) -->
 <template>
   <div class="log-page">
     <div class="page-header">
@@ -15,6 +15,25 @@
           <el-radio-button label="ERROR">错误</el-radio-button>
           <el-radio-button label="ALL">全部</el-radio-button>
         </el-radio-group>
+
+        <!-- --- 新增：任务类别过滤器 --- -->
+        <el-select
+          v-model="selectedCategoryProxy"
+          placeholder="按任务类别过滤"
+          clearable
+          filterable
+          @change="handleCategoryChange"
+          style="width: 240px;"
+        >
+          <el-option
+            v-for="category in logStore.logCategories"
+            :key="category"
+            :label="category"
+            :value="category"
+          />
+        </el-select>
+        <!-- --- 新增结束 --- -->
+
       </div>
       <div class="right-controls">
         <el-select 
@@ -32,7 +51,6 @@
       </div>
     </div>
 
-    <!-- --- 核心修改：恢复为原生 v-for 循环 --- -->
     <div class="log-container">
       <div v-if="logStore.logs.length > 0" class="log-content">
         <div v-for="(log, index) in logStore.logs" :key="index" class="log-line">
@@ -47,7 +65,6 @@
       </div>
       <el-empty v-else description="暂无日志" />
     </div>
-    <!-- --- 修改结束 --- -->
 
     <!-- 分页器 -->
     <div class="pagination-footer">
@@ -80,8 +97,16 @@ const pageSizeProxy = computed({
   set: (val) => {}
 });
 
+// --- 新增：类别选择器的代理 ---
+const selectedCategoryProxy = computed({
+  get: () => logStore.selectedCategory,
+  set: (val) => {}
+});
+// --- 新增结束 ---
+
 onMounted(() => {
   logStore.fetchHistoricalLogs(1);
+  logStore.fetchLogCategories(); // 获取类别列表
   logStore.connect();
 });
 
@@ -97,12 +122,21 @@ const handleLevelChange = (newLevel) => {
   logStore.setLogLevelAndFetch(newLevel);
 };
 
+// --- 新增：类别变更处理函数 ---
+const handleCategoryChange = (newCategory) => {
+  logStore.setCategoryAndFetch(newCategory);
+};
+// --- 新增结束 ---
+
 const handlePageSizeChange = (newPageSize) => {
   logStore.setPageSizeAndFetch(newPageSize);
 };
 
 const getLineNumber = (index) => {
-  return (logStore.currentPage - 1) * logStore.pageSize + index + 1;
+  // --- 核心修改：行号计算现在基于 totalLogs 而不是 logs.length ---
+  // 这确保了翻页时行号是连续的
+  const startIndex = logStore.totalLogs - (logStore.currentPage - 1) * logStore.pageSize;
+  return startIndex - index;
 };
 </script>
 
@@ -141,7 +175,7 @@ const getLineNumber = (index) => {
   background-color: #292A2D; 
   border-radius: 8px;
   padding: 10px 0;
-  overflow-y: auto; /* 容器自身可以滚动 */
+  overflow-y: auto;
   border: 1px solid var(--el-border-color-lighter);
   position: relative;
 }
@@ -157,7 +191,6 @@ const getLineNumber = (index) => {
   align-items: baseline;
   line-height: 1.6;
   padding: 2px 10px;
-  /* 移除 white-space: pre; */
 }
 .log-line:hover {
   background-color: rgba(255, 255, 255, 0.05);

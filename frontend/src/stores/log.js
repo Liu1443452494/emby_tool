@@ -15,33 +15,61 @@ export const useLogStore = defineStore('log', () => {
   let ws = null
   let reconnectTimer = null
 
+  // --- 新增：类别过滤相关状态 ---
+  const logCategories = ref([])
+  const selectedCategory = ref('')
+  // --- 新增结束 ---
+
   const totalPages = computed(() => Math.ceil(totalLogs.value / pageSize.value))
 
   const showMessage = (type, message) => {
     ElMessage({ message, type, showClose: true, duration: 3000 })
   }
 
+  // --- 修改：fetchHistoricalLogs 函数，增加 category 参数 ---
   async function fetchHistoricalLogs(page = 1) {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/logs?page=${page}&page_size=${pageSize.value}&level=${logLevel.value}`)
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || '获取历史日志失败')
+      let url = `${API_BASE_URL}/api/logs?page=${page}&page_size=${pageSize.value}&level=${logLevel.value}`;
+      if (selectedCategory.value) {
+        url += `&category=${encodeURIComponent(selectedCategory.value)}`;
+      }
       
-      // --- 核心修改：不再需要添加 id ---
-      logs.value = data.logs
-      // --- 修改结束 ---
+      const response = await fetch(url);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '获取历史日志失败');
       
-      totalLogs.value = data.total
-      currentPage.value = page
+      logs.value = data.logs;
+      totalLogs.value = data.total;
+      currentPage.value = page;
     } catch (error) {
-      showMessage('error', `获取历史日志失败: ${error.message}`)
+      showMessage('error', `获取历史日志失败: ${error.message}`);
     }
   }
+  // --- 修改结束 ---
+
+  // --- 新增：获取所有日志类别 ---
+  async function fetchLogCategories() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/logs/categories`);
+      if (!response.ok) throw new Error('获取日志类别列表失败');
+      logCategories.value = await response.json();
+    } catch (error) {
+      showMessage('error', `获取类别失败: ${error.message}`);
+    }
+  }
+  // --- 新增结束 ---
 
   async function setLogLevelAndFetch(newLevel) {
     logLevel.value = newLevel;
     await fetchHistoricalLogs(1);
   }
+
+  // --- 新增：设置类别并重新获取日志 ---
+  async function setCategoryAndFetch(newCategory) {
+    selectedCategory.value = newCategory || ''; // 如果传入 null 或 undefined，则重置为空字符串
+    await fetchHistoricalLogs(1);
+  }
+  // --- 新增结束 ---
 
   async function setPageSizeAndFetch(newPageSize) {
     pageSize.value = newPageSize;
@@ -62,20 +90,21 @@ export const useLogStore = defineStore('log', () => {
       const currentLevel = logLevel.value.toUpperCase();
       const logItemLevel = logData.level.toUpperCase();
       
-      const isVisibleAtCurrentLevel = currentLevel === 'ALL' || logItemLevel === currentLevel;
+      // --- 修改：增加类别匹配逻辑 ---
+      const categoryMatches = !selectedCategory.value || logData.category === selectedCategory.value;
+      const levelMatches = currentLevel === 'ALL' || logItemLevel === currentLevel;
       
-      if (isVisibleAtCurrentLevel) {
+      if (levelMatches && categoryMatches) {
         totalLogs.value++;
 
         if (currentPage.value === 1) {
-          // --- 核心修改：不再需要添加 id ---
           logs.value.unshift(logData);
-          // --- 修改结束 ---
           if (logs.value.length > pageSize.value) {
             logs.value.pop();
           }
         }
       }
+      // --- 修改结束 ---
     }
     ws.onclose = () => {
       isConnected.value = false
@@ -105,6 +134,9 @@ export const useLogStore = defineStore('log', () => {
       logs.value = []
       totalLogs.value = 0
       currentPage.value = 1
+      // --- 新增：清空日志后也要刷新类别列表 ---
+      await fetchLogCategories();
+      // --- 新增结束 ---
       showMessage('success', '日志已成功清空！')
     } catch (error) {
       if (error !== 'cancel') { 
@@ -115,7 +147,9 @@ export const useLogStore = defineStore('log', () => {
 
   return { 
     logs, totalLogs, currentPage, totalPages, isConnected, logLevel, pageSize,
+    logCategories, selectedCategory, // 导出新状态
     fetchHistoricalLogs, connect, disconnect, clearLogs, setLogLevelAndFetch,
-    setPageSizeAndFetch
+    setPageSizeAndFetch,
+    fetchLogCategories, setCategoryAndFetch // 导出新方法
   }
 })

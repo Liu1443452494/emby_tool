@@ -25,6 +25,7 @@ from episode_renamer_router import router as episode_renamer_router
 from poster_manager_router import router as poster_manager_router
 from actor_role_mapper_router import router as actor_role_mapper_router
 from actor_avatar_mapper_router import router as actor_avatar_mapper_router
+from signin_router import router as signin_router
 
 from media_selector import MediaSelector
 from models import ScheduledTasksConfig, ScheduledTasksTargetScope
@@ -448,6 +449,23 @@ async def lifespan(app: FastAPI):
             ui_logger.info(f"【调度任务】已成功设置演员中文化自动应用任务，CRON表达式: '{actor_conf.apply_cron}'", task_category=task_cat)
         except Exception as e:
             ui_logger.error(f"【调度任务】设置演员中文化自动应用任务失败，CRON表达式可能无效: {e}", task_category=task_cat)
+
+    ui_logger.info("【调度任务】开始设置签到模块任务...", task_category=task_cat)
+    from signin_manager import signin_manager
+    for module_id, module in signin_manager.modules.items():
+        if module.config.enabled and module.config.cron:
+            try:
+                scheduler.add_job(
+                    signin_manager.run_signin,
+                    CronTrigger.from_crontab(module.config.cron),
+                    id=f"signin_{module_id}",
+                    replace_existing=True,
+                    args=[module_id],
+                    kwargs={'cancellation_event': None, 'task_id': None, 'task_manager': None} # 兼容 task_manager 包装
+                )
+                ui_logger.info(f"  - 已成功设置定时任务 '{module.module_name}'，CRON表达式: '{module.config.cron}'", task_category=task_cat)
+            except Exception as e:
+                ui_logger.error(f"  - 设置定时任务 '{module.module_name}' 失败，CRON表达式可能无效: {e}", task_category=task_cat)
     
     ui_logger.info("【调度任务】开始设置通用定时任务...", task_category=task_cat)
     scheduled_conf = config.scheduled_tasks_config
@@ -497,6 +515,7 @@ app.include_router(episode_renamer_router, prefix="/api/episode-renamer")
 app.include_router(poster_manager_router, prefix="/api/poster-manager")
 app.include_router(actor_role_mapper_router, prefix="/api/actor-role-mapper")
 app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper")
+app.include_router(signin_router, prefix="/api/signin")
 
 
 @app.get("/api/image-proxy")
@@ -823,8 +842,10 @@ def force_refresh_douban_data_api():
     return {"status": "success", "message": "强制刷新任务已启动，请在“运行任务”页面查看进度。", "task_id": task_id}
 LOG_FILE = os.path.join('/app/data', "app.log")
 
+# backend/main.py (函数替换)
+
 @app.get("/api/logs")
-def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1), level: str = Query("INFO")):
+def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1), level: str = Query("INFO"), category: Optional[str] = Query(None)):
     if not os.path.exists(LOG_FILE):
         return {"total": 0, "logs": []}
     
@@ -856,6 +877,8 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1),
             parsed_logs.append(current_log_entry)
 
         filtered_logs = []
+        
+        # 级别过滤 (保持不变)
         if level != "ALL":
             level_to_match = level.upper()
             for log in parsed_logs:
@@ -864,7 +887,15 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1),
         else:
             filtered_logs = parsed_logs
         
-        total_logs = len(filtered_logs)
+        # --- 新增：按类别过滤 ---
+        if category:
+            # 从已经按级别过滤过的日志中再次过滤
+            final_filtered_logs = [log for log in filtered_logs if log.get('category', '').strip() == category]
+        else:
+            final_filtered_logs = filtered_logs
+        # --- 新增结束 ---
+        
+        total_logs = len(final_filtered_logs)
         start_index = total_logs - ((page - 1) * page_size) - 1
         end_index = start_index - page_size
         
@@ -872,12 +903,37 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1),
         for i in range(start_index, end_index, -1):
             if i < 0:
                 break
-            paginated_logs.append(filtered_logs[i])
+            paginated_logs.append(final_filtered_logs[i])
             
         return {"total": total_logs, "logs": paginated_logs}
     except Exception as e:
         logging.error(f"读取日志文件失败: {e}")
         raise HTTPException(status_code=500, detail=f"读取日志文件失败: {e}")
+    
+# backend/main.py (新增代码块)
+
+@app.get("/api/logs/categories")
+def get_log_categories_api():
+    """扫描日志文件并返回所有唯一的任务类别"""
+    if not os.path.exists(LOG_FILE):
+        return []
+    
+    try:
+        categories = set()
+        log_pattern = re.compile(r"-\s+(.+?)\s+→")
+
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                match = log_pattern.search(line)
+                if match:
+                    # strip() 用于去除可能存在的前后空格
+                    categories.add(match.group(1).strip())
+        
+        # 返回排序后的列表以保证前端显示顺序稳定
+        return sorted(list(categories))
+    except Exception as e:
+        logging.error(f"扫描日志类别失败: {e}")
+        raise HTTPException(status_code=500, detail=f"扫描日志类别失败: {e}")
     
 @app.delete("/api/logs")
 def clear_logs_api():
@@ -1198,6 +1254,35 @@ def save_scheduled_tasks_config_api(config: ScheduledTasksConfig):
     except Exception as e:
         logging.error(f"保存通用定时任务设置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+    
+
+def update_signin_scheduler():
+    """更新签到模块的定时任务"""
+    task_cat = "系统配置"
+    ui_logger.info("【调度任务】检测到签到配置变更，正在更新调度器...", task_category=task_cat)
+    from signin_manager import signin_manager
+    
+    # 先移除所有旧的签到任务
+    for job in scheduler.get_jobs():
+        if job.id.startswith("signin_"):
+            scheduler.remove_job(job.id)
+            ui_logger.info(f"  - 已移除旧的定时任务: {job.id}", task_category=task_cat)
+
+    # 重新添加所有启用的任务
+    for module_id, module in signin_manager.modules.items():
+        if module.config.enabled and module.config.cron:
+            try:
+                scheduler.add_job(
+                    signin_manager.run_signin,
+                    CronTrigger.from_crontab(module.config.cron),
+                    id=f"signin_{module_id}",
+                    replace_existing=True,
+                    args=[module_id],
+                    kwargs={'cancellation_event': None, 'task_id': None, 'task_manager': None}
+                )
+                ui_logger.info(f"  - 已更新/添加任务 '{module.module_name}' (CRON: {module.config.cron})", task_category=task_cat)
+            except Exception as e:
+                ui_logger.error(f"  - 更新任务 '{module.module_name}' 失败: {e}", task_category=task_cat)
     
 @app.post("/api/scheduled-tasks/{task_id}/trigger")
 def trigger_scheduled_task_once_api(task_id: str):
