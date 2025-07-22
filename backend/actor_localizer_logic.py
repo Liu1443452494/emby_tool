@@ -172,7 +172,7 @@ class ActorLocalizerLogic:
             ui_logger.error(f"     -- ❌ 演员重命名时发生未知错误: {e}", task_category=task_category, exc_info=True)
             return False
 
-    def _translate_text_with_retry(self, text: str, config: ActorLocalizerConfig, context_title: Optional[str] = None) -> str:
+    def _translate_text_with_retry(self, text: str, config: ActorLocalizerConfig, context_info: Optional[Dict[str, Any]] = None) -> str:
         task_cat = f"翻译引擎({config.translation_mode})" # --- 定义任务类别 ---
         if not text: return ""
         max_retries = 3
@@ -188,8 +188,11 @@ class ActorLocalizerLogic:
                     ui_logger.debug(f"[腾讯云API] 正在翻译: '{text}'", task_category=task_cat)
                     return self.translate_with_tencent_api(text, config.tencent_config)
                 elif config.translation_mode == 'siliconflow':
-                    ui_logger.debug(f"[SiliconFlow:{config.siliconflow_config.model_name}] 正在翻译: '{text}' (上下文: {context_title or '无'})", task_category=task_cat)
-                    return self.translate_with_siliconflow_api(text, config.siliconflow_config, context_title)
+                    # --- 修改：传递更丰富的上下文 ---
+                    context_log = context_info.get('title', '无') if context_info else '无'
+                    ui_logger.debug(f"[SiliconFlow:{config.siliconflow_config.model_name}] 正在翻译: '{text}' (上下文: {context_log})", task_category=task_cat)
+                    return self.translate_with_siliconflow_api(text, config.siliconflow_config, context_info)
+                    # --- 修改结束 ---
                 return text
             except requests.exceptions.RequestException as e:
                 ui_logger.error(f"翻译 '{text}' 时发生网络错误 (尝试 {attempt + 1}/{max_retries}): {e}", task_category=task_cat)
@@ -201,7 +204,7 @@ class ActorLocalizerLogic:
                 return text
         return text
 
-    def _translate_batch_with_retry(self, texts: List[str], config: ActorLocalizerConfig, context_title: Optional[str] = None) -> Optional[List[str]]:
+    def _translate_batch_with_retry(self, texts: List[str], config: ActorLocalizerConfig, context_info: Optional[Dict[str, Any]] = None) -> Optional[List[str]]:
         task_cat = f"翻译引擎({config.translation_mode})" # --- 定义任务类别 ---
         if not texts: return []
         max_retries = 3
@@ -210,9 +213,12 @@ class ActorLocalizerLogic:
                 if attempt > 0:
                     ui_logger.warning(f"第 {attempt + 1}/{max_retries} 次重试批量翻译 (共 {len(texts)} 项)...", task_category=task_cat)
                 if config.translation_mode == 'siliconflow':
-                    ui_logger.debug(f"[SiliconFlow:{config.siliconflow_config.model_name}] 正在批量翻译 {len(texts)} 个角色名 (上下文: {context_title or '无'})", task_category=task_cat)
+                    # --- 修改：传递更丰富的上下文 ---
+                    context_log = context_info.get('title', '无') if context_info else '无'
+                    ui_logger.debug(f"[SiliconFlow:{config.siliconflow_config.model_name}] 正在批量翻译 {len(texts)} 个角色名 (上下文: {context_log})", task_category=task_cat)
                     logging.debug(f"【翻译-批量】请求内容: {texts}") # 保留底层详细日志
-                    translated_texts = self.translate_with_siliconflow_api_batch(texts, config.siliconflow_config, context_title)
+                    translated_texts = self.translate_with_siliconflow_api_batch(texts, config.siliconflow_config, context_info)
+                    # --- 修改结束 ---
                     logging.debug(f"【翻译-批量】返回内容: {translated_texts}") # 保留底层详细日志
                     if len(translated_texts) != len(texts):
                         ui_logger.error(f"严重错误：API返回结果数量 ({len(translated_texts)}) 与请求数量 ({len(texts)}) 不匹配！", task_category=task_cat)
@@ -229,7 +235,6 @@ class ActorLocalizerLogic:
                     return None
         return None
     
-    # backend/actor_localizer_logic.py (函数替换)
 
     def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig, task_category: str) -> bool:
         details = self._get_item_details(item_id)
@@ -317,7 +322,6 @@ class ActorLocalizerLogic:
                 if self._contains_chinese(original_role):
                     continue
 
-                # --- 核心修改：引入黑名单判断 ---
                 is_valid_douban_role = douban_role and self._contains_chinese(douban_role)
                 if is_valid_douban_role and config.ignore_generic_douban_roles:
                     if douban_role.strip() in config.generic_role_blacklist:
@@ -328,7 +332,6 @@ class ActorLocalizerLogic:
                     ui_logger.info(f"     -- 角色名更新: {current_actor_name_for_log}: '{original_role}' -> '{douban_role}' (来自豆瓣)", task_category=task_category)
                     person['Role'] = douban_role
                     has_changes = True
-                # --- 修改结束 ---
                 elif config.replace_english_role and self._is_pure_english(original_role):
                     new_role = "演员"
                     ui_logger.info(f"     -- 角色名更新: {current_actor_name_for_log}: '{original_role}' -> '{new_role}' (来自暴力替换)", task_category=task_category)
@@ -349,6 +352,16 @@ class ActorLocalizerLogic:
         if config.translation_enabled and actors_to_translate:
             ui_logger.info(f"【翻译】为媒体《{item_name}》收集到 {len(actors_to_translate)} 个待翻译角色。", task_category=task_category)
             
+            # --- 新增：构建上下文信息 ---
+            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+            context_info = {
+                "title": item_name,
+                "year": details.get("ProductionYear"),
+                "type": "电视剧" if details.get("Type") == "Series" else "电影",
+                "tmdb_id": provider_ids_lower.get("tmdb")
+            }
+            # --- 新增结束 ---
+
             use_batch = (config.translation_mode == 'siliconflow' and config.siliconflow_config.batch_translation_enabled)
             
             if use_batch:
@@ -358,7 +371,9 @@ class ActorLocalizerLogic:
 
                 ui_logger.info("【翻译】检测到批量翻译已开启，开始尝试批量处理...", task_category=task_category)
                 original_roles = [actor['role'] for actor in actors_to_translate]
-                translated_roles = self._translate_batch_with_retry(original_roles, config, item_name)
+                # --- 修改：传递上下文 ---
+                translated_roles = self._translate_batch_with_retry(original_roles, config, context_info)
+                # --- 修改结束 ---
                 
                 if translated_roles:
                     ui_logger.info("【翻译】批量翻译成功，开始应用结果。", task_category=task_category)
@@ -382,8 +397,10 @@ class ActorLocalizerLogic:
                     if config.api_cooldown_enabled and config.api_cooldown_time > 0:
                         ui_logger.debug(f"【翻译】API冷却 (单个模式)，等待 {config.api_cooldown_time} 秒...", task_category=task_category)
                         time.sleep(config.api_cooldown_time)
-
-                    new_role = self._translate_text_with_retry(actor_info['role'], config, item_name)
+                    
+                    # --- 修改：传递上下文 ---
+                    new_role = self._translate_text_with_retry(actor_info['role'], config, context_info)
+                    # --- 修改结束 ---
                     if new_role and new_role != actor_info['role']:
                         has_changes = True
                         for person in new_people_list:
@@ -483,7 +500,7 @@ class ActorLocalizerLogic:
         return result.get("TargetText", text)
 
     @staticmethod
-    def translate_with_siliconflow_api(text: str, config: SiliconflowApiConfig, context_title: Optional[str] = None) -> str:
+    def translate_with_siliconflow_api(text: str, config: SiliconflowApiConfig, context_info: Optional[Dict[str, Any]] = None) -> str:
         url = "https://api.siliconflow.cn/v1/chat/completions"
         system_prompt = """你是一位专业的影视剧翻译专家，尤其擅长将英文或拼音格式的人名和角色名，翻译成符合中文影视圈习惯的、最常见的官方或通用译名。
 
@@ -493,11 +510,32 @@ class ActorLocalizerLogic:
 3.  **处理混合内容**：如果输入是 `Maj. Sophie E. Jean`，请翻译成“苏菲·E·让少校”，保留军衔等上下文。
 4.  **保持原文**：如果输入的内容已经是中文，或者是一个你无法识别为有效人名/角色名的无意义词汇，请直接返回原文。
 5.  **力求精准**：翻译结果必须追求“信、达、雅”，优先使用官方译名。
-6.  **对于一些中国耳熟能详的如“MJ、DJ、M、Q”等超短大写英文名缩写，直接返回原文。"""
-        if context_title:
-            user_prompt = f"请根据影视作品《{context_title}》的上下文，翻译以下角色名：\n\n{text}"
+6.  **对于一些中国耳熟能详的如“MJ、DJ、M、Q”等超短大写英文名缩写，直接返回原文。
+7.  **上下文优先原则 (重要)**：
+    *   你必须**优先利用**我提供给你的影视作品上下文来决定译名。如果该作品有公认的官方或通用译名，你必须使用它。
+    *   **示例**：在电影《极乐空间》的上下文中，角色代号 `Spider` 的通用译名是 `蜘蛛`（意译），你必须返回此结果，而不是音译“斯派德”。"""
+
+        
+        # --- 新增：构建更丰富的上下文描述 ---
+        if context_info and context_info.get('title'):
+            title = context_info['title']
+            year = context_info.get('year')
+            media_type = context_info.get('type', '影视作品')
+            tmdb_id = context_info.get('tmdb_id')
+            
+            context_parts = [f"一部于 {year} 年上映的{media_type}"] if year else [f"一部{media_type}"]
+            context_parts.append(f"《{title}》")
+            if tmdb_id:
+                context_parts.append(f"(TMDB ID: {tmdb_id})")
+            
+            context_description = "，".join(context_parts)
+            user_prompt = f"请在以下影视作品的上下文中进行翻译：{context_description}。请翻译以下角色名：\n\n{text}"
         else:
             user_prompt = f"请翻译以下人名或角色名：\n\n{text}"
+
+        logging.info(f"【翻译-单次】最终生成的 User Prompt:\n{user_prompt}")
+        # --- 新增结束 ---
+
         payload = {
             "model": config.model_name,
             "messages": [
@@ -519,7 +557,7 @@ class ActorLocalizerLogic:
         raise Exception(f"SiliconFlow API 响应格式不正确: {result}")
 
     @staticmethod
-    def translate_with_siliconflow_api_batch(texts: List[str], config: SiliconflowApiConfig, context_title: Optional[str] = None) -> List[str]:
+    def translate_with_siliconflow_api_batch(texts: List[str], config: SiliconflowApiConfig, context_info: Optional[Dict[str, Any]] = None) -> List[str]:
         url = "https://api.siliconflow.cn/v1/chat/completions"
         system_prompt = """你是一个严格遵守指令的、用于程序化调用的翻译API。你的核心任务是将一个包含多个角色名的JSON数组，翻译成一个包含对应中文译名的、新的JSON数组。
 
@@ -533,7 +571,22 @@ class ActorLocalizerLogic:
     *   **精准翻译**：将英文或拼音格式的人名和角色名，翻译成符合中文影视圈习惯的、最常见的官方或通用译名。
     *   **保留上下文**：如果输入是 `Maj. Sophie E. Jean`，请翻译成“苏菲·E·让少校”。
     *   **保持原文**：如果输入已经是中文、无法识别为人名/角色名、或者是常见的英文缩写（如 MJ, DJ, CEO），请在输出数组的对应位置直接返回原始文本。
-6.  **示例**：
+6.  **核心名称一致性原则 (重要)**：
+    *   在处理整个列表时，你必须识别出指向同一人物的不同角色名变体（例如 "Max", "Young Max"）。
+    *   你必须确保这些变体中的核心人物名称（"Max"）在整个输出数组中拥有完全相同的中文译名。
+    *   你可以翻译前缀或后缀等描述性词语，但核心名称的翻译绝不能改变。
+    *   **正确示例**：输入 `["Max", "Young Max"]`，正确的输出是 `["麦克斯", "年轻的麦克斯"]` 或 `["麦克斯", "少年麦克斯"]`。
+    *   **错误示例**：输出 `["麦克斯", "小马克斯"]` 是错误的，因为核心名称 "Max" 的翻译不一致 ("麦克斯" vs "马克斯")。
+7.  **上下文优先原则 (重要)**：
+    *   你必须**优先利用**我提供给你的影视作品上下文来决定译名。如果该作品有公认的官方或通用译名，你必须使用它。
+    *   **示例**：在电影《极乐空间》的上下文中，角色代号 `Spider` 的通用译名是 `蜘蛛`（意译），你必须返回此结果，而不是音译“斯派德”。
+8.  **结构化角色名处理规则**：
+    *   对于包含数字和符号的角色名（如 `Henchman #2`），请翻译文本部分并**完整保留**数字和符号，输出 `打手2号`。
+    *   对于包含缩写的角色名（如 `S.W.A.T. Officer`），请翻译非缩写部分，并**保留英文缩写**，输出 `S.W.A.T. 警官`。
+9.  **东亚人名处理偏好**：
+    *   当遇到疑似东亚（特别是中、日、韩）的罗马音拼写时，请优先查找并使用最通行的汉字写法，而不是纯粹的音译。
+    *   **示例**：对于 `Yoon Se-ri`，`尹世理` 是比 `允瑟瑞` 更好的翻译。
+10. **示例**：
     *   如果输入是：`["Yoon Se-ri", "The President", "DJ"]`
     *   你的输出必须是：`["尹世理", "总统", "DJ"]`
 
@@ -543,10 +596,27 @@ class ActorLocalizerLogic:
 *   `["总统", "尹世理", "DJ"]` (顺序不匹配)
 *   `"尹世理", "总统", "DJ"` (不是合法的JSON数组格式)"""
         roles_json_array = json.dumps(texts, ensure_ascii=False)
-        if context_title:
-            user_prompt = f"请根据影视作品《{context_title}》的上下文，严格按照系统指令的要求，翻译以下JSON数组中的所有角色名：\n\n{roles_json_array}"
+        
+        # --- 新增：构建更丰富的上下文描述 ---
+        if context_info and context_info.get('title'):
+            title = context_info['title']
+            year = context_info.get('year')
+            media_type = context_info.get('type', '影视作品')
+            tmdb_id = context_info.get('tmdb_id')
+            
+            context_parts = [f"一部于 {year} 年上映的{media_type}"] if year else [f"一部{media_type}"]
+            context_parts.append(f"《{title}》")
+            if tmdb_id:
+                context_parts.append(f"(TMDB ID: {tmdb_id})")
+            
+            context_description = "，".join(context_parts)
+            user_prompt = f"请在以下影视作品的上下文中进行翻译：{context_description}。请严格按照系统指令的要求，翻译以下JSON数组中的所有角色名：\n\n{roles_json_array}"
         else:
             user_prompt = f"请严格按照系统指令的要求，翻译以下JSON数组中的所有角色名：\n\n{roles_json_array}"
+        # --- 新增结束 ---
+
+        logging.info(f"【翻译-批量】最终生成的 User Prompt:\n{user_prompt}")
+
         payload = {
             "model": config.model_name,
             "messages": [
@@ -574,6 +644,7 @@ class ActorLocalizerLogic:
                 logging.error(f"【翻译-批量】解析API返回的JSON数组失败: {e}。返回内容: {content}")
                 raise ValueError(f"Failed to parse batch translation response: {content}") from e
         raise Exception(f"SiliconFlow API 响应格式不正确: {result}")
+    
 
     def preview_actor_changes_task(self, target: TargetScope, config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = f"演员中文化预览({target.scope})"
@@ -624,7 +695,6 @@ class ActorLocalizerLogic:
             for emby_actor_name, original_role in emby_actors_to_match.items():
                 if emby_actor_name in douban_standard_roles:
                     new_role = douban_standard_roles[emby_actor_name]
-                    # --- 核心修改：同步预览逻辑 ---
                     should_apply_role = True
                     if config.ignore_generic_douban_roles:
                         if new_role.strip() in config.generic_role_blacklist:
@@ -636,7 +706,6 @@ class ActorLocalizerLogic:
                         ui_logger.info(f"     -- 预览更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自豆瓣)", task_category=task_cat)
                     else:
                         actors_to_process_further.append({'name': emby_actor_name, 'role': original_role})
-                    # --- 修改结束 ---
                 else:
                     actors_to_process_further.append({'name': emby_actor_name, 'role': original_role})
             if config.replace_english_role:
@@ -646,13 +715,24 @@ class ActorLocalizerLogic:
                         item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': new_role, 'source': 'replace'}
                         ui_logger.info(f"     -- 预览更新: {actor_info['name']}: '{actor_info['role']}' -> '{new_role}' (来自替换)", task_category=task_cat)
             elif config.translation_enabled and actors_to_process_further:
+                # --- 新增：构建上下文信息 ---
+                provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                context_info = {
+                    "title": item_name,
+                    "year": details.get("ProductionYear"),
+                    "type": "电视剧" if details.get("Type") == "Series" else "电影",
+                    "tmdb_id": provider_ids_lower.get("tmdb")
+                }
+                # --- 新增结束 ---
                 use_batch = (config.translation_mode == 'siliconflow' and config.siliconflow_config.batch_translation_enabled)
                 if use_batch:
                     if config.api_cooldown_enabled and config.api_cooldown_time > 0:
                         ui_logger.debug(f"【翻译】API冷却 (批量模式)，等待 {config.api_cooldown_time} 秒...", task_category=task_cat)
                         time.sleep(config.api_cooldown_time)
                     original_roles = [actor['role'] for actor in actors_to_process_further]
-                    translated_roles = self._translate_batch_with_retry(original_roles, config, item_name)
+                    # --- 修改：传递上下文 ---
+                    translated_roles = self._translate_batch_with_retry(original_roles, config, context_info)
+                    # --- 修改结束 ---
                     if translated_roles:
                         for i, actor_info in enumerate(actors_to_process_further):
                             new_role = translated_roles[i]
@@ -669,7 +749,9 @@ class ActorLocalizerLogic:
                         if config.api_cooldown_enabled and config.api_cooldown_time > 0:
                             ui_logger.debug(f"【翻译】API冷却 (单个模式)，等待 {config.api_cooldown_time} 秒...", task_category=task_cat)
                             time.sleep(config.api_cooldown_time)
-                        new_role = self._translate_text_with_retry(actor_info['role'], config, context_title=item_name)
+                        # --- 修改：传递上下文 ---
+                        new_role = self._translate_text_with_retry(actor_info['role'], config, context_info)
+                        # --- 修改结束 ---
                         if new_role and new_role != actor_info['role']:
                             item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': new_role, 'source': 'translation'}
                             ui_logger.info(f"     -- 预览更新: {actor_info['name']}: '{actor_info['role']}' -> '{new_role}' (来自单个翻译)", task_category=task_cat)
