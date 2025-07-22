@@ -275,7 +275,6 @@ class ActorLocalizerLogic:
                     reversed_latin_name_lower = f"{parts[1]} {parts[0]}".lower()
                     douban_actor_map[reversed_latin_name_lower] = info_package
 
-        # --- 核心修改：应用 person_limit 限制 ---
         all_actors = [p for p in people if p.get('Type') == 'Actor']
         other_people = [p for p in people if p.get('Type') != 'Actor']
         
@@ -283,17 +282,13 @@ class ActorLocalizerLogic:
         if len(all_actors) > config.person_limit:
             ui_logger.debug(f"     -- [演员裁切] 演员总数: {len(all_actors)}，根据设置将处理前 {config.person_limit} 位。", task_category=task_category)
         
-        # 重新组合需要处理的完整人员列表
         people_to_process = actors_to_process + other_people
         new_people_list = copy.deepcopy(people_to_process)
-        # --- 修改结束 ---
 
         has_changes = False
         actors_to_translate = []
 
-        # --- 核心修改：遍历裁切后的列表 ---
         for person in new_people_list:
-        # --- 修改结束 ---
             if person.get('Type') != 'Actor':
                 continue
 
@@ -322,10 +317,18 @@ class ActorLocalizerLogic:
                 if self._contains_chinese(original_role):
                     continue
 
-                if douban_role and self._contains_chinese(douban_role):
+                # --- 核心修改：引入黑名单判断 ---
+                is_valid_douban_role = douban_role and self._contains_chinese(douban_role)
+                if is_valid_douban_role and config.ignore_generic_douban_roles:
+                    if douban_role.strip() in config.generic_role_blacklist:
+                        ui_logger.debug(f"     -- 忽略豆瓣通用角色名: {current_actor_name_for_log}: '{douban_role}' (在黑名单中)", task_category=task_category)
+                        is_valid_douban_role = False
+
+                if is_valid_douban_role:
                     ui_logger.info(f"     -- 角色名更新: {current_actor_name_for_log}: '{original_role}' -> '{douban_role}' (来自豆瓣)", task_category=task_category)
                     person['Role'] = douban_role
                     has_changes = True
+                # --- 修改结束 ---
                 elif config.replace_english_role and self._is_pure_english(original_role):
                     new_role = "演员"
                     ui_logger.info(f"     -- 角色名更新: {current_actor_name_for_log}: '{original_role}' -> '{new_role}' (来自暴力替换)", task_category=task_category)
@@ -394,24 +397,18 @@ class ActorLocalizerLogic:
         if has_changes:
             full_item_json = self._get_item_details(item_id, full_json=True)
             if full_item_json:
-                # --- 核心修改：将裁切后修改过的列表，更新回完整的 People 列表 ---
-                # 创建一个以 ID 为键的字典，方便快速查找和更新
                 updated_people_map = {p['Id']: p for p in new_people_list}
                 
-                # 遍历原始的完整 People 列表
                 original_full_people = full_item_json.get('People', [])
                 final_people_list = []
                 for original_person in original_full_people:
                     person_id = original_person.get('Id')
                     if person_id in updated_people_map:
-                        # 如果这个人在我们处理过的列表中，就用更新后的版本
                         final_people_list.append(updated_people_map[person_id])
                     else:
-                        # 否则，保留原始版本（例如，未被裁切掉的演员或其他职员）
                         final_people_list.append(original_person)
                 
                 full_item_json['People'] = final_people_list
-                # --- 修改结束 ---
 
                 if self._update_item_on_server(item_id, full_item_json):
                     ui_logger.info(f"     -- 成功将角色名更新应用到 Emby。", task_category=task_category)
@@ -627,8 +624,19 @@ class ActorLocalizerLogic:
             for emby_actor_name, original_role in emby_actors_to_match.items():
                 if emby_actor_name in douban_standard_roles:
                     new_role = douban_standard_roles[emby_actor_name]
-                    item_changes_log[emby_actor_name] = {'old': original_role, 'new': new_role, 'source': 'douban'}
-                    ui_logger.info(f"     -- 预览更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自豆瓣)", task_category=task_cat)
+                    # --- 核心修改：同步预览逻辑 ---
+                    should_apply_role = True
+                    if config.ignore_generic_douban_roles:
+                        if new_role.strip() in config.generic_role_blacklist:
+                            should_apply_role = False
+                            ui_logger.debug(f"     -- 预览忽略通用角色名: {emby_actor_name}: '{new_role}'", task_category=task_cat)
+                    
+                    if should_apply_role:
+                        item_changes_log[emby_actor_name] = {'old': original_role, 'new': new_role, 'source': 'douban'}
+                        ui_logger.info(f"     -- 预览更新: {emby_actor_name}: '{original_role}' -> '{new_role}' (来自豆瓣)", task_category=task_cat)
+                    else:
+                        actors_to_process_further.append({'name': emby_actor_name, 'role': original_role})
+                    # --- 修改结束 ---
                 else:
                     actors_to_process_further.append({'name': emby_actor_name, 'role': original_role})
             if config.replace_english_role:

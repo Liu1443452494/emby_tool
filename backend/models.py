@@ -114,6 +114,11 @@ class ActorLocalizerConfig(BaseModel):
     api_cooldown_enabled: bool = True
     api_cooldown_time: float = 0.2
     person_limit: int = 15
+    ignore_generic_douban_roles: bool = Field(default=False, description="是否忽略豆瓣中的通用角色名，如'演员'、'配音'等")
+    generic_role_blacklist: List[str] = Field(
+        default_factory=lambda: ["演员"], 
+        description="要忽略的通用角色名列表"
+    )
     tencent_config: TencentApiConfig = Field(default_factory=TencentApiConfig)
     siliconflow_config: SiliconflowApiConfig = Field(default_factory=SiliconflowApiConfig)
     apply_cron: str = Field(default="", description="定时自动应用CRON表达式")

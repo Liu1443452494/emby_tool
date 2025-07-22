@@ -62,6 +62,22 @@
                     <el-switch v-model="localConfig.replace_english_role" active-text="暴力替换为“演员”" inactive-text="保持原样" />
                     <div class="form-item-description">当豆瓣中无匹配时，将纯英文角色名强制替换为“演员”。</div>
                   </el-form-item>
+                  <el-form-item label="豆瓣通用角色名处理">
+                    <el-switch v-model="localConfig.ignore_generic_douban_roles" active-text="忽略豆瓣中的通用角色名" />
+                    <div class="form-item-description">开启后，如果豆瓣提供的角色名在下方黑名单中，则放弃该匹配，继续尝试翻译引擎。</div>
+                  </el-form-item>
+                  <el-form-item v-if="localConfig.ignore_generic_douban_roles" label="通用角色名黑名单">
+                    <el-select
+                      v-model="localConfig.generic_role_blacklist"
+                      multiple
+                      filterable
+                      allow-create
+                      default-first-option
+                      placeholder="输入要忽略的词语后按回车"
+                      style="width: 100%;"
+                    >
+                    </el-select>
+                  </el-form-item>
                   <el-form-item label="处理数量上限">
                     <el-input-number v-model="localConfig.person_limit" :min="1" :max="100" />
                     <div class="form-item-description">为提高效率，仅处理每个媒体项的前 N 位演职员。</div>
