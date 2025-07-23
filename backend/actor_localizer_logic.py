@@ -280,15 +280,15 @@ class ActorLocalizerLogic:
                     reversed_latin_name_lower = f"{parts[1]} {parts[0]}".lower()
                     douban_actor_map[reversed_latin_name_lower] = info_package
 
+        # --- 核心修改：仅筛选出演员进行处理，并应用数量限制 ---
         all_actors = [p for p in people if p.get('Type') == 'Actor']
-        other_people = [p for p in people if p.get('Type') != 'Actor']
         
         actors_to_process = all_actors[:config.person_limit]
         if len(all_actors) > config.person_limit:
             ui_logger.debug(f"     -- [演员裁切] 演员总数: {len(all_actors)}，根据设置将处理前 {config.person_limit} 位。", task_category=task_category)
         
-        people_to_process = actors_to_process + other_people
-        new_people_list = copy.deepcopy(people_to_process)
+        # 直接使用处理后的演员列表，不再包含导演等其他人员
+        new_people_list = copy.deepcopy(actors_to_process)
 
         has_changes = False
         actors_to_translate = []
@@ -420,27 +420,29 @@ class ActorLocalizerLogic:
         if has_changes:
             full_item_json = self._get_item_details(item_id, full_json=True)
             if full_item_json:
-                updated_people_map = {p['Id']: p for p in new_people_list}
+                updated_actors_map = {p['Id']: p for p in new_people_list}
                 
                 original_full_people = full_item_json.get('People', [])
                 final_people_list = []
+                
+                # --- 核心修复：遍历原始列表，仅当类型为 'Actor' 且 ID 匹配时才替换 ---
                 for original_person in original_full_people:
                     person_id = original_person.get('Id')
-                    if person_id in updated_people_map:
-                        final_people_list.append(updated_people_map[person_id])
+                    # 必须同时满足是演员且在我们处理过的列表中
+                    if original_person.get('Type') == 'Actor' and person_id in updated_actors_map:
+                        final_people_list.append(updated_actors_map[person_id])
                     else:
+                        # 其他所有情况（导演、编剧、未处理的演员等）都保留原始信息
                         final_people_list.append(original_person)
                 
                 full_item_json['People'] = final_people_list
 
                 if self._update_item_on_server(item_id, full_item_json):
-                    ui_logger.info(f"     -- 成功将角色名更新应用到 Emby。", task_category=task_category)
+                    ui_logger.info(f"     -- ✅ 成功将角色名更新应用到 Emby。", task_category=task_category)
                     return True
-            ui_logger.error(f"     -- 应用角色名更新到 Emby 失败。", task_category=task_category)
+            ui_logger.error(f"     -- ❌ 应用角色名更新到 Emby 失败。", task_category=task_category)
         else:
             ui_logger.info(f"     -- 处理完成，无任何变更。", task_category=task_category)
-        
-        return False
 
     def run_localization_for_items(self, item_ids: Iterable[str], config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager, task_category: str):
         if not self.douban_map:
