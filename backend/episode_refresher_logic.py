@@ -328,6 +328,13 @@ class EpisodeRefresherLogic:
         try:
             os.remove(filepath)
             ui_logger.info(f"     - [本地缓存] TMDB已有官方图，成功删除作废的本地截图: {filepath}", task_category=task_category)
+            try:
+                if not os.listdir(cache_dir):
+                    os.rmdir(cache_dir)
+                    ui_logger.info(f"     - 🧹 [本地缓存] 检测到剧集缓存目录已空，成功清理: {os.path.basename(cache_dir)}", task_category=task_category)
+            except OSError as e:
+                # 捕获可能的竞态条件错误（例如另一个进程瞬间又创建了文件）
+                ui_logger.warning(f"     - ⚠️ [本地缓存] 尝试清理空目录时出错（可能是正常情况）: {e}", task_category=task_category)
             return True
         except Exception as e:
             ui_logger.error(f"     - [本地缓存] 删除本地截图失败: {e}", task_category=task_category, exc_info=True)
