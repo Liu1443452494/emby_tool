@@ -62,6 +62,12 @@
                     <el-switch v-model="localConfig.replace_english_role" active-text="暴力替换为“演员”" inactive-text="保持原样" />
                     <div class="form-item-description">当豆瓣中无匹配时，将纯英文角色名强制替换为“演员”。</div>
                   </el-form-item>
+                  <el-form-item label="豆瓣英文替换emby英文角色">
+                    <el-switch v-model="localConfig.enhance_english_role_with_douban" active-text="启用" />
+                    <div class="form-item-description">
+                      开启后，会使用豆瓣更丰富的英文角色名（如 "Spider-Man / Peter Parker"）覆盖 Emby 中较简单的英文名（如 "Spider-Man"），以便为后续翻译提供更完整的原文。
+                    </div>
+                  </el-form-item>
                   <el-form-item label="豆瓣通用角色名处理">
                     <el-switch v-model="localConfig.ignore_generic_douban_roles" active-text="忽略豆瓣中的通用角色名" />
                     <div class="form-item-description">开启后，如果豆瓣提供的角色名在下方黑名单中，则放弃该匹配，继续尝试翻译引擎。</div>

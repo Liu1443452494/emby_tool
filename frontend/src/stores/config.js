@@ -15,6 +15,7 @@ export const useConfigStore = defineStore('config', () => {
     douban_config: { directory: '', refresh_cron: '', extra_fields: [] },
     actor_localizer_config: {
       replace_english_role: false,
+      enhance_english_role_with_douban: true,
       translation_enabled: false,
       translation_mode: "translators",
       translator_engine: "baidu",

@@ -108,6 +108,7 @@ class SiliconflowApiConfig(BaseModel):
 class ActorLocalizerConfig(BaseModel):
     """演员中文化功能的完整配置"""
     replace_english_role: bool = False
+    enhance_english_role_with_douban: bool = Field(default=True, description="是否用豆瓣更丰富的英文角色名优化已有的英文角色名")
     translation_enabled: bool = False
     translation_mode: Literal["translators", "tencent", "siliconflow"] = "translators"
     translator_engine: str = "baidu"
