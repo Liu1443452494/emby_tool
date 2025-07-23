@@ -655,6 +655,88 @@ class EpisodeRefresherLogic:
         except Exception as e:
             ui_logger.error(f"     - [失败❌] 移除图片来源标记失败 (ID: {item_id}): {e}", task_category=task_category)
 
+    def _update_local_scraper_episode_file(self, series_tmdb_id: str, season_number: int, episode_number: int, tmdb_episode_data: Dict, task_category: str):
+        """
+        增量更新本地刮削源 (tmdb-tv) 中的分集 JSON 文件。
+        """
+        task_cat = "本地刮削源同步"
+        log_prefix = f"S{season_number:02d}E{episode_number:02d}:"
+        ui_logger.info(f"➡️ {log_prefix} [同步] 开始处理本地刮削源 JSON 文件...", task_category=task_cat)
+
+        douban_data_root = self.app_config.douban_config.directory
+        if not douban_data_root or not os.path.isdir(douban_data_root):
+            ui_logger.warning(f"   - ⚠️ [同步] 未配置有效的豆瓣数据根目录，跳过同步。", task_category=task_cat)
+            return
+
+        series_dir_path = os.path.join(douban_data_root, "tmdb-tv", str(series_tmdb_id))
+        if not os.path.isdir(series_dir_path):
+            ui_logger.warning(f"   - ⚠️ [同步] 未找到 TMDB ID 为 {series_tmdb_id} 的剧集文件夹，跳过同步。", task_category=task_cat)
+            return
+
+        episode_file_path = os.path.join(series_dir_path, f"season-{season_number}-episode-{episode_number}.json")
+        if not os.path.exists(episode_file_path):
+            ui_logger.warning(f"   - ⚠️ [同步] 目标文件不存在，跳过同步: {os.path.basename(episode_file_path)}", task_category=task_cat)
+            return
+        
+        lock_path = episode_file_path + ".lock"
+
+        try:
+            with FileLock(lock_path, timeout=10):
+                with open(episode_file_path, 'r', encoding='utf-8') as f:
+                    local_data = json.load(f)
+                
+                original_data_str = json.dumps(local_data, ensure_ascii=False)
+                
+                field_order = [
+                    "air_date", "episode_number", "name", "overview", "id", 
+                    "production_code", "season_number", "still_path", 
+                    "vote_average", "vote_count", "external_ids", 
+                    "credits", "videos"
+                ]
+                
+                new_data = {}
+                updated_fields = []
+
+                for key in field_order:
+                    tmdb_value = tmdb_episode_data.get(key)
+                    local_value = local_data.get(key)
+
+                    if key == 'air_date':
+                        if tmdb_value:
+                            formatted_date = f"{tmdb_value}T00:00:00.0000000Z"
+                            if formatted_date != local_value:
+                                new_data[key] = formatted_date
+                                updated_fields.append("首播日期")
+                            else:
+                                new_data[key] = local_value
+                        elif local_value is not None:
+                            new_data[key] = local_value
+                    elif key in ['name', 'overview', 'still_path']:
+                        if tmdb_value and tmdb_value != local_value:
+                            new_data[key] = tmdb_value
+                            field_map = {"name": "标题", "overview": "简介", "still_path": "图片路径"}
+                            updated_fields.append(field_map.get(key, key))
+                        elif local_value is not None:
+                            new_data[key] = local_value
+                    elif local_value is not None:
+                        new_data[key] = local_value
+
+                final_data_str = json.dumps(new_data, ensure_ascii=False)
+
+                if original_data_str == final_data_str:
+                    ui_logger.info(f"   - ✅ [同步] 本地文件数据已是最新，无需更新。", task_category=task_cat)
+                    return
+
+                with open(episode_file_path, 'w', encoding='utf-8') as f:
+                    json.dump(new_data, f, ensure_ascii=False, separators=(',', ':'))
+                
+                ui_logger.info(f"   - ✅ [同步] 文件更新成功！本次同步字段: [{', '.join(updated_fields)}]", task_category=task_cat)
+
+        except Timeout:
+            ui_logger.error(f"   - ❌ [同步] 获取文件锁超时，跳过同步: {os.path.basename(episode_file_path)}", task_category=task_cat)
+        except Exception as e:
+            ui_logger.error(f"   - ❌ [同步] 更新本地文件时发生错误: {e}", task_category=task_cat, exc_info=True)
+
 
     def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str) -> int:
         updated_count = 0
@@ -746,7 +828,10 @@ class EpisodeRefresherLogic:
                     ui_logger.info(f"{log_prefix} [跳过] 无需更新。详情: [{skip_reason}]", task_category=task_category)
                     continue
 
+                should_sync_local_file = False
+
                 final_changes_log = []
+
                 
                 if potential_changes:
                     if self._unlock_item(emby_episode["Id"], task_category):
@@ -761,6 +846,9 @@ class EpisodeRefresherLogic:
                                 final_changes_log.append(field_map.get(key, key))
                         except Exception as e:
                             ui_logger.error(f"{log_prefix} [失败❌] 应用元数据更新时失败: {e}", task_category=task_category)
+
+                        if final_changes_log: # 确保只有在Emby更新成功后才标记
+                            should_sync_local_file = True
                     else:
                         ui_logger.error(f"{log_prefix} [失败❌] 解锁失败，跳过元数据更新。", task_category=task_category)
 
@@ -769,6 +857,7 @@ class EpisodeRefresherLogic:
                     image_url = f"https://image.tmdb.org/t/p/original{tmdb_still_path}"
                     if self._upload_image_from_url(emby_episode["Id"], image_url, task_category):
                         final_changes_log.append("图片(TMDB)")
+                        should_sync_local_file = True
                         if current_image_source == "screenshot":
                             self._clear_image_source_tag(emby_episode["Id"], task_category)
                             ui_logger.info(f"{log_prefix} [记录] 正在将作废截图信息写入待删除日志...", task_category=task_category)
@@ -790,6 +879,15 @@ class EpisodeRefresherLogic:
                         if config.screenshot_cooldown > 0:
                             ui_logger.debug(f"     - [截图] 操作冷却，等待 {config.screenshot_cooldown} 秒...", task_category=task_category)
                             time.sleep(config.screenshot_cooldown)
+
+                if should_sync_local_file:
+                    self._update_local_scraper_episode_file(
+                        series_tmdb_id,
+                        season_number,
+                        episode_num,
+                        tmdb_episode,
+                        task_category
+                    )
 
                 if final_changes_log:
                     ui_logger.info(f"{log_prefix} [成功🎉] 本次更新内容: [{', '.join(final_changes_log)}]", task_category=task_category)
