@@ -31,7 +31,7 @@ def get_map():
 class TaskRequest(BaseModel):
     scope: ScheduledTasksTargetScope
     actor_limit: int = Field(default=50, ge=1, description="每个媒体项处理的演员数量上限")
-    generation_mode: Literal['incremental', 'overwrite'] = Field(default='incremental', description="生成模式：incremental-增量, overwrite-覆盖")
+    generation_mode: Literal['incremental', 'overwrite', 'update_selected'] = Field(default='incremental', description="生成模式：incremental-增量, overwrite-覆盖, update_selected-更新指定")
 
 @router.post("/generate")
 def generate_map(req: TaskRequest):

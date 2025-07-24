@@ -117,6 +117,9 @@
                      <el-radio-group v-model="generationMode">
                         <el-radio value="incremental">增量模式</el-radio>
                         <el-radio value="overwrite">覆盖模式</el-radio>
+                        <!-- --- 修改 --- -->
+                        <el-radio value="update_selected">更新范围内</el-radio>
+                        <!-- --- 修改结束 --- -->
                       </el-radio-group>
                       <div class="form-item-description">
                         <b>增量模式 (默认):</b> 扫描时跳过映射表中已存在的作品，仅将新发现的作品追加到文件中。适合日常更新。
@@ -124,6 +127,11 @@
                       <div class="form-item-description" style="margin-top: 5px;">
                         <b>覆盖模式:</b> 用本次扫描的结果完全替换旧的映射文件。适合在媒体库有大量变动或首次生成时使用。
                       </div>
+                      <!-- --- 修改 --- -->
+                      <div class="form-item-description" style="margin-top: 5px;">
+                        <b>更新范围内:</b> 强制更新您在“通用目标范围”中选择的所有媒体项，同时保留其他已有数据。
+                      </div>
+                      <!-- --- 修改结束 --- -->
                   </el-form-item>
                   <!-- --- 新增结束 --- -->
                 </div>
@@ -433,14 +441,25 @@ const handleGenerate = () => {
     generation_mode: generationMode.value
   };
   
-  const modeText = generationMode.value === 'overwrite' ? '覆盖模式' : '增量模式';
-  const confirmMessage = generationMode.value === 'overwrite'
-    ? `即将以【覆盖模式】扫描媒体库并生成映射表，此操作会完全替换本地已有的 \`actor_role_map.json\` 文件。是否继续？`
-    : `即将以【增量模式】扫描媒体库，仅将新发现的作品追加到映射表中，不会影响已有记录。是否继续？`;
+  let confirmTitle = '确认生成映射表';
+  let confirmMessage = '';
+
+  if (generationMode.value === 'overwrite') {
+    confirmTitle = '确认生成映射表 (覆盖模式)';
+    confirmMessage = `即将以【覆盖模式】扫描媒体库并生成映射表，此操作会完全替换本地已有的 \`actor_role_map.json\` 文件。是否继续？`;
+  } else if (generationMode.value === 'incremental') {
+    confirmTitle = '确认生成映射表 (增量模式)';
+    confirmMessage = `即将以【增量模式】扫描媒体库，仅将新发现的作品追加到映射表中，不会影响已有记录。是否继续？`;
+  } else if (generationMode.value === 'update_selected') {
+    // --- 修改：移除范围检查，更新提示文本 ---
+    confirmTitle = '确认生成映射表 (更新范围内模式)';
+    confirmMessage = `即将强制更新您在“通用目标范围”中选择的所有媒体项的映射关系，其他已有数据将保留不变。此操作适合修正特定范围内的错误数据。是否继续？`;
+    // --- 修改结束 ---
+  }
 
   startTask('/api/actor-role-mapper/generate', payload, {
     message: confirmMessage,
-    title: `确认生成映射表 (${modeText})`
+    title: confirmTitle
   }).then(() => {
     // 任务启动后，延迟一段时间再刷新列表，给后端一点处理时间
     setTimeout(() => {

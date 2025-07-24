@@ -54,13 +54,24 @@ class ActorRoleMapperLogic:
 
     def generate_map_task(self, scope: ScheduledTasksTargetScope, actor_limit: int, generation_mode: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员角色映射-生成"
-        mode_text = "覆盖模式" if generation_mode == 'overwrite' else "增量模式"
+        
+        # --- 新增：更详细的模式文本 ---
+        mode_map = {
+            'overwrite': '覆盖模式',
+            'incremental': '增量模式',
+            'update_selected': '更新指定模式'
+        }
+        mode_text = mode_map.get(generation_mode, '未知模式')
+        # --- 新增结束 ---
+
         ui_logger.info(f"🎉 任务启动 ({mode_text})，范围: {scope.mode}，演员上限: {actor_limit}", task_category=task_cat)
 
         try:
             actor_role_map = {}
-            if generation_mode == 'incremental':
-                ui_logger.info("➡️ [阶段1/6] 增量模式：正在加载现有映射表...", task_category=task_cat)
+            # --- 修改：调整加载条件 ---
+            if generation_mode in ['incremental', 'update_selected']:
+                ui_logger.info(f"➡️ [阶段1/6] {mode_text}：正在加载现有映射表...", task_category=task_cat)
+            # --- 修改结束 ---
                 if os.path.exists(ACTOR_ROLE_MAP_FILE):
                     try:
                         with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
@@ -97,6 +108,7 @@ class ActorRoleMapperLogic:
                         if not tmdb_id:
                             continue
                         
+                        # --- 核心逻辑：此处的判断无需修改，因为它天然排除了 'update_selected' 模式 ---
                         if generation_mode == 'incremental' and str(tmdb_id) in actor_role_map:
                             skipped_count += 1
                             continue
@@ -107,7 +119,11 @@ class ActorRoleMapperLogic:
                         logging.error(f"【调试】预处理媒体 {item_id} 时出错: {e}")
 
             if not media_ids_to_process:
-                ui_logger.info(f"✅ 预处理完成，所有 {len(media_ids)} 个媒体项均已存在于映射表中，任务结束。", task_category=task_cat)
+                # --- 修改：更新日志 ---
+                if generation_mode == 'incremental':
+                    ui_logger.info(f"✅ 预处理完成，所有 {len(media_ids)} 个媒体项均已存在于映射表中，任务结束。", task_category=task_cat)
+                else:
+                    ui_logger.info(f"✅ 在指定范围内未找到需要处理的媒体项，任务结束。", task_category=task_cat)
                 return
             
             ui_logger.info(f"  - 预处理完成，需要新增/更新 {len(media_ids_to_process)} 个媒体项 (已跳过 {skipped_count} 个)。", task_category=task_cat)
