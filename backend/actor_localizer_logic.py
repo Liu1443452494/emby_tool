@@ -837,3 +837,115 @@ class ActorLocalizerLogic:
                 updated_count += 1
         ui_logger.info(f"【步骤 2/2】自动应用任务执行完毕，共更新了 {updated_count} 个项目的演员角色。", task_category=task_category)
         return {"updated_count": updated_count}
+    
+    def get_people_for_item(self, item_id: str) -> List[Dict]:
+        """获取指定媒体项的演职员列表"""
+        task_cat = "手动校正-获取演员"
+        try:
+            ui_logger.info(f"➡️ 正在获取媒体项 (ID: {item_id}) 的演职员列表...", task_category=task_cat)
+            details = self._get_item_details(item_id, full_json=True)
+            if not details:
+                raise Exception("未能获取到媒体详情。")
+            
+            people = details.get('People', [])
+            ui_logger.info(f"✅ 成功获取到 {len(people)} 位演职员信息。", task_category=task_cat)
+            return people
+        except Exception as e:
+            ui_logger.error(f"❌ 获取演职员列表失败: {e}", task_category=task_cat)
+            raise e
+        
+    def suggest_roles_with_ai(self, item_id: str, actor_names: List[str], config: ActorLocalizerConfig) -> Dict[str, str]:
+        """使用AI为给定的演员列表建议角色名"""
+        task_cat = "手动校正-AI建议"
+        ui_logger.info(f"➡️ 收到为媒体 (ID: {item_id}) 的 {len(actor_names)} 位演员请求AI角色建议的任务...", task_category=task_cat)
+        
+        try:
+            details = self._get_item_details(item_id)
+            if not details:
+                raise Exception("未能获取媒体上下文信息。")
+
+            item_name = details.get('Name', '未知标题')
+            provider_ids = details.get('ProviderIds', {})
+            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+            
+            context_info = {
+                "title": item_name,
+                "year": details.get("ProductionYear"),
+                "type": "电视剧" if details.get("Type") == "Series" else "电影",
+                "tmdb_id": provider_ids_lower.get("tmdb")
+            }
+            
+            system_prompt = """你是一位顶级的影视数据库专家，专门负责根据影视作品信息和演员名单，精准地提供角色名。
+
+**你的核心任务与规则如下：**
+
+1.  **输入格式：** 我将以JSON字符串数组的格式为你提供演员列表。
+2.  **精确匹配：** 你必须根据我提供的电影或电视剧的上下文（标题、年份、TMDB ID），找出每位演员在该作品中饰演的核心角色。
+3.  **输出格式严格：** 你的回答必须是纯文本格式。每一行代表一位演员，格式严格遵守 `演员名: 角色名`。分隔符是英文冒号和紧随其后的一个空格 `": "`。
+4.  **输入复现：** 每一行开头的 `演员名` 必须与我提供给你的JSON数组中的演员名完全一致。
+5.  **别名规范：** 如果角色有广为人知的别名或代号（例如“钢铁侠”），请使用正斜杠 `/` 将其与本名隔开，格式为 `本名 / 别名`。如果没有别名，则只返回本名。
+6.  **知之为知之：** 如果对于某位演员，你无法在指定的作品中找到确切的角色名，或者不确定，请**直接忽略该演员，不要在你的回答中包含这一行**。宁缺毋滥。
+7.  **绝对简洁：** 你的回答中【绝对不能】包含任何除了 `演员名: 角色名` 列表之外的文字，例如“好的，这是您要的角色列表：”、序号、空行或任何解释。
+
+**黄金示例：**
+假设我提供了电影《复仇者联盟》的上下文，以及演员列表 `["小罗伯特·唐尼", "克里斯·埃文斯", "一位不存在的演员", "斯嘉丽·约翰逊"]`。
+你的**唯一且完整**的回答应该是：
+小罗伯特·唐尼: 托尼·斯塔克 / 钢铁侠
+克里斯·埃文斯: 史蒂夫·罗杰斯 / 美国队长
+斯嘉丽·约翰逊: 娜タ莎·罗曼诺夫 / 黑寡妇
+*（在这个示例中，你正确地复现了演员名，为部分角色添加了别名，并且忽略了无法找到的“一位不存在的演员”。）*
+"""
+
+            actors_json_array = json.dumps(actor_names, ensure_ascii=False)
+            
+            context_parts = [f"一部于 {context_info['year']} 年上映的{context_info['type']}"] if context_info.get('year') else [f"一部{context_info['type']}"]
+            context_parts.append(f"《{context_info['title']}》")
+            if context_info.get('tmdb_id'):
+                context_parts.append(f"(TMDB ID: {context_info['tmdb_id']})")
+            
+            context_description = "，".join(context_parts)
+            user_prompt = f"在以下影视作品的上下文中：{context_description}。\n\n请为下列JSON数组中的每一位演员提供他们对应的角色名：\n\n{actors_json_array}"
+
+            logging.info(f"【AI建议】最终生成的 User Prompt:\n{user_prompt}")
+
+            sf_config = config.siliconflow_config
+            url = "https://api.siliconflow.cn/v1/chat/completions"
+            payload = {
+                "model": sf_config.model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "stream": False,
+                "max_tokens": 1500,
+                "temperature": sf_config.temperature,
+                "top_p": sf_config.top_p
+            }
+            headers = {"Authorization": f"Bearer {sf_config.api_key}", "Content-Type": "application/json"}
+            
+            ui_logger.info(f"🔍 正在向AI模型请求角色建议...", task_category=task_cat)
+            response = requests.post(url, json=payload, headers=headers, timeout=sf_config.timeout_batch)
+            response.raise_for_status()
+            result = response.json()
+
+            if not (result.get("choices") and len(result["choices"]) > 0):
+                raise Exception(f"AI API 响应格式不正确: {result}")
+
+            content = result["choices"][0].get("message", {}).get("content", "").strip()
+            logging.debug(f"【AI建议】收到原始响应: \n{content}")
+
+            role_map = {}
+            lines = [line.strip() for line in content.split('\n') if line.strip()]
+            for line in lines:
+                parts = line.split(': ', 1)
+                if len(parts) == 2:
+                    actor_name = parts[0].strip()
+                    role_name = parts[1].strip()
+                    role_map[actor_name] = role_name
+            
+            ui_logger.info(f"✅ AI成功返回了 {len(role_map)} 条角色建议。", task_category=task_cat)
+            return role_map
+
+        except Exception as e:
+            ui_logger.error(f"❌ 请求AI角色建议失败: {e}", task_category=task_cat, exc_info=True)
+            raise e

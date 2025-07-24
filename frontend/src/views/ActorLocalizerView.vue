@@ -159,6 +159,13 @@
             <el-button v-else type="danger" @click="handleStopTask(actorStore.activeApplyTaskId)">停止应用</el-button>
           </div>
           <el-button 
+            @click="isCorrectionDialogVisible = true" 
+            style="width: 100%; margin-top: 15px;"
+            plain
+          >
+            手动校正角色名 (AI辅助)
+          </el-button>
+          <el-button 
             type="success" 
             @click="handleSaveConfig" 
             :loading="isSaving" 
@@ -188,6 +195,7 @@
       :config="localConfig.siliconflow_config"
       @save="(newConfig) => localConfig.siliconflow_config = newConfig"
     />
+    <ActorRoleCorrectionDialog v-model:visible="isCorrectionDialogVisible" />
   </div>
 </template>
 
@@ -202,8 +210,10 @@ import _ from 'lodash';
 import { useStorage } from '@vueuse/core';
 import TencentApiConfigDialog from '@/components/TencentApiConfigDialog.vue';
 import SiliconflowApiConfigDialog from '@/components/SiliconflowApiConfigDialog.vue';
+import ActorRoleCorrectionDialog from '@/components/ActorRoleCorrectionDialog.vue';
 
 const actorStore = useActorLocalizerStore();
+const isCorrectionDialogVisible = ref(false);
 const configStore = useConfigStore();
 const taskStore = useTaskStore();
 const mediaStore = useMediaStore();

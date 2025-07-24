@@ -38,6 +38,7 @@ from models import (
     ServerConfig, DownloadConfig, AppConfig, MediaSearchQuery, 
     DownloadRequest, BatchDownloadRequest, DoubanConfig, DoubanCacheStatus,
     ActorLocalizerConfig, ActorLocalizerPreviewRequest, ActorLocalizerApplyRequest,
+    SuggestRolesRequest, UpdateRolesRequest,
     TencentApiConfig, SiliconflowApiConfig,
     TmdbConfig, ProxyConfig,
     DoubanFixerConfig,
@@ -1218,6 +1219,61 @@ def test_translation_api(req: TestTranslationRequest):
             raise Exception("翻译结果为空或与原文相同，请检查配置或API权限。")
     except Exception as e:
         logging.error(f"翻译API测试失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@app.get("/api/actor-localizer/media/{item_id}/people", response_model=List[Dict])
+def get_media_people(item_id: str):
+    try:
+        config = app_config.load_app_config()
+        logic = ActorLocalizerLogic(config)
+        return logic.get_people_for_item(item_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/actor-localizer/suggest-roles", response_model=Dict[str, str])
+def suggest_roles(req: SuggestRolesRequest):
+    try:
+        config = app_config.load_app_config()
+        if not config.actor_localizer_config.siliconflow_config.api_key:
+            raise HTTPException(status_code=400, detail="尚未配置AI大模型API Key，无法使用此功能。")
+        logic = ActorLocalizerLogic(config)
+        return logic.suggest_roles_with_ai(req.item_id, req.actor_names, config.actor_localizer_config)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/actor-localizer/update-roles")
+def update_roles(req: UpdateRolesRequest):
+    task_cat = "手动校正-应用"
+    try:
+        config = app_config.load_app_config()
+        logic = ActorLocalizerLogic(config)
+        
+        # --- 核心修改：先获取旧数据进行对比 ---
+        ui_logger.info(f"➡️ 收到对媒体 (ID: {req.item_id}) 的角色更新请求，正在获取当前数据...", task_category=task_cat)
+        full_item_json = logic._get_item_details(req.item_id, full_json=True)
+        if not full_item_json:
+            raise HTTPException(status_code=404, detail=f"未能找到媒体项 {req.item_id}")
+        
+        original_people = full_item_json.get('People', [])
+        
+        # 简单对比：直接比较两个列表是否相等。
+        # 注意：这要求前端发送的 people 对象结构与Emby返回的完全一致。
+        if original_people == req.people:
+            ui_logger.info(f"✅ 检测到角色列表无任何变更，无需更新。", task_category=task_cat)
+            return {"success": True, "message": "角色列表无任何变更，无需更新。"}
+        # --- 修改结束 ---
+
+        ui_logger.info(f"🔍 检测到角色列表存在变更，正在应用到 Emby...", task_category=task_cat)
+        full_item_json['People'] = req.people
+        
+        if logic._update_item_on_server(req.item_id, full_item_json):
+            ui_logger.info(f"✅ 角色名已成功更新到Emby！", task_category=task_cat)
+            return {"success": True, "message": "角色名已成功更新到Emby！"}
+        else:
+            raise HTTPException(status_code=500, detail="更新到Emby时发生错误。")
+    except Exception as e:
+        ui_logger.error(f"❌ 更新角色时发生未知错误: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/api/config/scheduled-tasks")

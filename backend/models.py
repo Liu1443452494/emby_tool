@@ -348,6 +348,15 @@ class ActorLocalizerPreviewRequest(BaseModel):
 class ActorLocalizerApplyRequest(BaseModel):
     items: List[Dict]
 
+
+class SuggestRolesRequest(BaseModel):
+    item_id: str
+    actor_names: List[str]
+
+class UpdateRolesRequest(BaseModel):
+    item_id: str
+    people: List[Dict]
+
 class MediaSearchQuery(BaseModel):
     query: str
 
