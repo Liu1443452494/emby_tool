@@ -25,23 +25,48 @@ class ChasingCenterLogic:
         self.tmdb_logic = TmdbLogic(config)
         self.episode_refresher = EpisodeRefresherLogic(config)
 
-    def _get_chasing_list(self) -> List[str]:
-        """安全地读取追更列表文件"""
+    def _get_chasing_list(self) -> List[Dict[str, str]]:
+        """安全地读取追更列表文件，并兼容新旧格式"""
         if not os.path.exists(CHASING_LIST_FILE):
             return []
         try:
             with open(CHASING_LIST_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+            
+            # --- 新增：兼容性处理 ---
+            if not data:
+                return []
+            
+            # 如果文件内容是旧的字符串列表格式，则转换为新的对象列表格式
+            if isinstance(data[0], str):
+                ui_logger.info("➡️ [追更列表] 检测到旧版追更列表格式，将自动在后台进行转换...", task_category="追更中心")
+                
+                # 为了避免在只读操作中执行大量网络请求，我们返回一个不完整的列表，
+                # 并在写入操作（如添加/删除）时进行真正的转换和填充。
+                # 或者，更好的方式是在一个专门的迁移任务中完成。
+                # 为简单起见，我们在这里只做结构转换，tmdb_id 暂时留空。
+                # 真正的填充将在 get_detailed_chasing_list 中处理。
+                return [{"emby_id": item, "tmdb_id": None} for item in data]
+
+            return data
+            # --- 新增结束 ---
+
         except (IOError, json.JSONDecodeError):
             return []
 
-    def _save_chasing_list(self, series_ids: List[str]):
+    def _save_chasing_list(self, series_list: List[Dict[str, str]]):
         """安全地写入追更列表文件"""
         lock_path = CHASING_LIST_FILE + ".lock"
         try:
             with FileLock(lock_path, timeout=10):
+                # --- 新增：确保所有条目都有 tmdb_id ---
+                # 这是一个保险措施，防止不完整的条目被写入
+                final_list = [item for item in series_list if item.get("emby_id") and item.get("tmdb_id")]
+                if len(final_list) != len(series_list):
+                    ui_logger.warning("⚠️ [追更列表] 在保存时发现部分条目缺少 Emby ID 或 TMDB ID，已被过滤。", task_category="追更中心")
+
                 with open(CHASING_LIST_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(series_ids, f, indent=4)
+                    json.dump(final_list, f, indent=4)
         except Timeout:
             ui_logger.error("❌ [追更列表] 写入文件时获取锁超时！", task_category="追更中心")
         except Exception as e:
@@ -51,96 +76,131 @@ class ChasingCenterLogic:
         """获取聚合了 Emby 和 TMDB 信息的详细追更列表"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        series_ids = self._get_chasing_list()
-        if not series_ids:
+        chasing_items = self._get_chasing_list()
+        if not chasing_items:
             return []
 
         detailed_list = []
-        
-        def fetch_series_details(series_id):
+        items_to_resave = False # 标记是否需要回写文件（用于旧格式迁移）
+
+        def fetch_series_details(item_data):
+            nonlocal items_to_resave
+            emby_id = item_data.get("emby_id")
+            tmdb_id = item_data.get("tmdb_id")
+            
             try:
-                # 1. 获取 Emby 基础信息和分集数量
-                # --- 修改：增加 ImageTags 字段 ---
-                emby_details = self.episode_refresher._get_emby_item_details(series_id, fields="Name,ProductionYear,ProviderIds,ImageTags,,BackdropImageTags")
+                # 1. 获取 Emby 基础信息
+                emby_details = self.episode_refresher._get_emby_item_details(emby_id, fields="Name,ProductionYear,ProviderIds,ImageTags,BackdropImageTags")
                 
+                # 2. 如果文件中没有 tmdb_id (兼容旧格式)，则从 Emby 获取并标记回写
+                if not tmdb_id:
+                    provider_ids_lower = {k.lower(): v for k, v in emby_details.get("ProviderIds", {}).items()}
+                    tmdb_id = provider_ids_lower.get("tmdb")
+                    if tmdb_id:
+                        item_data["tmdb_id"] = tmdb_id # 更新内存中的对象
+                        items_to_resave = True
+                    else:
+                        # 如果 Emby 也没有，则跳过此项
+                        ui_logger.warning(f"⚠️ [追更列表] 剧集《{emby_details.get('Name')}》缺少 TMDB ID，无法处理。", task_category="追更中心")
+                        return None
+
+                # 3. 获取 Emby 分集数量
                 episodes_url = f"{self.config.server_config.server}/Users/{self.config.server_config.user_id}/Items"
-                episodes_params = {"api_key": self.config.server_config.api_key, "ParentId": series_id, "IncludeItemTypes": "Episode", "Recursive": "true", "Fields": "Id"}
+                episodes_params = {"api_key": self.config.server_config.api_key, "ParentId": emby_id, "IncludeItemTypes": "Episode", "Recursive": "true", "Fields": "Id"}
                 emby_episodes_count = self.episode_refresher.session.get(episodes_url, params=episodes_params, timeout=15).json().get("TotalRecordCount", 0)
 
-                # 2. 获取 TMDB 详细信息
-                provider_ids_lower = {k.lower(): v for k, v in emby_details.get("ProviderIds", {}).items()}
-                tmdb_id = provider_ids_lower.get("tmdb")
-                
-                if not tmdb_id:
-                    return None
-
+                # 4. 获取 TMDB 详细信息
                 tmdb_details = self.tmdb_logic._tmdb_request(f"tv/{tmdb_id}")
-
-                logging.debug(f"➡️ [追更列表-调试] 剧集《{emby_details.get('Name')}》的 ImageTags: {emby_details.get('BackdropImageTags')}")
+                
                 image_tags = emby_details.get("ImageTags", {})
                 if backdrop_tag := emby_details.get("BackdropImageTags", []):
                     image_tags['Backdrop'] = backdrop_tag[0]
 
-                # 3. 聚合数据
+                # 5. 聚合数据
                 return {
-                    "emby_id": series_id,
+                    "emby_id": emby_id,
                     "tmdb_id": tmdb_id,
                     "name": emby_details.get("Name"),
                     "year": emby_details.get("ProductionYear"),
-                    # --- 新增行 ---
-                    "image_tags": emby_details.get("ImageTags", {}),
-                    # --- 新增结束 ---
+                    "image_tags": image_tags,
                     "tmdb_status": tmdb_details.get("status"),
                     "tmdb_total_episodes": tmdb_details.get("number_of_episodes"),
                     "tmdb_first_air_date": tmdb_details.get("first_air_date"),
                     "emby_episode_count": emby_episodes_count
                 }
             except Exception as e:
-                logging.error(f"❌ [追更列表] 获取剧集 {series_id} 的详细信息时失败: {e}")
+                logging.error(f"❌ [追更列表] 获取剧集 {emby_id} 的详细信息时失败: {e}")
                 return None
 
         with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_id = {executor.submit(fetch_series_details, series_id): series_id for series_id in series_ids}
+            future_to_id = {executor.submit(fetch_series_details, item): item.get("emby_id") for item in chasing_items}
             for future in as_completed(future_to_id):
                 result = future.result()
                 if result:
                     detailed_list.append(result)
         
+        # 如果在处理过程中为旧数据填充了 tmdb_id，则回写整个文件
+        if items_to_resave:
+            ui_logger.info("✅ [追更列表] 已为旧格式数据填充 TMDB ID，正在保存到文件...", task_category="追更中心")
+            self._save_chasing_list(chasing_items)
+
         return detailed_list
 
     def add_to_chasing_list(self, series_id: str, series_name: str):
-        """将一个剧集ID添加到追更列表"""
+        """将一个剧集ID和TMDB ID添加到追更列表"""
         task_cat = "追更中心"
         chasing_list = self._get_chasing_list()
-        if series_id not in chasing_list:
-            chasing_list.append(series_id)
-            self._save_chasing_list(chasing_list)
-            ui_logger.info(f"➡️ [追更] 已将剧集《{series_name}》加入追更列表。", task_category=task_cat)
-        else:
+        
+        # 检查是否已存在
+        if any(item.get("emby_id") == series_id for item in chasing_list):
             ui_logger.debug(f"剧集《{series_name}》已存在于追更列表中，无需重复添加。", task_category=task_cat)
+            return
+
+        # 获取 TMDB ID
+        emby_details = self.episode_refresher._get_emby_item_details(series_id, fields="ProviderIds")
+        if not emby_details:
+            ui_logger.error(f"❌ [追更] 添加《{series_name}》失败：无法获取其 Emby 详情。", task_category=task_cat)
+            return
+            
+        provider_ids_lower = {k.lower(): v for k, v in emby_details.get("ProviderIds", {}).items()}
+        tmdb_id = provider_ids_lower.get("tmdb")
+
+        if not tmdb_id:
+            ui_logger.warning(f"⚠️ [追更] 添加《{series_name}》失败：该剧集缺少 TMDB ID。", task_category=task_cat)
+            return
+
+        chasing_list.append({"emby_id": series_id, "tmdb_id": tmdb_id})
+        self._save_chasing_list(chasing_list)
+        ui_logger.info(f"➡️ [追更] 已将剧集《{series_name}》加入追更列表。", task_category=task_cat)
 
     def remove_from_chasing_list(self, series_id: str, series_name: str, reason: str):
-        """从追更列表中移除一个剧集ID"""
+        """从追更列表中移除一个剧集"""
         task_cat = "追更中心"
         chasing_list = self._get_chasing_list()
-        if series_id in chasing_list:
-            chasing_list.remove(series_id)
-            self._save_chasing_list(chasing_list)
+        
+        original_length = len(chasing_list)
+        # 根据 emby_id 过滤掉要移除的项
+        updated_list = [item for item in chasing_list if item.get("emby_id") != series_id]
+
+        if len(updated_list) < original_length:
+            self._save_chasing_list(updated_list)
             ui_logger.info(f"✅ [追更] 已将剧集《{series_name}》从追更列表移除。原因: {reason}", task_category=task_cat)
 
     def _check_and_remove_if_series_complete(self, series_id: str, cancellation_event: threading.Event):
         """
         执行优化后的完结检测逻辑 (V2.0)。
         """
+        # --- 核心修改：直接从追更列表中获取 tmdb_id ---
+        chasing_item = next((item for item in self._get_chasing_list() if item.get("emby_id") == series_id), None)
+        if not chasing_item: return # 如果在列表中找不到，直接返回
+        tmdb_id = chasing_item.get("tmdb_id")
+        # --- 修改结束 ---
+
         emby_series_details = self.episode_refresher._get_emby_item_details(series_id, fields="ProviderIds,Name")
         if not emby_series_details: return
         
         series_name = emby_series_details.get("Name", f"ID {series_id}")
         task_cat = f"追更-完结检测({series_name})"
-        
-        provider_ids = emby_series_details.get("ProviderIds", {})
-        provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
-        tmdb_id = provider_ids_lower.get("tmdb")
 
         if not tmdb_id:
             ui_logger.warning(f"剧集《{series_name}》缺少 TMDB ID，无法进行完结检测。", task_category=task_cat)
