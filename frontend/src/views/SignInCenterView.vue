@@ -2,8 +2,8 @@
 <template>
   <div class="signin-center-page">
     <div class="page-header">
-      <h2>签到中心</h2>
-      <p>集中管理所有站点的自动签到任务，保持您的账号活跃。</p>
+      <h2>插件中心</h2>
+      <p>集中管理所有插件。</p>
     </div>
 
     <!-- --- 新增：通知设置入口 --- -->

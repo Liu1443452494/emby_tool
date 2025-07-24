@@ -1,11 +1,14 @@
 // frontend/src/stores/media.js (修改后)
 
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { ElMessage } from 'element-plus'
 import { API_BASE_URL } from '@/config/apiConfig';
+import { useConfigStore } from './config';
 
 export const useMediaStore = defineStore('media', () => {
+  const configStore = useConfigStore();
+  const appConfig = computed(() => configStore.appConfig);
   const searchResults = ref([])
   const isLoading = ref(false)
   const libraries = ref([])
@@ -154,6 +157,7 @@ export const useMediaStore = defineStore('media', () => {
   }
 
   return { 
+    appConfig,
     searchResults, 
     isLoading, 
     libraries, 

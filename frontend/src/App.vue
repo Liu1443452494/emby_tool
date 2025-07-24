@@ -60,9 +60,13 @@
             <el-icon><SwitchFilled /></el-icon>
             <template #title>演员头像映射</template>
           </el-menu-item>
+          <el-menu-item index="/chasing-center">
+            <el-icon><StarFilled /></el-icon>
+            <template #title>自动化追更</template>
+          </el-menu-item>
            <el-menu-item index="/signin-center">
             <el-icon><CircleCheck /></el-icon>
-            <template #title>签到中心</template>
+            <template #title>插件中心</template>
           </el-menu-item>
 
           <!-- --- 新增菜单项 --- -->
@@ -118,8 +122,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { ElConfigProvider, ElIcon } from 'element-plus'
-// --- 新增图标 ---
-import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen, Picture, UserFilled, SwitchFilled, CircleCheck } from '@element-plus/icons-vue'
+import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen, Picture, UserFilled, SwitchFilled, CircleCheck, StarFilled } from '@element-plus/icons-vue'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { useStorage } from '@vueuse/core'
 import { useConfigStore } from '@/stores/config'

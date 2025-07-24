@@ -26,6 +26,7 @@ from poster_manager_router import router as poster_manager_router
 from actor_role_mapper_router import router as actor_role_mapper_router
 from actor_avatar_mapper_router import router as actor_avatar_mapper_router
 from signin_router import router as signin_router
+from chasing_center_router import router as chasing_center_router
 
 from media_selector import MediaSelector
 from models import ScheduledTasksConfig, ScheduledTasksTargetScope
@@ -321,7 +322,6 @@ def _episode_renamer_task_runner(
         task_cat
     )
 
-# backend/main.py (函数替换)
 
 def trigger_scheduled_task(task_id: str):
     task_name_map = {
@@ -405,6 +405,65 @@ def trigger_scheduled_task(task_id: str):
     else:
         ui_logger.warning(f"未知的任务ID: {task_id}", task_category=task_cat)
 
+def trigger_chasing_workflow():
+    """内置的每日追更工作流触发器"""
+    task_cat = "定时任务-追更维护"
+    config = app_config.load_app_config()
+    if not config.chasing_center_config.enabled:
+        logging.info(f"【调度任务】追更工作流未启用，跳过每日维护。")
+        return
+    
+    ui_logger.info("开始执行内置的每日追更维护任务...", task_category=task_cat)
+    from chasing_center_logic import ChasingCenterLogic
+    logic = ChasingCenterLogic(config)
+    task_manager.register_task(logic.run_chasing_workflow_task, "定时任务-追更每日维护")
+
+def trigger_calendar_notification():
+    """追剧日历通知触发器"""
+    task_cat = "定时任务-追剧日历"
+    config = app_config.load_app_config()
+    if not config.chasing_center_config.enabled or not config.telegram_config.enabled:
+        logging.info(f"【调度任务】追更工作流或Telegram通知未启用，跳过日历发送。")
+        return
+    
+    ui_logger.info("开始执行追剧日历通知任务...", task_category=task_cat)
+    from chasing_center_logic import ChasingCenterLogic
+    logic = ChasingCenterLogic(config)
+    task_manager.register_task(logic.send_calendar_notification_task, "定时任务-追剧日历通知")
+
+def update_chasing_scheduler():
+    """更新追更中心的定时任务"""
+    task_cat = "系统配置"
+    ui_logger.info("【调度任务】检测到追更中心配置变更，正在更新调度器...", task_category=task_cat)
+    config = app_config.load_app_config()
+    
+    # 每日维护任务 (内置，不可配置)
+    job_id_workflow = "chasing_workflow_daily"
+    if config.chasing_center_config.enabled:
+        # 每天凌晨3点执行
+        scheduler.add_job(trigger_chasing_workflow, CronTrigger.from_crontab("0 3 * * *"), id=job_id_workflow, replace_existing=True)
+        ui_logger.info(f"  - 已启用内置的每日追更维护任务 (CRON: 0 3 * * *)", task_category=task_cat)
+    elif scheduler.get_job(job_id_workflow):
+        scheduler.remove_job(job_id_workflow)
+        ui_logger.info(f"  - 已禁用并移除每日追更维护任务。", task_category=task_cat)
+
+    # 日历通知任务 (可配置)
+    job_id_calendar = "chasing_calendar_notification"
+    if config.chasing_center_config.enabled and config.chasing_center_config.notification_cron:
+        try:
+            scheduler.add_job(
+                trigger_calendar_notification, 
+                CronTrigger.from_crontab(config.chasing_center_config.notification_cron), 
+                id=job_id_calendar, 
+                replace_existing=True
+            )
+            ui_logger.info(f"  - 已更新追剧日历通知任务 (CRON: {config.chasing_center_config.notification_cron})", task_category=task_cat)
+        except Exception as e:
+            ui_logger.error(f"  - ❌ 更新追剧日历任务失败: {e}", task_category=task_cat)
+    elif scheduler.get_job(job_id_calendar):
+        scheduler.remove_job(job_id_calendar)
+        ui_logger.info(f"  - 已移除追剧日历通知任务。", task_category=task_cat)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task_cat = "系统启动"
@@ -484,6 +543,9 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 ui_logger.error(f"  - 设置定时任务 '{task.name}' 失败，CRON表达式可能无效: {e}", task_category=task_cat)
 
+    ui_logger.info("【调度任务】开始设置追更中心任务...", task_category=task_cat)
+    update_chasing_scheduler()
+
     if not scheduler.running:
         scheduler.start()
 
@@ -517,6 +579,7 @@ app.include_router(poster_manager_router, prefix="/api/poster-manager")
 app.include_router(actor_role_mapper_router, prefix="/api/actor-role-mapper")
 app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper")
 app.include_router(signin_router, prefix="/api/signin")
+app.include_router(chasing_center_router, prefix="/api/chasing-center")
 
 
 @app.get("/api/image-proxy")

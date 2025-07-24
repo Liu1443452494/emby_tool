@@ -312,6 +312,14 @@ class SigninModulesConfig(BaseModel):
     # 未来可在此处添加其他签到模块的配置
     # another_site: AnotherSiteConfig = Field(default_factory=AnotherSiteConfig)
 
+
+class ChasingCenterConfig(BaseModel):
+    """自动化追更中心配置"""
+    enabled: bool = Field(default=False, description="是否启用自动化追更工作流")
+    notification_cron: str = Field(default="0 9 * * *", description="追剧日历通知的CRON表达式")
+    calendar_days: int = Field(default=7, description="追剧日历预告未来的天数")
+    completion_deadline_days: int = Field(default=30, description="完结剧集等待元数据补全的最后期限(天)")
+
 # --- 新增结束 ---
 
 class AppConfig(BaseModel):
@@ -333,6 +341,7 @@ class AppConfig(BaseModel):
     poster_manager_config: PosterManagerConfig = Field(default_factory=PosterManagerConfig)
     telegram_config: TelegramConfig = Field(default_factory=TelegramConfig)
     signin_config: SigninModulesConfig = Field(default_factory=SigninModulesConfig)
+    chasing_center_config: ChasingCenterConfig = Field(default_factory=ChasingCenterConfig)
 
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]
