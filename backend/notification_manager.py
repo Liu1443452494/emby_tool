@@ -76,6 +76,66 @@ class NotificationManager:
         except Exception as e:
             ui_logger.error(f"❌ 发送Telegram通知时发生未知异常: {e}", task_category=task_cat, exc_info=True)
             return {"success": False, "message": f"未知异常: {e}"}
+        
+    def send_telegram_photo_notification(
+        self,
+        image_url: str,
+        caption: str,
+        app_config: AppConfig
+    ) -> Dict:
+        """
+        发送带图片和文本说明的消息到 Telegram。
+        """
+        task_cat = "通知-Telegram"
+        config = app_config.telegram_config
+        
+        if not all([config.enabled, config.bot_token, config.chat_id]):
+            ui_logger.debug("   - [调试] Telegram通知未启用或配置不完整，跳过发送。", task_category=task_cat)
+            return {"success": False, "message": "通知未启用或配置不完整"}
+
+        api_url = f"https://api.telegram.org/bot{config.bot_token}/sendPhoto"
+        payload = {
+            'chat_id': config.chat_id,
+            'photo': image_url,
+            'caption': caption,
+            'parse_mode': 'MarkdownV2'
+        }
+        
+        proxy_manager = ProxyManager(app_config)
+        proxies = proxy_manager.get_proxies(api_url)
+        
+        log_message = f"➡️ 正在尝试发送带图片的 Telegram 通知..."
+        if proxies:
+            log_message += f" (通过代理 {proxies.get('http')})"
+        ui_logger.info(log_message, task_category=task_cat)
+        
+        try:
+            response = requests.post(api_url, json=payload, timeout=30, proxies=proxies) # 增加超时时间以适应图片上传
+            response.raise_for_status()
+            
+            result = response.json()
+            if result.get("ok"):
+                ui_logger.info("✅ 带图片的 Telegram 通知发送成功！", task_category=task_cat)
+                return {"success": True, "message": "通知发送成功"}
+            else:
+                error_msg = result.get("description", "未知错误")
+                ui_logger.error(f"❌ Telegram API返回错误: {error_msg}", task_category=task_cat)
+                return {"success": False, "message": f"API错误: {error_msg}"}
+
+        except requests.exceptions.RequestException as e:
+            error_details = f"网络错误: {e}"
+            if e.response is not None:
+                try:
+                    error_body = e.response.json()
+                    error_details = f"API请求失败: {error_body.get('description', e.response.text)}"
+                except Exception:
+                    error_details = f"API请求失败: HTTP {e.response.status_code}, {e.response.text}"
+
+            ui_logger.error(f"❌ 发送带图片的 Telegram 通知时出错: {error_details}", task_category=task_cat, exc_info=True)
+            return {"success": False, "message": error_details}
+        except Exception as e:
+            ui_logger.error(f"❌ 发送带图片的 Telegram 通知时发生未知异常: {e}", task_category=task_cat, exc_info=True)
+            return {"success": False, "message": f"未知异常: {e}"}
 
 # 创建一个单例
 notification_manager = NotificationManager()

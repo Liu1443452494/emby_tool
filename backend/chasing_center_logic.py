@@ -327,8 +327,8 @@ class ChasingCenterLogic:
 
         return detailed_list
 
-    def add_to_chasing_list(self, series_id: str, series_name: str):
-        """将一个剧集ID和TMDB ID添加到追更列表"""
+    def add_to_chasing_list(self, series_id: str, series_name: str, series_year: Optional[int] = None, overview: Optional[str] = None, backdrop_tags: Optional[List[str]] = None):
+        """将一个剧集ID和TMDB ID添加到追更列表，并发送通知"""
         task_cat = "追更中心"
         chasing_list = self._get_chasing_list()
         
@@ -351,6 +351,36 @@ class ChasingCenterLogic:
         chasing_list.append({"emby_id": series_id, "tmdb_id": tmdb_id, "cache": None})
         self._save_chasing_list(chasing_list)
         ui_logger.info(f"➡️ [追更] 已将剧集《{series_name}》加入追更列表。", task_category=task_cat)
+
+        # --- 新增：发送通知逻辑 ---
+        if self.config.telegram_config.enabled:
+            ui_logger.info(f"🔔 准备为《{series_name}》发送追更添加通知...", task_category=task_cat)
+            
+            image_url = ""
+            if backdrop_tags and len(backdrop_tags) > 0:
+                server = self.config.server_config.server.rstrip('/')
+                api_key = self.config.server_config.api_key
+                image_url = f"{server}/Items/{series_id}/Images/Backdrop/0?api_key={api_key}&tag={backdrop_tags[0]}&maxWidth=1280&quality=80"
+
+            if not image_url:
+                ui_logger.warning("⚠️ 无法生成背景图URL，将不发送带图通知。", task_category=task_cat)
+                return
+
+            year_str = f"({series_year})" if series_year else ""
+            title_line = escape_markdown(f"{series_name} {year_str} 添加追更剧集成功")
+            
+            time_line = escape_markdown(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            overview_line = ""
+            if overview:
+                # 截断简介以避免消息过长
+                max_len = 300
+                truncated_overview = overview[:max_len] + '...' if len(overview) > max_len else overview
+                overview_line = escape_markdown(f"剧情: {truncated_overview}")
+
+            caption = f"*{title_line}*\n\n`{time_line}`\n\n{overview_line}"
+            
+            notification_manager.send_telegram_photo_notification(image_url, caption, self.config)
 
     def remove_from_chasing_list(self, series_id: str, series_name: str, reason: str):
         """从追更列表中移除一个剧集"""

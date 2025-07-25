@@ -243,14 +243,30 @@ class WebhookLogic:
         if item_type == "Series" and self.config.chasing_center_config.enabled:
             ui_logger.info(f"【步骤 3/7 | 追更判断】检测到新入库剧集，开始判断是否加入追更列表...", task_category=task_cat)
             try:
-                tmdb_logic = TmdbLogic(self.config)
-                tmdb_id = next((v for k, v in refreshed_details.get("ProviderIds", {}).items() if k.lower() == 'tmdb'), None)
+                # --- 修改：获取更详细的信息用于通知 ---
+                details_for_chasing = self._get_emby_item_details(item_id, fields="ProviderIds,ProductionYear,Overview,BackdropImageTags")
+                if not details_for_chasing:
+                    raise Exception("无法获取剧集详细信息")
+
+                provider_ids_lower = {k.lower(): v for k, v in details_for_chasing.get("ProviderIds", {}).items()}
+                tmdb_id = provider_ids_lower.get("tmdb")
+                # --- 修改结束 ---
+
                 if tmdb_id:
+                    tmdb_logic = TmdbLogic(self.config)
                     tmdb_details = tmdb_logic._tmdb_request(f"tv/{tmdb_id}")
                     status = tmdb_details.get("status")
                     if status in ["Returning Series", "In Production"]:
                         chasing_logic = ChasingCenterLogic(self.config)
-                        chasing_logic.add_to_chasing_list(item_id, item_name)
+                        # --- 修改：传递额外参数 ---
+                        chasing_logic.add_to_chasing_list(
+                            series_id=item_id, 
+                            series_name=item_name,
+                            series_year=details_for_chasing.get("ProductionYear"),
+                            overview=details_for_chasing.get("Overview"),
+                            backdrop_tags=details_for_chasing.get("BackdropImageTags")
+                        )
+                        # --- 修改结束 ---
                     else:
                         ui_logger.info(f"剧集《{item_name}》在 TMDB 的状态为 '{status}'，非播出中，跳过添加。", task_category=task_cat)
                 else:
