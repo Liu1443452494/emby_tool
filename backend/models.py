@@ -317,6 +317,7 @@ class SigninModulesConfig(BaseModel):
 class ChasingCenterConfig(BaseModel):
     """自动化追更中心配置"""
     enabled: bool = Field(default=False, description="是否启用自动化追更工作流")
+    maintenance_cron: str = Field(default="0 3 * * *", description="每日维护任务的CRON表达式")
     notification_cron: str = Field(default="0 9 * * *", description="追剧日历通知的CRON表达式")
     calendar_days: int = Field(default=7, description="追剧日历预告未来的天数")
     completion_deadline_days: int = Field(default=30, description="完结剧集等待元数据补全的最后期限(天)")

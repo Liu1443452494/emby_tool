@@ -29,8 +29,27 @@
                   <el-icon><Notification /></el-icon>  追剧日历通知
                 </template>
                 <div class="collapse-content">
+                  <!-- --- 新增 --- -->
+                  <el-form-item label="每日维护周期 (CRON 表达式)">
+                    <el-input 
+                      v-model="localConfig.maintenance_cron" 
+                      placeholder="例如: 0 3 * * *"
+                      @input="() => parseCron(localConfig.maintenance_cron, 'maintenance')"
+                    />
+                    <div v-if="cronDescriptions.maintenance.text" class="cron-description" :class="{ 'error': cronDescriptions.maintenance.error }">
+                      {{ cronDescriptions.maintenance.text }}
+                    </div>
+                  </el-form-item>
+                  <!-- --- 新增结束 --- -->
                   <el-form-item label="通知周期 (CRON 表达式)">
-                    <el-input v-model="localConfig.notification_cron" placeholder="例如: 0 9 * * *" />
+                    <el-input 
+                      v-model="localConfig.notification_cron" 
+                      placeholder="例如: 0 9 * * *"
+                      @input="() => parseCron(localConfig.notification_cron, 'notification')"
+                    />
+                     <div v-if="cronDescriptions.notification.text" class="cron-description" :class="{ 'error': cronDescriptions.notification.error }">
+                      {{ cronDescriptions.notification.text }}
+                    </div>
                   </el-form-item>
                   <el-form-item label="日历预告天数">
                     <el-input-number v-model="localConfig.calendar_days" :min="1" :max="30" />
@@ -136,6 +155,9 @@ import { Notification, CircleCheck, Plus } from '@element-plus/icons-vue';
 import ChasingCard from '@/components/ChasingCard.vue';
 import CalendarDialog from '@/components/CalendarDialog.vue';
 import _ from 'lodash';
+// --- 新增 ---
+import cronstrue from 'cronstrue/i18n';
+// --- 新增结束 ---
 
 const store = useChasingCenterStore();
 const mediaStore = useMediaStore();
@@ -149,11 +171,32 @@ const searchQuery = ref('');
 const isCalendarDialogVisible = ref(false);
 const selectedSeriesForCalendar = ref(null);
 
+// --- 新增 ---
+const cronDescriptions = ref({
+  maintenance: { text: '', error: false },
+  notification: { text: '', error: false },
+});
+
+const parseCron = (cronValue, type) => {
+  const target = cronDescriptions.value[type];
+  if (!cronValue || cronValue.trim() === '') {
+    target.text = '';
+    target.error = false;
+    return;
+  }
+  try {
+    target.text = cronstrue.toString(cronValue, { locale: "zh_CN" });
+    target.error = false;
+  } catch (e) {
+    target.text = `表达式无效: ${e}`;
+    target.error = true;
+  }
+};
+// --- 新增结束 ---
+
 const handleViewCalendar = async (series) => {
   selectedSeriesForCalendar.value = series;
-  // --- 修改：调用 store action 获取数据 ---
   await store.fetchCalendarData(series.emby_id);
-  // --- 修改结束 ---
   isCalendarDialogVisible.value = true;
 };
 
@@ -167,6 +210,11 @@ onMounted(() => {
 
 watch(() => store.config, (newConfig) => {
   localConfig.value = _.cloneDeep(newConfig);
+  // --- 新增 ---
+  // 初始化时解析一次
+  parseCron(localConfig.value.maintenance_cron, 'maintenance');
+  parseCron(localConfig.value.notification_cron, 'notification');
+  // --- 新增结束 ---
 }, { deep: true });
 
 const handleSave = async () => {
@@ -323,5 +371,18 @@ const handleSeriesSelection = async (series) => {
   border: 1px solid var(--el-border-color-light);
   border-radius: 4px;
   overflow: hidden;
+}.cron-description {
+  font-size: 12px;
+  color: var(--el-color-success);
+  margin-top: 5px;
+  padding: 5px 8px;
+  background-color: var(--el-color-success-light-9);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+.cron-description.error {
+  color: var(--el-color-error);
+  background-color: var(--el-color-error-light-9);
 }
 </style>

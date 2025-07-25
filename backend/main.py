@@ -439,10 +439,19 @@ def update_chasing_scheduler():
     
     # 每日维护任务 (内置，不可配置)
     job_id_workflow = "chasing_workflow_daily"
-    if config.chasing_center_config.enabled:
-        # 每天凌晨3点执行
-        scheduler.add_job(trigger_chasing_workflow, CronTrigger.from_crontab("0 3 * * *"), id=job_id_workflow, replace_existing=True)
-        ui_logger.info(f"  - 已启用内置的每日追更维护任务 (CRON: 0 3 * * *)", task_category=task_cat)
+    # --- 修改 ---
+    if config.chasing_center_config.enabled and config.chasing_center_config.maintenance_cron:
+        try:
+            scheduler.add_job(
+                trigger_chasing_workflow, 
+                CronTrigger.from_crontab(config.chasing_center_config.maintenance_cron), 
+                id=job_id_workflow, 
+                replace_existing=True
+            )
+            ui_logger.info(f"  - 已更新每日追更维护任务 (CRON: {config.chasing_center_config.maintenance_cron})", task_category=task_cat)
+        except Exception as e:
+            ui_logger.error(f"  - ❌ 更新每日追更维护任务失败: {e}", task_category=task_cat)
+    # --- 修改结束 ---
     elif scheduler.get_job(job_id_workflow):
         scheduler.remove_job(job_id_workflow)
         ui_logger.info(f"  - 已禁用并移除每日追更维护任务。", task_category=task_cat)
