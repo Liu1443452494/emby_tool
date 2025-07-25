@@ -480,8 +480,22 @@ class ChasingCenterLogic:
                 if datetime.now() > deadline:
                     self.remove_from_chasing_list(series_id, series_name, f"超出最终播出日期 {self.chasing_config.completion_deadline_days} 天，强制完结")
                 else:
-                    days_left = (deadline - datetime.now()).days
-                    ui_logger.info(f"剧集《{series_name}》元数据不完整，仍在 {days_left} 天的等待期内，本次不移除。", task_category=task_cat)
+                    # --- 修改：优化日志输出 ---
+                    time_left = deadline - datetime.now()
+                    days_left = time_left.days
+                    
+                    remaining_str = ""
+                    if days_left > 0:
+                        remaining_str = f" (还剩 {days_left} 天)"
+                    else:
+                        hours_left = time_left.total_seconds() / 3600
+                        if hours_left > 1:
+                            remaining_str = f" (还剩 {hours_left:.0f} 小时)"
+                        else:
+                            minutes_left = time_left.total_seconds() / 60
+                            remaining_str = f" (还剩 {minutes_left:.0f} 分钟)"
+
+                    ui_logger.info(f"剧集《{series_name}》元数据不完整，仍在 {self.chasing_config.completion_deadline_days} 天的等待期内{remaining_str}，本次不移除。", task_category=task_cat)
 
         except Exception as e:
             ui_logger.error(f"❌ 在为《{series_name}》执行完结检测时发生错误: {e}", task_category=task_cat, exc_info=True)
