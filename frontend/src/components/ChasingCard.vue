@@ -86,9 +86,22 @@
               <el-dropdown-item command="remove" :icon="Delete">
                 移除追更
               </el-dropdown-item>
-              <el-dropdown-item command="calendar" :icon="Calendar" >
-                查看日历
-              </el-dropdown-item>
+              <el-tooltip
+                content="当前剧集已完结无日历缓存信息"
+                placement="top"
+                :disabled="!isCalendarDisabled"
+              >
+                <!-- 使用 span 包裹以确保 tooltip 在 item 禁用时也能触发 -->
+                <span>
+                  <el-dropdown-item 
+                    command="calendar" 
+                    :icon="Calendar" 
+                    :disabled="isCalendarDisabled"
+                  >
+                    查看日历
+                  </el-dropdown-item>
+                </span>
+              </el-tooltip>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -109,7 +122,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(['remove']);
+const emit = defineEmits(['remove', 'view-calendar']);
 
 const mediaStore = useMediaStore();
 const serverUrl = computed(() => mediaStore.appConfig?.server_config?.server);
@@ -185,6 +198,12 @@ const chasingSeasonTag = computed(() => {
   };
 });
 
+const isCalendarDisabled = computed(() => {
+  const status = props.series.tmdb_status;
+  // 只有在“更新中”或“制作中”状态下才启用日历
+  return !(status === 'Returning Series' || status === 'In Production');
+});
+
 // --- 新增 ---
 const missingInfoText = computed(() => {
   const info = props.series.missing_info;
@@ -208,13 +227,15 @@ const missingInfoIcon = computed(() => {
   if (status === 'complete') return Files;
   return null;
 });
-// --- 新增结束 ---
-
 const handleCommand = (command) => {
   if (command === 'remove') {
-    // --- 修改：传递 emby_id 而不是整个 series 对象 ---
     emit('remove', { Id: props.series.emby_id, Name: props.series.name });
   }
+  // --- 新增 ---
+  if (command === 'calendar') {
+    emit('view-calendar', props.series);
+  }
+  // --- 新增结束 ---
 };
 </script>
 

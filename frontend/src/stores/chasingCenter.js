@@ -18,6 +18,8 @@ export const useChasingCenterStore = defineStore('chasingCenter', () => {
   const isLoading = ref(false);
   const isListLoading = ref(false);
   const isSaving = ref(false);
+  const calendarData = ref({});
+  const isCalendarLoading = ref(false);
 
   // --- Actions ---
   const showMessage = (type, message) => {
@@ -142,12 +144,29 @@ export const useChasingCenterStore = defineStore('chasingCenter', () => {
     }
   }
 
+  async function fetchCalendarData(seriesId) {
+    isCalendarLoading.value = true;
+    calendarData.value = {};
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/chasing-center/${seriesId}/calendar`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '获取日历数据失败');
+      calendarData.value = data;
+    } catch (error) {
+      showMessage('error', error.message);
+    } finally {
+      isCalendarLoading.value = false;
+    }
+  }
+
   return {
     config,
     chasingList,
     isLoading,
     isListLoading,
     isSaving,
+    calendarData,
+    isCalendarLoading,
     fetchConfig,
     saveConfig,
     fetchList,
@@ -155,5 +174,6 @@ export const useChasingCenterStore = defineStore('chasingCenter', () => {
     removeFromList,
     triggerRun,
     triggerCalendar,
+    fetchCalendarData,
   };
 });

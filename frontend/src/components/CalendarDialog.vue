@@ -9,7 +9,7 @@
     @close="$emit('update:visible', false)"
   >
     <div class="calendar-container">
-      <el-calendar v-model="calendarDate">
+      <el-calendar v-model="calendarDate" :first-day-of-week="1">
         <template #header="{ date }">
           <span>{{ date }}</span>
           <el-button-group>
@@ -19,7 +19,7 @@
           </el-button-group>
         </template>
         <template #date-cell="{ data }">
-          <div class="date-cell">
+          <div class="date-cell" :class="{ 'is-today': data.isToday }">
             <div class="day-number">{{ data.day.split('-').slice(2).join('-') }}</div>
             <div v-if="calendarData[data.day]" class="events-container">
               <div 
@@ -41,9 +41,11 @@
   </el-dialog>
 </template>
 
+<!-- frontend/src/components/CalendarDialog.vue (script setup 替换) -->
 <script setup>
 import { ref, watch, computed } from 'vue';
 import { useMediaStore } from '@/stores/media';
+import { useChasingCenterStore } from '@/stores/chasingCenter';
 import _ from 'lodash';
 
 const props = defineProps({
@@ -60,6 +62,7 @@ const props = defineProps({
 const emit = defineEmits(['update:visible']);
 
 const mediaStore = useMediaStore();
+const chasingStore = useChasingCenterStore();
 const serverUrl = computed(() => mediaStore.appConfig?.server_config?.server);
 const apiKey = computed(() => mediaStore.appConfig?.server_config?.api_key);
 
@@ -68,30 +71,30 @@ const calendarDate = ref(new Date());
 const calendarData = ref({});
 const calendarTitle = ref('');
 
+// 监听父组件传入的可见性
 watch(() => props.visible, (newVal) => {
   dialogVisible.value = newVal;
   if (newVal && props.seriesData) {
+    // 当对话框可见时，处理从 store 获取的数据
+    processCalendarData();
+  }
+});
+
+// 监听 store 中日历数据的变化
+watch(() => chasingStore.calendarData, (newData) => {
+  if (props.visible && props.seriesData) {
     processCalendarData();
   }
 });
 
 const processCalendarData = () => {
   const series = props.seriesData;
+  if (!series) return;
+
   calendarTitle.value = series.name;
-  
   const posterUrl = `${serverUrl.value}/Items/${series.emby_id}/Images/Primary?api_key=${apiKey.value}&fillWidth=100&quality=90`;
-
-  const allEpisodes = [];
-  const details = series.cache?.data?.chasing_season_details || {};
-  for (const season in details) {
-    allEpisodes.push(...details[season]);
-  }
-
-  const groupedByDate = _.groupBy(
-    allEpisodes.filter(ep => ep.air_date && ep.air_date !== 'null'),
-    'air_date'
-  );
-
+  
+  const groupedByDate = chasingStore.calendarData;
   const processedData = {};
   let firstEventDate = null;
 
@@ -158,6 +161,7 @@ const selectDate = (val) => {
 .events-container {
   flex-grow: 1;
   overflow-y: auto;
+  padding: 0 4px 4px 4px;
 }
 .event-item {
   display: flex;
@@ -195,5 +199,14 @@ const selectDate = (val) => {
 }
 .event-episode {
   color: var(--el-text-color-secondary);
+}.date-cell.is-today .day-number {
+  background-color: var(--el-color-primary);
+  color: #fff;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  line-height: 24px;
+  text-align: center;
+  padding: 0;
 }
 </style>

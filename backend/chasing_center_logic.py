@@ -617,3 +617,36 @@ class ChasingCenterLogic:
         
         ui_logger.info("➡️ 正在发送 Telegram 通知...", task_category=task_cat)
         notification_manager.send_telegram_message(final_message, self.config)
+
+    def get_calendar_data_for_series(self, series_id: str) -> Dict[str, Any]:
+        """为单个剧集生成日历数据"""
+        task_cat = "追更-日历"
+        chasing_list = self._get_chasing_list()
+        
+        target_series = next((item for item in chasing_list if item.get("emby_id") == series_id), None)
+        
+        if not target_series:
+            ui_logger.warning(f"⚠️ [日历] 在追更列表中未找到 Emby ID 为 {series_id} 的剧集。", task_category=task_cat)
+            return {}
+
+        cache = target_series.get("cache", {})
+        if not cache:
+            ui_logger.debug(f"   - [日历] 剧集 {series_id} 缺少缓存数据，无法生成日历。", task_category=task_cat)
+            return {}
+
+        chasing_season_details = cache.get("data", {}).get("chasing_season_details", {})
+        if not chasing_season_details:
+            ui_logger.debug(f"   - [日历] 剧集 {series_id} 的缓存中缺少 'chasing_season_details'，无法生成日历。", task_category=task_cat)
+            return {}
+
+        # 使用 defaultdict 简化分组逻辑
+        from collections import defaultdict
+        grouped_by_date = defaultdict(list)
+
+        for season_number_str, episodes in chasing_season_details.items():
+            for episode in episodes:
+                air_date_str = episode.get("air_date")
+                if air_date_str and air_date_str != "null":
+                    grouped_by_date[air_date_str].append(episode)
+        
+        return dict(grouped_by_date)

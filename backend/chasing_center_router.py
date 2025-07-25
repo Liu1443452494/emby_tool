@@ -90,3 +90,12 @@ def trigger_calendar_notification():
         "手动触发-追剧日历通知"
     )
     return {"status": "success", "message": "追剧日历通知任务已手动触发！", "task_id": task_id}
+
+@router.get("/{series_id}/calendar")
+def get_series_calendar(series_id: str):
+    """获取单个剧集的日历数据"""
+    try:
+        logic = get_logic()
+        return logic.get_calendar_data_for_series(series_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

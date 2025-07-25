@@ -53,7 +53,7 @@
             </el-collapse>
 
             <div class="action-buttons">
-            <el-button @click="handleTriggerCalendar" :disabled="!localConfig.enabled">发送日历通知</el-button>
+            <el-button @click="handleTriggerCalendar" :disabled="!localConfig.enabled">执行一次日历通知</el-button>
               <el-button @click="handleTriggerRun" :disabled="!localConfig.enabled">立即执行一次维护</el-button>
               <el-button type="primary" @click="handleSave" :loading="store.isSaving">保存设置</el-button>
             </div>
@@ -118,6 +118,10 @@
         </div>
       </div>
     </el-dialog>
+    <CalendarDialog 
+      v-model:visible="isCalendarDialogVisible"
+      :series-data="selectedSeriesForCalendar"
+    />
 
   </div>
 </template>
@@ -130,6 +134,7 @@ import { useConfigStore } from '@/stores/config';
 import { ElMessage } from 'element-plus';
 import { Notification, CircleCheck, Plus } from '@element-plus/icons-vue';
 import ChasingCard from '@/components/ChasingCard.vue';
+import CalendarDialog from '@/components/CalendarDialog.vue';
 import _ from 'lodash';
 
 const store = useChasingCenterStore();
@@ -141,10 +146,20 @@ const activeCollapse = ref('1');
 const isSearchDialogVisible = ref(false);
 const searchQuery = ref('');
 
+const isCalendarDialogVisible = ref(false);
+const selectedSeriesForCalendar = ref(null);
+
+const handleViewCalendar = async (series) => {
+  selectedSeriesForCalendar.value = series;
+  // --- 修改：调用 store action 获取数据 ---
+  await store.fetchCalendarData(series.emby_id);
+  // --- 修改结束 ---
+  isCalendarDialogVisible.value = true;
+};
+
 onMounted(() => {
   store.fetchConfig();
   store.fetchList();
-  // 确保 mediaStore 也加载了 config 以获取 server_url
   if (!configStore.isLoaded) {
     configStore.fetchConfig();
   }
@@ -170,7 +185,6 @@ const handleTriggerCalendar = () => {
 };
 
 const handleSearch = () => {
-  // 过滤，只搜索电视剧
   mediaStore.searchMedia(searchQuery.value).then(() => {
     mediaStore.searchResults = mediaStore.searchResults.filter(item => item.Type === 'Series');
   });
