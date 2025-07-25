@@ -30,6 +30,16 @@
           <el-input-number v-model="localConfig.history_days" :min="1" />
         </el-form-item>
       </div>
+
+      <!-- --- 新增 --- -->
+      <el-form-item label="通知设置">
+        <el-switch v-model="localConfig.send_notification" active-text="任务完成后发送通知" />
+        <div class="form-item-description">
+          此开关仅在“Emby配置”页面中全局启用了Telegram通知后才生效。
+        </div>
+      </el-form-item>
+      <!-- --- 新增结束 --- -->
+
       <el-alert
         title="【使用教程】"
         type="info"
@@ -74,7 +84,10 @@ const localConfig = reactive({});
 
 watch(() => props.moduleConfig, (newConfig) => {
   if (newConfig) {
-    Object.assign(localConfig, _.cloneDeep(newConfig));
+    // --- 修改：确保新字段有默认值 ---
+    const defaultConfig = { send_notification: true };
+    Object.assign(localConfig, defaultConfig, _.cloneDeep(newConfig));
+    // --- 修改结束 ---
   }
 }, { immediate: true });
 

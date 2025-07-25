@@ -295,6 +295,52 @@
           </el-button>
         </el-form-item>
       </el-form>
+      <el-form
+        ref="telegramFormRef"
+        :model="localTelegramConfig"
+        :rules="telegramFormRules"
+        class="config-section"
+        label-position="left"
+        :label-width="formLabelWidth"
+        @submit.prevent="handleSaveTelegram(telegramFormRef)"
+        hide-required-asterisk
+      >
+        <h3>通知设置</h3>
+        <el-form-item label="启用Telegram通知">
+          <el-switch v-model="localTelegramConfig.enabled" />
+          <div class="form-item-description">
+            全局开关，用于启用或禁用所有通过Telegram发送的通知。
+          </div>
+        </el-form-item>
+        <el-form-item label="Bot Token" prop="bot_token">
+          <el-input 
+            v-model="localTelegramConfig.bot_token" 
+            class="glow-input" 
+            placeholder="从 @BotFather 获取" 
+            :disabled="!localTelegramConfig.enabled"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item label="Chat ID" prop="chat_id">
+          <el-input 
+            v-model="localTelegramConfig.chat_id" 
+            class="glow-input" 
+            placeholder="个人、群组或频道的ID" 
+            :disabled="!localTelegramConfig.enabled"
+          />
+           <div class="form-item-description">
+            <el-button type="primary" link @click="isTelegramHelpVisible = true">如何获取配置信息？</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item class="form-button-container multi-button">
+          <el-button @click="handleTestTelegram" :loading="isTelegramTesting" :disabled="!localTelegramConfig.enabled">
+            发送测试通知
+          </el-button>
+          <el-button type="success" native-type="submit" :loading="isTelegramSaving">
+            保存通知设置
+          </el-button>
+        </el-form-item>
+      </el-form>
 
     </template>
 
@@ -316,9 +362,44 @@
       </div>
     </template>
 
-  <!-- === 文件: frontend/src/views/ServerConfigView.vue === -->
+    <el-dialog
+      v-model="isTelegramHelpVisible"
+      title="如何获取 Telegram 配置信息？"
+      width="700px"
+    >
+      <div class="help-content">
+        <h4>第1步：获取 Bot Token</h4>
+        <p>在 Telegram 中搜索 <code>@BotFather</code>，发送 <code>/newbot</code> 命令创建一个新的机器人，即可获得 Bot Token。</p>
+        
+        <el-divider />
 
-    <!-- 新增：自定义代理规则对话框 -->
+        <h4>第2步：获取 Chat ID (三种方式)</h4>
+        
+        <h5>A. 发送给个人：</h5>
+        <ol>
+          <li>搜索 <code>@userinfobot</code>，点击 "Start"，它会立即返回您的个人 Chat ID。</li>
+          <li><b>关键操作：</b> 您必须主动给您自己创建的机器人发送一条消息（例如，发一个 "Hi"），以激活对话。否则机器人无法给您发消息，会导致 "chat not found" 错误。</li>
+        </ol>
+
+        <h5>B. 发送给群组：</h5>
+        <ol>
+          <li>将您创建的机器人添加到目标群组中。</li>
+          <li>在群组中发送任意一条消息。</li>
+          <li>在浏览器中访问 <code>https://api.telegram.org/bot<你的BotToken>/getUpdates</code> (将 <code><你的BotToken></code> 替换为您的真实Token)。</li>
+          <li>在返回的 JSON 数据中，找到 <code>result[...].message.chat.id</code>，这个通常是以 <code>-</code> 开头的数字就是群组的 Chat ID。</li>
+        </ol>
+
+        <h5>C. 发送给频道：</h5>
+        <ol>
+          <li>将您创建的机器人添加为频道的管理员。</li>
+          <li>频道的 Chat ID 通常是其公开链接的用户名，例如 <code>@channel_name</code>。</li>
+        </ol>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="isTelegramHelpVisible = false">我明白了</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog
       v-model="isProxyRulesDialogVisible"
       title="自定义代理规则"
@@ -439,9 +520,11 @@ const doubanFormRef = ref(null)
 const tmdbFormRef = ref(null)
 const proxyFormRef = ref(null)
 const doubanFixerFormRef = ref(null)
+const telegramFormRef = ref(null)
 
 const localServerConfig = ref({ server: '', api_key: '', user_id: '' })
 const localDownloadConfig = ref({ download_directory: '', download_behavior: 'skip', directory_naming_rule: 'tmdb_id' , nfo_actor_limit: 20 })
+const localTelegramConfig = ref({ enabled: false, bot_token: '', chat_id: '' })
 const localDoubanConfig = ref({ directory: '', refresh_cron: '', extra_fields: [] })
 const localTmdbConfig = ref({ api_key: '', custom_api_domain_enabled: false, custom_api_domain: '' })
 const localProxyConfig = ref({ 
@@ -464,6 +547,9 @@ const isProxySaving = ref(false)
 const isProxyTesting = ref(false)
 const isDoubanFixerLoading = ref(false)
 const isCookieTesting = ref(false)
+const isTelegramSaving = ref(false)
+const isTelegramTesting = ref(false)
+const isTelegramHelpVisible = ref(false)
 
 const isProxyRulesDialogVisible = ref(false)
 const tempCustomRules = ref([])
@@ -475,6 +561,29 @@ const proxyTargetDescription = computed(() => {
     return '当前为白名单模式，请勾选需要走代理的目标。常见设置为：仅勾选TMDB。';
   }
 });
+
+const telegramFormRules = reactive({
+  bot_token: [{
+    validator: (rule, value, callback) => {
+      if (localTelegramConfig.value.enabled && !value) {
+        callback(new Error('启用通知后，Bot Token 不能为空'))
+      } else {
+        callback()
+      }
+    },
+    trigger: 'blur'
+  }],
+  chat_id: [{
+    validator: (rule, value, callback) => {
+      if (localTelegramConfig.value.enabled && !value) {
+        callback(new Error('启用通知后，Chat ID 不能为空'))
+      } else {
+        callback()
+      }
+    },
+    trigger: 'blur'
+  }]
+})
 
 const serverFormRules = reactive({
   server: [{ required: true, message: '服务器地址不能为空' }],
@@ -530,6 +639,7 @@ watch(() => configStore.appConfig, (newConfig) => {
     localDownloadConfig.value = { ...newConfig.download_config }
     localDoubanConfig.value = { ...newConfig.douban_config, extra_fields: newConfig.douban_config.extra_fields || [] }
     localTmdbConfig.value = { ...newConfig.tmdb_config }
+    localTelegramConfig.value = { enabled: false, bot_token: '', chat_id: '', ...newConfig.telegram_config }
     localProxyConfig.value = {
       enabled: false, 
       url: '', 
@@ -658,6 +768,34 @@ const handleTestProxy = async () => {
       }
     } else {
       showMessage('warning', '请修正代理地址格式后再测试！');
+    }
+  });
+};
+
+const handleSaveTelegram = async (formEl) => {
+  if (!formEl) return;
+  await formEl.validate(async (valid) => {
+    if (valid) {
+      isTelegramSaving.value = true;
+      const result = await configStore.saveTelegramConfig(localTelegramConfig.value);
+      showMessage(result.success ? 'success' : 'error', result.message);
+      isTelegramSaving.value = false;
+    } else {
+      showMessage('warning', '请填写所有必填项！');
+      return false;
+    }
+  });
+};
+
+const handleTestTelegram = async () => {
+  await telegramFormRef.value.validate(async (valid) => {
+    if (valid) {
+      isTelegramTesting.value = true;
+      const result = await configStore.testTelegramConfig(localTelegramConfig.value);
+      showMessage(result.success ? 'success' : 'error', result.message);
+      isTelegramTesting.value = false;
+    } else {
+      showMessage('warning', '请先填写必填项再测试！');
     }
   });
 };
@@ -949,5 +1087,25 @@ const confirmProxyRules = () => {
 .rules-table-container {
   flex-grow: 1;
   overflow: hidden;
+}.help-content h4 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  color: var(--el-text-color-primary);
+}
+.help-content p, .help-content li {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+  line-height: 1.7;
+  margin-bottom: 8px;
+}
+.help-content ol {
+  padding-left: 20px;
+  margin: 10px 0;
+}
+.help-content code {
+  background-color: var(--el-fill-color);
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-family: 'Courier New', Courier, monospace;
 }
 </style>

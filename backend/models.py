@@ -305,6 +305,7 @@ class HdhiveSigninConfig(BaseModel):
     max_retries: int = Field(default=3, description="最大重试次数")
     retry_interval: int = Field(default=30, description="重试间隔(秒)")
     history_days: int = Field(default=30, description="历史保留天数")
+    send_notification: bool = Field(default=True, description="任务完成后是否发送通知")
 
 class SigninModulesConfig(BaseModel):
     """聚合所有签到模块的配置"""

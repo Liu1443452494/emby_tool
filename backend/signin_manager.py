@@ -120,11 +120,9 @@ class SigninManager:
             except Exception as e:
                 ui_logger.warning(f"⚠️ 解析随机延迟配置失败 ({module.config.random_delay})，将立即执行。错误: {e}", task_category=task_cat)
 
-        # --- 核心修改：集成代理管理器 ---
         current_config = app_config.load_app_config()
         from proxy_manager import ProxyManager
         proxy_manager = ProxyManager(current_config)
-        # 获取模块的API地址来判断是否需要代理
         target_url = getattr(module, '_signin_api', '')
         proxies = proxy_manager.get_proxies(target_url) if target_url else {}
         
@@ -133,9 +131,7 @@ class SigninManager:
         else:
             ui_logger.info(f"▶️ 开始执行模块 [{module.module_name}] 的签到任务...", task_category=task_cat)
         
-        # 将代理配置传递给签到方法
         result = module.sign(proxies=proxies)
-        # --- 修改结束 ---
         
         module_data = self.signin_data.setdefault(module_id, {})
         history = module_data.setdefault("history", [])
@@ -165,36 +161,44 @@ class SigninManager:
         else:
             ui_logger.error(f"❌ 任务执行失败！详情: {message}", task_category=task_cat)
         
-        try:
-            from notification_manager import notification_manager, escape_markdown
-            
-            status_icon = "✅" if "成功" in status or "已签到" in status else "❌"
-            
-            escaped_module_name = escape_markdown(module.module_name)
-            escaped_status = escape_markdown(status)
-            escaped_message = escape_markdown(message)
-            
-            separator = escape_markdown("--------------------------------------")
-            
-            points_info = f"\n*本次获得*: `{result.get('points', 'N/A')}`" if result.get('points') != "—" else ""
-            days_info = f"\n*连续签到*: `{result.get('days', 'N/A')} 天`" if result.get('days') != "—" else ""
-            
-            current_points_info = ""
-            if 'current_points' in result:
-                current_points_info = f"\n*当前总计*: `{result['current_points']}`"
-            
-            notification_message = (
-                f"*{escaped_module_name}*\n"
-                f"{separator}\n"
-                f"*状态*: {status_icon} {escaped_status}\n"
-                f"*详情*: `{escaped_message}`"
-                f"{points_info}"
-                f"{days_info}"
-                f"{current_points_info}"
-            )
-            notification_manager.send_telegram_message(notification_message, current_config)
-        except Exception as e:
-            ui_logger.error(f"❗ 发送签到通知时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+        # --- 核心修改：增加二级判断 ---
+        # 检查全局开关和模块独立开关
+        if not current_config.telegram_config.enabled:
+            ui_logger.debug("   - [调试] 全局Telegram通知未启用，跳过发送。", task_category=task_cat)
+        elif not getattr(module.config, 'send_notification', True): # 兼容旧配置，默认为True
+            ui_logger.info(f"ℹ️ 模块 [{module.module_name}] 已关闭独立的通知开关，本次不发送通知。", task_category=task_cat)
+        else:
+            try:
+                from notification_manager import notification_manager, escape_markdown
+                
+                status_icon = "✅" if "成功" in status or "已签到" in status else "❌"
+                
+                escaped_module_name = escape_markdown(module.module_name)
+                escaped_status = escape_markdown(status)
+                escaped_message = escape_markdown(message)
+                
+                separator = escape_markdown("--------------------------------------")
+                
+                points_info = f"\n*本次获得*: `{result.get('points', 'N/A')}`" if result.get('points') != "—" else ""
+                days_info = f"\n*连续签到*: `{result.get('days', 'N/A')} 天`" if result.get('days') != "—" else ""
+                
+                current_points_info = ""
+                if 'current_points' in result:
+                    current_points_info = f"\n*当前总计*: `{result['current_points']}`"
+                
+                notification_message = (
+                    f"*{escaped_module_name}*\n"
+                    f"{separator}\n"
+                    f"*状态*: {status_icon} {escaped_status}\n"
+                    f"*详情*: `{escaped_message}`"
+                    f"{points_info}"
+                    f"{days_info}"
+                    f"{current_points_info}"
+                )
+                notification_manager.send_telegram_message(notification_message, current_config)
+            except Exception as e:
+                ui_logger.error(f"❗ 发送签到通知时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+        # --- 修改结束 ---
         
         ui_logger.info(f"🎉 签到任务流程执行完毕。", task_category=task_cat)
 # 创建一个单例
