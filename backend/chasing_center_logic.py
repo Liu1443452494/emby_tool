@@ -563,6 +563,13 @@ class ChasingCenterLogic:
         task_cat = "追更-日历通知"
         ui_logger.info(f"📅 开始基于本地缓存生成追剧日历...", task_category=task_cat)
 
+        ui_logger.info(f"   - [步骤1/2] 正在预热缓存，确保数据为最新...", task_category=task_cat)
+        # 调用此函数的核心目的是利用其副作用：检查并更新 chasing_series.json 文件
+        self.get_detailed_chasing_list()
+        ui_logger.info(f"   - ✅ 缓存预热完成。", task_category=task_cat)
+        
+        ui_logger.info(f"   - [步骤2/2] 开始生成日历内容...", task_category=task_cat)
+
         chasing_list_data = self._get_chasing_list()
         if not chasing_list_data:
             ui_logger.info("✅ 追更列表为空，无需发送通知。", task_category=task_cat)
