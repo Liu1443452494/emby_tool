@@ -106,12 +106,18 @@
                 </template>
                 <div class="settings-popover">
                   <el-form-item label="演员映射条数">
-                    <el-input-number v-model="actorLimit" :min="1" :max="200" controls-position="right" style="width: 100%;" />
+                    <!-- --- 核心修改 5: v-model 绑定到 localActorLimit --- -->
+                    <el-input-number v-model="localActorLimit" :min="1" :max="200" controls-position="right" style="width: 100%;" />
+                    <!-- --- 修改结束 --- -->
                     <div class="form-item-description">
                       为提高效率，仅处理每个媒体项的前 N 位演员。
                     </div>
                   </el-form-item>
-                  <!-- --- 新增：生成模式选择 --- -->
+                  <!-- --- 核心修改 6: 新增保存按钮 --- -->
+                  <div style="text-align: right; margin-top: 10px;">
+                    <el-button type="primary" size="small" @click="handleSaveActorLimit" :loading="isSavingActorLimit">保存</el-button>
+                  </div>
+                  <!-- --- 修改结束 --- -->
                   <el-divider />
                   <el-form-item label="生成模式">
                      <el-radio-group v-model="generationMode">
@@ -259,8 +265,6 @@
   </div>
 </template>
 
-
-// frontend/src/views/ActorRoleMapperView.vue (script替换)
 <script setup>
 import { ref, onMounted, computed, watch, markRaw, reactive } from 'vue';
 import { useRouter } from 'vue-router';
@@ -290,7 +294,11 @@ const searchQuery = ref('');
 const dialogSelection = ref([]);
 const mapSearchQuery = ref('');
 const activeCollapseNames = ref([]);
-const actorLimit = useStorage('actor-role-mapper-limit', 50);
+
+const actorLimit = computed(() => configStore.appConfig.actor_role_mapper_config?.actor_limit || 50);
+const localActorLimit = ref(50);
+const isSavingActorLimit = ref(false);
+
 const generationMode = useStorage('actor-role-mapper-generation-mode', 'incremental');
 const actorAvatarsCache = reactive({});
 
@@ -388,7 +396,12 @@ onMounted(() => {
     filteredMap.value = displayedActorMap.value;
   });
   watch(() => configStore.isLoaded, (loaded) => {
-    if (loaded) updateScopeFromConfig();
+    if (loaded) {
+      updateScopeFromConfig();
+      // --- 核心修改 2: 初始化 localActorLimit ---
+      localActorLimit.value = configStore.appConfig.actor_role_mapper_config?.actor_limit || 50;
+      // --- 修改结束 ---
+    }
   }, { immediate: true });
 });
 
@@ -430,14 +443,24 @@ async function startTask(endpoint, payload, confirmOptions) {
     }
     await actorRoleMapperStore.startTask(endpoint, payload);
   } catch (error) {
-    // User cancelled
+    
   }
 }
+
+const handleSaveActorLimit = async () => {
+  isSavingActorLimit.value = true;
+  const result = await configStore.saveActorRoleMapperConfig({ actor_limit: localActorLimit.value });
+  if (result.success) {
+    ElMessage.success('演员映射条数已保存！');
+  } else {
+    ElMessage.error(`保存失败: ${result.message}`);
+  }
+  isSavingActorLimit.value = false;
+};
 
 const handleGenerate = () => {
   const payload = { 
     scope: scope.value,
-    actor_limit: actorLimit.value,
     generation_mode: generationMode.value
   };
   

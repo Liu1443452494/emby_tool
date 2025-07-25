@@ -81,6 +81,9 @@ export const useConfigStore = defineStore('config', () => {
       enabled: false,
       bot_token: '',
       chat_id: ''
+    },
+    actor_role_mapper_config: {
+      actor_limit: 50
     }
   })
   const isConnected = ref(false)
@@ -186,6 +189,10 @@ export const useConfigStore = defineStore('config', () => {
 
         if (!fullConfig.telegram_config) {
           fullConfig.telegram_config = { enabled: false, bot_token: '', chat_id: '' };
+        }
+
+        if (!fullConfig.actor_role_mapper_config) {
+          fullConfig.actor_role_mapper_config = { actor_limit: 50 };
         }
         
         appConfig.value = fullConfig
@@ -451,6 +458,23 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function saveActorRoleMapperConfig(newConfig) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/actor-role-mapper/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '未知错误');
+      
+      appConfig.value.actor_role_mapper_config = newConfig;
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
   return { 
     appConfig, 
     isLoaded,
@@ -470,6 +494,7 @@ export const useConfigStore = defineStore('config', () => {
     saveEpisodeRefresherConfig,
     saveEpisodeRenamerConfig,
     saveTelegramConfig,
-    testTelegramConfig
+    testTelegramConfig,
+    saveActorRoleMapperConfig
   }
 })

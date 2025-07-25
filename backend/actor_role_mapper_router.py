@@ -6,7 +6,7 @@ from typing import List, Dict, Literal
 import os
 import json
 from log_manager import ui_logger
-from models import AppConfig, ScheduledTasksTargetScope
+from models import AppConfig, ScheduledTasksTargetScope, ActorRoleMapperConfig
 from actor_role_mapper_logic import ActorRoleMapperLogic, ACTOR_ROLE_MAP_FILE
 from task_manager import task_manager
 import config as app_config
@@ -16,6 +16,24 @@ router = APIRouter()
 def get_logic() -> ActorRoleMapperLogic:
     config = app_config.load_app_config()
     return ActorRoleMapperLogic(config)
+
+@router.get("/config", response_model=ActorRoleMapperConfig)
+def get_actor_role_mapper_config():
+    """获取演员角色映射器的配置"""
+    return app_config.load_app_config().actor_role_mapper_config
+
+@router.post("/config")
+def save_actor_role_mapper_config(config: ActorRoleMapperConfig):
+    """保存演员角色映射器的配置"""
+    try:
+        current_app_config = app_config.load_app_config()
+        current_app_config.actor_role_mapper_config = config
+        app_config.save_app_config(current_app_config)
+        ui_logger.info("✅ [演员角色映射] 配置已保存。", task_category="系统配置")
+        return {"status": "success", "message": "演员角色映射设置已保存！"}
+    except Exception as e:
+        ui_logger.error(f"❌ 保存演员角色映射设置失败: {e}", task_category="API-角色映射")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/map")
 def get_map():
@@ -30,7 +48,7 @@ def get_map():
 
 class TaskRequest(BaseModel):
     scope: ScheduledTasksTargetScope
-    actor_limit: int = Field(default=50, ge=1, description="每个媒体项处理的演员数量上限")
+    
     generation_mode: Literal['incremental', 'overwrite', 'update_selected'] = Field(default='incremental', description="生成模式：incremental-增量, overwrite-覆盖, update_selected-更新指定")
 
 @router.post("/generate")
@@ -41,7 +59,6 @@ def generate_map(req: TaskRequest):
         logic.generate_map_task,
         "生成演员角色映射表",
         scope=req.scope,
-        actor_limit=req.actor_limit,
         generation_mode=req.generation_mode
     )
     return {"status": "success", "message": "生成映射表任务已启动。", "task_id": task_id}

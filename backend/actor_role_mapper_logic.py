@@ -52,8 +52,9 @@ class ActorRoleMapperLogic:
         response.raise_for_status()
         return response.json()
 
-    def generate_map_task(self, scope: ScheduledTasksTargetScope, actor_limit: int, generation_mode: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def generate_map_task(self, scope: ScheduledTasksTargetScope, generation_mode: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员角色映射-生成"
+        actor_limit = self.config.actor_role_mapper_config.actor_limit
         
         # --- 新增：更详细的模式文本 ---
         mode_map = {
@@ -241,6 +242,87 @@ class ActorRoleMapperLogic:
         except Exception as e:
             ui_logger.error(f"❌ 生成映射表任务失败: {e}", task_category=task_cat, exc_info=True)
             raise e
+        
+    def generate_map_for_single_item(self, item_id: str, task_category: str):
+        """为单个媒体项生成角色映射，并以增量模式更新到本地文件。"""
+        ui_logger.info(f"➡️ [单体模式] 开始为媒体 (ID: {item_id}) 生成角色映射...", task_category=task_category)
+        
+        try:
+            # 1. 获取 TMDB ID
+            item_details = self._get_emby_item_details(item_id, "ProviderIds,Name,People")
+            item_name = item_details.get("Name", f"ID {item_id}")
+            provider_ids_lower = {k.lower(): v for k, v in item_details.get("ProviderIds", {}).items()}
+            tmdb_id = provider_ids_lower.get("tmdb")
+
+            if not tmdb_id:
+                ui_logger.warning(f"   - ⚠️ 媒体【{item_name}】缺少 TMDB ID，无法生成映射。", task_category=task_category)
+                return
+
+            # 2. 带锁读写文件
+            with FileLock(ACTOR_ROLE_MAP_LOCK_FILE, timeout=10):
+                actor_role_map = {}
+                if os.path.exists(ACTOR_ROLE_MAP_FILE):
+                    try:
+                        with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
+                            actor_role_map = json.load(f)
+                    except (json.JSONDecodeError, IOError):
+                        pass # 文件损坏或为空，当作新文件处理
+
+                # 3. 增量模式判断
+                if str(tmdb_id) in actor_role_map:
+                    ui_logger.info(f"   - ✅ 媒体【{item_name}】的映射已存在于本地文件中，跳过本次生成。", task_category=task_category)
+                    return
+
+                # 4. 生成映射数据
+                actor_limit = self.config.actor_role_mapper_config.actor_limit
+                people = item_details.get("People", [])
+                actors = [p for p in people if p.get('Type') == 'Actor']
+                people_to_process = actors[:actor_limit]
+
+                if not people_to_process:
+                    ui_logger.info(f"   - [跳过] 媒体【{item_name}】没有演员信息。", task_category=task_category)
+                    return
+
+                work_map = {}
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    future_to_person = {executor.submit(self._get_emby_item_details, p['Id'], "ProviderIds"): p for p in people_to_process}
+                    for future in as_completed(future_to_person):
+                        person = future_to_person[future]
+                        actor_name = person.get("Name")
+                        if not actor_name: continue
+                        
+                        person_tmdb_id = None
+                        try:
+                            person_details = future.result()
+                            if person_details:
+                                p_ids = person_details.get("ProviderIds", {})
+                                p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
+                                person_tmdb_id = p_ids_lower.get("tmdb")
+                        except Exception:
+                            pass # 获取失败则 tmdb_id 为 None
+
+                        work_map[actor_name] = {
+                            "tmdb_id": person_tmdb_id,
+                            "role": person.get("Role", "")
+                        }
+                
+                if work_map:
+                    actor_role_map[str(tmdb_id)] = {
+                        "title": item_name,
+                        "map": work_map
+                    }
+                    ui_logger.info(f"   - 🔍 已为【{item_name}】成功生成 {len(work_map)} 条演员角色映射。", task_category=task_category)
+                
+                # 5. 写回文件
+                with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(actor_role_map, f, ensure_ascii=False, indent=2)
+                
+                ui_logger.info(f"   - ✅ 成功将新映射追加到本地文件。", task_category=task_category)
+
+        except Timeout:
+            ui_logger.error(f"   - ❌ 获取文件锁超时，另一个进程可能正在访问该文件。", task_category=task_category)
+        except Exception as e:
+            ui_logger.error(f"   - ❌ 为媒体 {item_id} 生成单体映射时发生错误: {e}", task_category=task_category, exc_info=True)
 
     def _get_github_api_url(self) -> str:
         match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", self.github_config.repo_url)

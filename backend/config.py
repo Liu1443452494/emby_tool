@@ -161,6 +161,10 @@ def load_app_config() -> AppConfig:
     if "signin_config" not in config_data:
         config_data["signin_config"] = {}
         migration_needed = True
+
+    if "actor_role_mapper_config" not in config_data:
+        config_data["actor_role_mapper_config"] = {}
+        migration_needed = True
         
     if "overwrite_on_restore" not in config_data["poster_manager_config"]:
         config_data["poster_manager_config"]["overwrite_on_restore"] = False

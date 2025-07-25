@@ -324,6 +324,10 @@ class ChasingCenterConfig(BaseModel):
 
 # --- 新增结束 ---
 
+class ActorRoleMapperConfig(BaseModel):
+    """演员角色映射器配置"""
+    actor_limit: int = Field(default=50, description="每个媒体项处理的演员数量上限", ge=1, le=200)
+
 class AppConfig(BaseModel):
     """应用的主配置模型，聚合所有子配置"""
     server_config: ServerConfig = Field(default_factory=ServerConfig)
@@ -344,6 +348,7 @@ class AppConfig(BaseModel):
     telegram_config: TelegramConfig = Field(default_factory=TelegramConfig)
     signin_config: SigninModulesConfig = Field(default_factory=SigninModulesConfig)
     chasing_center_config: ChasingCenterConfig = Field(default_factory=ChasingCenterConfig)
+    actor_role_mapper_config: ActorRoleMapperConfig = Field(default_factory=ActorRoleMapperConfig)
 
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]
