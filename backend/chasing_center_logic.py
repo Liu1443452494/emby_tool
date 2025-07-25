@@ -327,6 +327,8 @@ class ChasingCenterLogic:
 
         return detailed_list
 
+    # backend/chasing_center_logic.py (函数替换)
+
     def add_to_chasing_list(self, series_id: str, series_name: str, series_year: Optional[int] = None, overview: Optional[str] = None, backdrop_tags: Optional[List[str]] = None):
         """将一个剧集ID和TMDB ID添加到追更列表，并发送通知"""
         task_cat = "追更中心"
@@ -352,18 +354,29 @@ class ChasingCenterLogic:
         self._save_chasing_list(chasing_list)
         ui_logger.info(f"➡️ [追更] 已将剧集《{series_name}》加入追更列表。", task_category=task_cat)
 
-        # --- 新增：发送通知逻辑 ---
+        # --- 修改：发送通知逻辑 ---
         if self.config.telegram_config.enabled:
             ui_logger.info(f"🔔 准备为《{series_name}》发送追更添加通知...", task_category=task_cat)
             
-            image_url = ""
+            image_source = None
             if backdrop_tags and len(backdrop_tags) > 0:
                 server = self.config.server_config.server.rstrip('/')
                 api_key = self.config.server_config.api_key
                 image_url = f"{server}/Items/{series_id}/Images/Backdrop/0?api_key={api_key}&tag={backdrop_tags[0]}&maxWidth=1280&quality=80"
+                
+                try:
+                    # 先下载图片
+                    ui_logger.debug(f"   - 正在从 Emby 下载背景图: {image_url}", task_category=task_cat)
+                    proxies = self.episode_refresher.tmdb_logic.proxy_manager.get_proxies(image_url)
+                    response = self.episode_refresher.session.get(image_url, timeout=20, proxies=proxies)
+                    response.raise_for_status()
+                    image_source = response.content
+                    ui_logger.debug(f"   - 背景图下载成功，大小: {len(image_source) / 1024:.2f} KB", task_category=task_cat)
+                except Exception as e:
+                    ui_logger.error(f"   - ❌ 下载背景图失败: {e}", task_category=task_cat)
 
-            if not image_url:
-                ui_logger.warning("⚠️ 无法生成背景图URL，将不发送带图通知。", task_category=task_cat)
+            if not image_source:
+                ui_logger.warning("⚠️ 无法获取背景图，将不发送带图通知。", task_category=task_cat)
                 return
 
             year_str = f"({series_year})" if series_year else ""
@@ -373,14 +386,14 @@ class ChasingCenterLogic:
             
             overview_line = ""
             if overview:
-                # 截断简介以避免消息过长
                 max_len = 300
                 truncated_overview = overview[:max_len] + '...' if len(overview) > max_len else overview
                 overview_line = escape_markdown(f"剧情: {truncated_overview}")
 
             caption = f"*{title_line}*\n\n`{time_line}`\n\n{overview_line}"
             
-            notification_manager.send_telegram_photo_notification(image_url, caption, self.config)
+            notification_manager.send_telegram_photo_notification(image_source, caption, self.config)
+        # --- 修改结束 ---
 
     def remove_from_chasing_list(self, series_id: str, series_name: str, reason: str):
         """从追更列表中移除一个剧集"""
@@ -680,3 +693,5 @@ class ChasingCenterLogic:
                     grouped_by_date[air_date_str].append(episode)
         
         return dict(grouped_by_date)
+    
+    

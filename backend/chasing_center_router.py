@@ -99,3 +99,4 @@ def get_series_calendar(series_id: str):
         return logic.get_calendar_data_for_series(series_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    

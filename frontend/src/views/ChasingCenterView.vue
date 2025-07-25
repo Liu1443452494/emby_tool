@@ -72,6 +72,7 @@
             </el-collapse>
 
             <div class="action-buttons">
+              
             <el-button @click="handleTriggerCalendar" :disabled="!localConfig.enabled">执行一次日历通知</el-button>
               <el-button @click="handleTriggerRun" :disabled="!localConfig.enabled">立即执行一次维护</el-button>
               <el-button type="primary" @click="handleSave" :loading="store.isSaving">保存设置</el-button>

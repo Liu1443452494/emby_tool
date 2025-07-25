@@ -77,14 +77,17 @@ class NotificationManager:
             ui_logger.error(f"❌ 发送Telegram通知时发生未知异常: {e}", task_category=task_cat, exc_info=True)
             return {"success": False, "message": f"未知异常: {e}"}
         
+    # backend/notification_manager.py (函数替换)
+
     def send_telegram_photo_notification(
         self,
-        image_url: str,
+        image_source: str | bytes,
         caption: str,
         app_config: AppConfig
     ) -> Dict:
         """
         发送带图片和文本说明的消息到 Telegram。
+        image_source 可以是公开可访问的 URL (str)，也可以是图片的二进制数据 (bytes)。
         """
         task_cat = "通知-Telegram"
         config = app_config.telegram_config
@@ -94,12 +97,6 @@ class NotificationManager:
             return {"success": False, "message": "通知未启用或配置不完整"}
 
         api_url = f"https://api.telegram.org/bot{config.bot_token}/sendPhoto"
-        payload = {
-            'chat_id': config.chat_id,
-            'photo': image_url,
-            'caption': caption,
-            'parse_mode': 'MarkdownV2'
-        }
         
         proxy_manager = ProxyManager(app_config)
         proxies = proxy_manager.get_proxies(api_url)
@@ -110,7 +107,24 @@ class NotificationManager:
         ui_logger.info(log_message, task_category=task_cat)
         
         try:
-            response = requests.post(api_url, json=payload, timeout=30, proxies=proxies) # 增加超时时间以适应图片上传
+            files = None
+            payload = {
+                'chat_id': config.chat_id,
+                'caption': caption,
+                'parse_mode': 'MarkdownV2'
+            }
+
+            if isinstance(image_source, str):
+                # 如果是 URL，使用 payload 发送
+                payload['photo'] = image_source
+                response = requests.post(api_url, json=payload, timeout=30, proxies=proxies)
+            elif isinstance(image_source, bytes):
+                # 如果是二进制数据，使用 files 和 data 发送
+                files = {'photo': ('image.jpg', image_source, 'image/jpeg')}
+                response = requests.post(api_url, data=payload, files=files, timeout=45, proxies=proxies)
+            else:
+                raise TypeError("image_source 必须是 str 或 bytes 类型")
+
             response.raise_for_status()
             
             result = response.json()
