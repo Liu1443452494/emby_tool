@@ -86,7 +86,7 @@
               <el-dropdown-item command="remove" :icon="Delete">
                 移除追更
               </el-dropdown-item>
-              <el-dropdown-item command="calendar" :icon="Calendar" disabled>
+              <el-dropdown-item command="calendar" :icon="Calendar" >
                 查看日历
               </el-dropdown-item>
             </el-dropdown-menu>

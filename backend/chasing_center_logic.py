@@ -497,16 +497,18 @@ class ChasingCenterLogic:
 
         ui_logger.info("🎉 每日追更维护任务执行完毕。", task_category=task_cat)
 
+    # backend/chasing_center_logic.py (函数替换)
+
     def send_calendar_notification_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
-        生成并发送追剧日历通知。
+        生成并发送追剧日历通知 (V2.5 - 修正 • 符号转义问题)。
         """
         task_cat = "追更-日历通知"
-        ui_logger.info(f"📅 开始生成追剧日历...", task_category=task_cat)
+        ui_logger.info(f"📅 开始基于本地缓存生成追剧日历...", task_category=task_cat)
 
-        chasing_list = self._get_chasing_list()
-        if not chasing_list:
-            ui_logger.info("追更列表为空，无需发送通知。", task_category=task_cat)
+        chasing_list_data = self._get_chasing_list()
+        if not chasing_list_data:
+            ui_logger.info("✅ 追更列表为空，无需发送通知。", task_category=task_cat)
             return
 
         calendar_days = self.chasing_config.calendar_days
@@ -515,76 +517,103 @@ class ChasingCenterLogic:
         
         upcoming_episodes = []
         
-        for series_id in chasing_list:
+        for series_data in chasing_list_data:
             if cancellation_event.is_set(): return
+            
+            series_name = "未知剧集"
+            series_year = ""
             try:
-                details = self.episode_refresher._get_emby_item_details(series_id, fields="ProviderIds,Name")
-                if not details: continue
-                
-                provider_ids_lower = {k.lower(): v for k, v in details.get("ProviderIds", {}).items()}
-                tmdb_id = provider_ids_lower.get("tmdb")
-                if not tmdb_id: continue
+                emby_details = self.episode_refresher._get_emby_item_details(series_data.get("emby_id"), fields="Name,ProductionYear")
+                if emby_details:
+                    series_name = emby_details.get("Name")
+                    series_year = emby_details.get("ProductionYear")
 
-                tmdb_details = self.tmdb_logic._tmdb_request(f"tv/{tmdb_id}")
-                
-                # 使用季详情获取更完整的未来播出计划
-                for season in tmdb_details.get("seasons", []):
-                    season_number = season.get("season_number")
-                    if season_number is None: continue
-                    
-                    season_details = self.tmdb_logic.get_season_details(int(tmdb_id), season_number)
-                    if not season_details or not season_details.get("episodes"): continue
-                    
-                    for episode in season_details["episodes"]:
+                cache = series_data.get("cache", {})
+                if not cache:
+                    ui_logger.debug(f"   - [跳过] 剧集《{series_name}》缺少缓存数据。", task_category=task_cat)
+                    continue
+
+                tmdb_status = cache.get("data", {}).get("details", {}).get("status")
+                if tmdb_status not in ["Returning Series", "In Production"]:
+                    ui_logger.debug(f"   - [跳过] 剧集《{series_name}》状态为 '{tmdb_status}'，非播出中。", task_category=task_cat)
+                    continue
+
+                chasing_season_details = cache.get("data", {}).get("chasing_season_details", {})
+                if not chasing_season_details:
+                    continue
+
+                for season_number_str, episodes in chasing_season_details.items():
+                    for episode in episodes:
                         air_date_str = episode.get("air_date")
-                        if not air_date_str: continue
+                        if not air_date_str or air_date_str == "null":
+                            continue
                         
-                        air_date = datetime.strptime(air_date_str, "%Y-%m-%d").date()
-                        if today <= air_date < end_date:
-                            upcoming_episodes.append({
-                                "series_name": tmdb_details.get("name"),
-                                "air_date": air_date,
-                                "season_number": episode.get("season_number"),
-                                "episode_number": episode.get("episode_number"),
-                                "episode_name": episode.get("name")
-                            })
+                        try:
+                            air_date = datetime.strptime(air_date_str, "%Y-%m-%d").date()
+                            if today <= air_date < end_date:
+                                upcoming_episodes.append({
+                                    "series_name": series_name,
+                                    "series_year": series_year,
+                                    "air_date": air_date,
+                                    "season_number": episode.get("season_number"),
+                                    "episode_number": episode.get("episode_number"),
+                                })
+                        except (ValueError, TypeError):
+                            continue
             except Exception as e:
-                logging.error(f"获取剧集 {series_id} 的播出信息时出错: {e}")
+                logging.error(f"❌ 处理剧集 {series_data.get('emby_id')} 的日历数据时出错: {e}", exc_info=True)
 
         if not upcoming_episodes:
-            ui_logger.info(f"检测到未来 {calendar_days} 天内无更新，跳过本次通知。", task_category=task_cat)
+            ui_logger.info(f"✅ 检测到未来 {calendar_days} 天内无更新，跳过本次通知。", task_category=task_cat)
             return
 
-        # 按日期和剧集名排序
-        upcoming_episodes.sort(key=lambda x: (x["air_date"], x["series_name"]))
+        upcoming_episodes.sort(key=lambda x: (x["air_date"], x["series_name"], x["season_number"], x["episode_number"]))
         
-        # 构建消息
-        message_parts = [f"📅 *Emby 追剧日历 (未来 {calendar_days} 天)*\n"]
+        message_parts = [f"📅 *Emby 追剧日历 \\(未来 {escape_markdown(str(calendar_days))} 天\\)*\n"]
         
         from collections import defaultdict
+        from itertools import groupby
+
         grouped_by_date = defaultdict(list)
         for ep in upcoming_episodes:
             grouped_by_date[ep["air_date"]].append(ep)
             
         weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
         
-        for air_date in sorted(grouped_by_date.keys()):
-            date_str = air_date.strftime("%Y-%m-%d")
+        sorted_dates = sorted(grouped_by_date.keys())
+
+        for i, air_date in enumerate(sorted_dates):
+            date_str_escaped = escape_markdown(air_date.strftime("%Y-%m-%d"))
             weekday_str = weekdays[air_date.weekday()]
             
-            relative_day = ""
+            relative_day_raw = ""
             if air_date == today:
-                relative_day = " (今天)"
+                relative_day_raw = " (今天)"
             elif air_date == today + timedelta(days=1):
-                relative_day = " (明天)"
+                relative_day_raw = " (明天)"
+            elif air_date == today + timedelta(days=2):
+                relative_day_raw = " (后天)"
             
-            message_parts.append(f"\n*{date_str} {weekday_str}{relative_day}*")
+            relative_day_escaped = escape_markdown(relative_day_raw)
             
-            for ep in grouped_by_date[air_date]:
-                ep_name = ep.get('episode_name') or f"第 {ep.get('episode_number')} 集"
-                message_parts.append(f"- *[{escape_markdown(ep['series_name'])}]* S{ep['season_number']:02d}E{ep['episode_number']:02d} - {escape_markdown(ep_name)}")
-
+            message_parts.append(f"\n*{date_str_escaped} {weekday_str}{relative_day_escaped}*")
+            
+            keyfunc = lambda x: (x['series_name'], x['series_year'], x['season_number'])
+            
+            for (series_name, series_year, season_number), group in groupby(grouped_by_date[air_date], key=keyfunc):
+                year_str = f"\\({series_year}\\)" if series_year else ""
+                
+                # --- 核心修改：移除 • 前面的转义符 ---
+                message_parts.append(
+                    f"● *[{escape_markdown(series_name)}{year_str}]* S{season_number:02d}"
+                )
+                
+                for ep in group:
+                    # 保持 - 的转义
+                    message_parts.append(f"  \\ － 第{ep['episode_number']}集")
+                # --- 修改结束 ---
+            
         final_message = "\n".join(message_parts)
         
-        ui_logger.info("正在发送 Telegram 通知...", task_category=task_cat)
+        ui_logger.info("➡️ 正在发送 Telegram 通知...", task_category=task_cat)
         notification_manager.send_telegram_message(final_message, self.config)

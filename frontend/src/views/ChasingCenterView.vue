@@ -53,6 +53,7 @@
             </el-collapse>
 
             <div class="action-buttons">
+            <el-button @click="handleTriggerCalendar" :disabled="!localConfig.enabled">发送日历通知</el-button>
               <el-button @click="handleTriggerRun" :disabled="!localConfig.enabled">立即执行一次维护</el-button>
               <el-button type="primary" @click="handleSave" :loading="store.isSaving">保存设置</el-button>
             </div>
@@ -82,6 +83,7 @@
                 :key="series.emby_id"
                 :series="series"
                 @remove="series => store.removeFromList(series)"
+                @view-calendar="handleViewCalendar"
               />
             </div>
             <el-empty v-else description="当前没有正在追更的剧集" />
@@ -161,6 +163,10 @@ const handleSave = async () => {
 
 const handleTriggerRun = () => {
   store.triggerRun();
+};
+
+const handleTriggerCalendar = () => {
+  store.triggerCalendar();
 };
 
 const handleSearch = () => {

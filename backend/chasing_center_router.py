@@ -81,3 +81,12 @@ def trigger_chasing_workflow():
         "手动触发-追更每日维护"
     )
     return {"status": "success", "message": "追更维护任务已手动触发！", "task_id": task_id}
+
+@router.post("/trigger-calendar")
+def trigger_calendar_notification():
+    logic = get_logic()
+    task_id = task_manager.register_task(
+        logic.send_calendar_notification_task,
+        "手动触发-追剧日历通知"
+    )
+    return {"status": "success", "message": "追剧日历通知任务已手动触发！", "task_id": task_id}

@@ -129,6 +129,19 @@ export const useChasingCenterStore = defineStore('chasingCenter', () => {
     }
   }
 
+  async function triggerCalendar() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/chasing-center/trigger-calendar`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '触发失败');
+      showMessage('success', data.message);
+    } catch (error) {
+      showMessage('error', error.message);
+    }
+  }
+
   return {
     config,
     chasingList,
@@ -141,5 +154,6 @@ export const useChasingCenterStore = defineStore('chasingCenter', () => {
     addToList,
     removeFromList,
     triggerRun,
+    triggerCalendar,
   };
 });
