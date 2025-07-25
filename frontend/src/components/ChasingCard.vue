@@ -129,13 +129,19 @@ const serverUrl = computed(() => mediaStore.appConfig?.server_config?.server);
 const apiKey = computed(() => mediaStore.appConfig?.server_config?.api_key);
 
 const posterUrl = computed(() => {
-  if (!props.series.emby_id || !serverUrl.value || !apiKey.value) return '';
-  return `${serverUrl.value}/Items/${props.series.emby_id}/Images/Primary?api_key=${apiKey.value}&fillWidth=200&quality=90`;
+  if (!props.series.emby_id || !apiKey.value) return '';
+  // --- 修改：使用相对路径的代理URL ---
+  const imagePath = `Items/${props.series.emby_id}/Images/Primary?api_key=${apiKey.value}&fillWidth=200&quality=90`;
+  return `/api/emby-image-proxy?path=${encodeURIComponent(imagePath)}`;
+  // --- 修改结束 ---
 });
 
 const backdropUrl = computed(() => {
-  if (!props.series.emby_id || !serverUrl.value || !apiKey.value || !props.series.image_tags?.Backdrop) return '';
-  return `${serverUrl.value}/Items/${props.series.emby_id}/Images/Backdrop/0?api_key=${apiKey.value}&maxWidth=800&tag=${props.series.image_tags.Backdrop}&quality=80`;
+  if (!props.series.emby_id || !apiKey.value || !props.series.image_tags?.Backdrop) return '';
+  // --- 修改：使用相对路径的代理URL ---
+  const imagePath = `Items/${props.series.emby_id}/Images/Backdrop/0?api_key=${apiKey.value}&maxWidth=800&tag=${props.series.image_tags.Backdrop}&quality=80`;
+  return `/api/emby-image-proxy?path=${encodeURIComponent(imagePath)}`;
+  // --- 修改结束 ---
 });
 
 const progressPercentage = computed(() => {
