@@ -116,51 +116,77 @@ class ChasingCenterLogic:
                 if tmdb_id in self.memory_cache:
                     cached_item = self.memory_cache[tmdb_id]
                     if time.time() - cached_item.get("timestamp", 0) < cache_duration_memory:
-                        ui_logger.debug(f"🔍 [追更-缓存] 命中内存缓存: {emby_details.get('Name')}", task_category=task_cat)
+                        # --- 修改 ---
+                        remaining_seconds = cache_duration_memory - (time.time() - cached_item.get("timestamp", 0))
+                        if remaining_seconds > 3600:
+                            remaining_time_str = f"{remaining_seconds / 3600:.1f}小时"
+                        else:
+                            remaining_time_str = f"{remaining_seconds / 60:.0f}分钟"
+                        
+                        cached_status_text = cached_item.get("data", {}).get("details", {}).get("status", "未知")
+                        status_map = {"Returning Series": "更新中", "Ended": "已完结", "Canceled": "已砍", "In Production": "制作中"}
+                        display_status = status_map.get(cached_status_text, cached_status_text)
+
+                        ui_logger.debug(f"🔍 [追更-缓存] 命中内存缓存: {emby_details.get('Name')} (剧集状态: {display_status}, 剩余: {remaining_time_str})", task_category=task_cat)
+                        # --- 修改结束 ---
                         tmdb_cache_data = cached_item["data"]
 
                 if not tmdb_cache_data and item_data.get("cache"):
                     cached_item = item_data["cache"]
+                    cached_status = cached_item.get("data", {}).get("details", {}).get("status")
+                    
+                    # --- 核心修改：动态计算缓存有效期 ---
+                    if cached_status in ["Ended", "Canceled"]:
+                        cache_duration_file = 14 * 86400 # 14天
+                    else:
+                        cache_duration_file = 1 * 86400 # 24小时
+
                     if time.time() - datetime.fromisoformat(cached_item.get("timestamp", "1970-01-01T00:00:00Z")).timestamp() < cache_duration_file:
-                        ui_logger.debug(f"🔍 [追更-缓存] 命中文件缓存: {emby_details.get('Name')}", task_category=task_cat)
+                        # --- 修改 ---
+                        remaining_seconds = cache_duration_file - (time.time() - datetime.fromisoformat(cached_item.get("timestamp", "1970-01-01T00:00:00Z")).timestamp())
+                        if remaining_seconds > 86400:
+                            remaining_time_str = f"{remaining_seconds / 86400:.1f}天"
+                        elif remaining_seconds > 3600:
+                            remaining_time_str = f"{remaining_seconds / 3600:.1f}小时"
+                        else:
+                            remaining_time_str = f"{remaining_seconds / 60:.0f}分钟"
+                        
+                        cached_status_text = cached_item.get("data", {}).get("details", {}).get("status", "未知")
+                        status_map = {"Returning Series": "更新中", "Ended": "已完结", "Canceled": "已砍", "In Production": "制作中"}
+                        display_status = status_map.get(cached_status_text, cached_status_text)
+                        
+                        ui_logger.debug(f"🔍 [追更-缓存] 命中文件缓存: {emby_details.get('Name')} (剧集状态: {display_status}, 有效期: {cache_duration_file // 86400}天, 剩余: {remaining_time_str})", task_category=task_cat)
+                        # --- 修改结束 ---
                         tmdb_cache_data = cached_item["data"]
                         self.memory_cache[tmdb_id] = {"timestamp": time.time(), "data": tmdb_cache_data}
 
                 if not tmdb_cache_data:
                     ui_logger.info(f"➡️ [追更-API] 缓存未命中或已过期，正在为《{emby_details.get('Name')}》请求 TMDB API...", task_category=task_cat)
+                    
+                    # --- 核心修改：智能API请求策略 ---
+                    # 1. 轻量级巡检
+                    ui_logger.debug(f"   - [追更-API] 执行轻量级巡检...", task_category=task_cat)
                     tmdb_details_full = self.tmdb_logic._tmdb_request(f"tv/{tmdb_id}")
+                    new_status = tmdb_details_full.get("status")
                     
-                    tmdb_status = tmdb_details_full.get("status")
-                    
-                    seasons_summary = tmdb_details_full.get("seasons", [])
-                    latest_season_summary = max(
-                        (s for s in seasons_summary if s.get("season_number", 0) > 0 and s.get("episode_count", 0) > 0),
-                        key=lambda x: x.get("season_number", 0),
-                        default=None
-                    )
-
+                    # 2. 决策与数据获取
                     tmdb_cache_data = {
                         "details": {
-                            "status": tmdb_status,
+                            "status": new_status,
                             "number_of_episodes": tmdb_details_full.get("number_of_episodes"),
                             "first_air_date": tmdb_details_full.get("first_air_date"),
                         }
                     }
 
-                    if tmdb_status in ["Ended", "Canceled"]:
-                        ui_logger.debug(f"   - [追更-API] 剧集已完结，采用轻量级缓存策略。")
-                        last_ep = tmdb_details_full.get("last_episode_to_air")
-                        tmdb_cache_data["chasing_season_summary"] = {
-                            "status": tmdb_status,
-                            "total_episodes": latest_season_summary.get("episode_count", 0) if latest_season_summary else 0,
-                            "last_episode": {
-                                "season_number": last_ep.get("season_number"),
-                                "episode_number": last_ep.get("episode_number"),
-                                "air_date": last_ep.get("air_date")
-                            } if last_ep else None
-                        }
-                    else:
+                    is_chasing = new_status in ["Returning Series", "In Production"]
+
+                    if is_chasing:
                         ui_logger.debug(f"   - [追更-API] 剧集播出中，请求并缓存详细分集列表。")
+                        latest_season_summary = max(
+                            (s for s in tmdb_details_full.get("seasons", []) if s.get("season_number", 0) > 0 and s.get("episode_count", 0) > 0),
+                            key=lambda x: x.get("season_number", 0),
+                            default=None
+                        )
                         chasing_season_details = {}
                         if latest_season_summary:
                             season_number = latest_season_summary.get("season_number")
@@ -172,6 +198,24 @@ class ChasingCenterLogic:
                             s_num: [{"season_number": ep.get("season_number"), "episode_number": ep.get("episode_number"), "air_date": ep.get("air_date")} for ep in eps]
                             for s_num, eps in chasing_season_details.items()
                         }
+                    else: # 已完结或已取消
+                        ui_logger.debug(f"   - [追更-API] 剧集已完结，采用轻量级摘要缓存策略。")
+                        last_ep = tmdb_details_full.get("last_episode_to_air")
+                        latest_season_summary = max(
+                            (s for s in tmdb_details_full.get("seasons", []) if s.get("season_number", 0) > 0 and s.get("episode_count", 0) > 0),
+                            key=lambda x: x.get("season_number", 0),
+                            default=None
+                        )
+                        tmdb_cache_data["chasing_season_summary"] = {
+                            "status": new_status,
+                            "total_episodes": latest_season_summary.get("episode_count", 0) if latest_season_summary else 0,
+                            "last_episode": {
+                                "season_number": last_ep.get("season_number"),
+                                "episode_number": last_ep.get("episode_number"),
+                                "air_date": last_ep.get("air_date")
+                            } if last_ep else None
+                        }
+                    # --- 修改结束 ---
 
                     updates_to_apply[tmdb_id] = {"timestamp": datetime.utcnow().isoformat() + "Z", "data": tmdb_cache_data}
                     self.memory_cache[tmdb_id] = {"timestamp": time.time(), "data": tmdb_cache_data}
@@ -239,12 +283,14 @@ class ChasingCenterLogic:
                 # --- 统一的缺失判断逻辑 ---
                 if chasing_season_number is not None:
                     emby_chasing_season_episode_count = sum(1 for ep in emby_episodes_full_list if ep.get("ParentIndexNumber") == chasing_season_number)
-                    missing_count = tmdb_chasing_season_total_episodes - emby_chasing_season_episode_count
                     
-                    tmdb_status = tmdb_cache_data.get("details", {}).get("status")
-                    if tmdb_status in ["Ended", "Canceled"]:
+                    # --- 核心修改：缺失计算基于缓存结构 ---
+                    if tmdb_cache_data.get("chasing_season_summary"): # 已完结
+                        tmdb_chasing_season_total_episodes = tmdb_cache_data["chasing_season_summary"].get("total_episodes", 0)
+                        missing_count = tmdb_chasing_season_total_episodes - emby_chasing_season_episode_count
                         missing_info = {"count": max(0, missing_count), "status": "complete" if missing_count <= 0 else "missing"}
-                    else: # 播出中剧集的 missing_info 已在上面计算过，这里不再覆盖
+                    elif tmdb_cache_data.get("chasing_season_details"): # 播出中
+                        # missing_info 已在上面计算过，这里不再覆盖
                         pass
                 
                 image_tags = emby_details.get("ImageTags", {})
