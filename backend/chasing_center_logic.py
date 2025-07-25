@@ -100,7 +100,6 @@ class ChasingCenterLogic:
                         ui_logger.warning(f"⚠️ [追更] 剧集《{emby_details.get('Name')}》缺少 TMDB ID，无法处理。", task_category=task_cat)
                         continue
                 
-                # --- 核心修改：获取带季号的完整分集列表 ---
                 episodes_url = f"{self.config.server_config.server}/Items"
                 episodes_params = {
                     "api_key": self.config.server_config.api_key, 
@@ -111,7 +110,6 @@ class ChasingCenterLogic:
                 }
                 emby_episodes_full_list = self.episode_refresher.session.get(episodes_url, params=episodes_params, timeout=30).json().get("Items", [])
                 emby_total_episodes_count = len(emby_episodes_full_list)
-                # --- 修改结束 ---
 
                 tmdb_cache_data = None
                 
@@ -132,7 +130,8 @@ class ChasingCenterLogic:
                     ui_logger.info(f"➡️ [追更-API] 缓存未命中或已过期，正在为《{emby_details.get('Name')}》请求 TMDB API...", task_category=task_cat)
                     tmdb_details_full = self.tmdb_logic._tmdb_request(f"tv/{tmdb_id}")
                     
-                    # --- 核心修改：只请求和缓存最新一季的数据 ---
+                    tmdb_status = tmdb_details_full.get("status")
+                    
                     seasons_summary = tmdb_details_full.get("seasons", [])
                     latest_season_summary = max(
                         (s for s in seasons_summary if s.get("season_number", 0) > 0 and s.get("episode_count", 0) > 0),
@@ -140,25 +139,39 @@ class ChasingCenterLogic:
                         default=None
                     )
 
-                    chasing_season_details = {}
-                    if latest_season_summary:
-                        season_number = latest_season_summary.get("season_number")
-                        season_data = self.tmdb_logic.get_season_details(int(tmdb_id), season_number)
-                        if season_data and season_data.get("episodes"):
-                            chasing_season_details[str(season_number)] = season_data["episodes"]
-                    
                     tmdb_cache_data = {
                         "details": {
-                            "status": tmdb_details_full.get("status"),
+                            "status": tmdb_status,
                             "number_of_episodes": tmdb_details_full.get("number_of_episodes"),
                             "first_air_date": tmdb_details_full.get("first_air_date"),
-                        },
-                        "chasing_season_details": {
+                        }
+                    }
+
+                    if tmdb_status in ["Ended", "Canceled"]:
+                        ui_logger.debug(f"   - [追更-API] 剧集已完结，采用轻量级缓存策略。")
+                        last_ep = tmdb_details_full.get("last_episode_to_air")
+                        tmdb_cache_data["chasing_season_summary"] = {
+                            "status": tmdb_status,
+                            "total_episodes": latest_season_summary.get("episode_count", 0) if latest_season_summary else 0,
+                            "last_episode": {
+                                "season_number": last_ep.get("season_number"),
+                                "episode_number": last_ep.get("episode_number"),
+                                "air_date": last_ep.get("air_date")
+                            } if last_ep else None
+                        }
+                    else:
+                        ui_logger.debug(f"   - [追更-API] 剧集播出中，请求并缓存详细分集列表。")
+                        chasing_season_details = {}
+                        if latest_season_summary:
+                            season_number = latest_season_summary.get("season_number")
+                            season_data = self.tmdb_logic.get_season_details(int(tmdb_id), season_number)
+                            if season_data and season_data.get("episodes"):
+                                chasing_season_details[str(season_number)] = season_data["episodes"]
+                        
+                        tmdb_cache_data["chasing_season_details"] = {
                             s_num: [{"season_number": ep.get("season_number"), "episode_number": ep.get("episode_number"), "air_date": ep.get("air_date")} for ep in eps]
                             for s_num, eps in chasing_season_details.items()
                         }
-                    }
-                    # --- 修改结束 ---
 
                     updates_to_apply[tmdb_id] = {"timestamp": datetime.utcnow().isoformat() + "Z", "data": tmdb_cache_data}
                     self.memory_cache[tmdb_id] = {"timestamp": time.time(), "data": tmdb_cache_data}
@@ -167,30 +180,34 @@ class ChasingCenterLogic:
                 latest_episode_info = {}
                 missing_info = {"count": 0, "status": "synced"}
                 
-                # --- 核心修改：基于追更季进行计算 ---
                 chasing_season_number = None
-                chasing_episodes = []
-                if tmdb_cache_data and tmdb_cache_data.get("chasing_season_details"):
+                tmdb_chasing_season_total_episodes = 0
+                
+                # --- 核心逻辑修改：根据缓存结构读取数据并计算 ---
+                if tmdb_cache_data.get("chasing_season_summary"): # 已完结剧集
+                    summary = tmdb_cache_data["chasing_season_summary"]
+                    last_ep = summary.get("last_episode")
+                    if last_ep:
+                        chasing_season_number = last_ep.get("season_number")
+                        tmdb_chasing_season_total_episodes = summary.get("total_episodes", 0)
+                        latest_episode_info = {
+                            "season_number": last_ep.get("season_number"),
+                            "episode_number": last_ep.get("episode_number"),
+                            "air_date": last_ep.get("air_date"),
+                            "is_next": False
+                        }
+                
+                elif tmdb_cache_data.get("chasing_season_details"): # 播出中剧集
                     chasing_season_details = tmdb_cache_data["chasing_season_details"]
                     if chasing_season_details:
                         chasing_season_number = int(list(chasing_season_details.keys())[0])
                         chasing_episodes = list(chasing_season_details.values())[0]
-
-                emby_chasing_season_episode_count = sum(1 for ep in emby_episodes_full_list if ep.get("ParentIndexNumber") == chasing_season_number)
-                
-                if chasing_episodes:
-                    chasing_episodes.sort(key=lambda x: x.get("episode_number", 0))
-                    today = datetime.now().date()
-                    
-                    tmdb_status = tmdb_cache_data.get("details", {}).get("status")
-                    
-                    # 完结剧集的判断逻辑保持对全剧的判断
-                    if tmdb_status in ["Ended", "Canceled"]:
-                        missing_count = (tmdb_cache_data.get("details", {}).get("number_of_episodes") or emby_total_episodes_count) - emby_total_episodes_count
-                        missing_info = {"count": max(0, missing_count), "status": "complete" if missing_count <= 0 else "missing"}
-                        target_ep = chasing_episodes[-1] if chasing_episodes else None
-                        is_next = False
-                    else: # 播出中剧集，只判断追更季
+                        tmdb_chasing_season_total_episodes = len(chasing_episodes)
+                        
+                        chasing_episodes.sort(key=lambda x: x.get("episode_number", 0))
+                        today = datetime.now().date()
+                        
+                        emby_chasing_season_episode_count = sum(1 for ep in emby_episodes_full_list if ep.get("ParentIndexNumber") == chasing_season_number)
                         emby_latest_ep_in_tmdb = chasing_episodes[emby_chasing_season_episode_count - 1] if emby_chasing_season_episode_count > 0 and emby_chasing_season_episode_count <= len(chasing_episodes) else None
                         emby_latest_air_date_str = emby_latest_ep_in_tmdb.get("air_date") if emby_latest_ep_in_tmdb else None
                         
@@ -211,22 +228,30 @@ class ChasingCenterLogic:
                         target_ep = future_next_episode or (chasing_episodes[-1] if chasing_episodes else None)
                         is_next = bool(future_next_episode)
 
-                    if target_ep:
-                        latest_episode_info = {
-                            "season_number": target_ep.get("season_number"),
-                            "episode_number": target_ep.get("episode_number"),
-                            "air_date": target_ep.get("air_date"),
-                            "is_next": is_next
-                        }
-                # --- 修改结束 ---
+                        if target_ep:
+                            latest_episode_info = {
+                                "season_number": target_ep.get("season_number"),
+                                "episode_number": target_ep.get("episode_number"),
+                                "air_date": target_ep.get("air_date"),
+                                "is_next": is_next
+                            }
 
+                # --- 统一的缺失判断逻辑 ---
+                if chasing_season_number is not None:
+                    emby_chasing_season_episode_count = sum(1 for ep in emby_episodes_full_list if ep.get("ParentIndexNumber") == chasing_season_number)
+                    missing_count = tmdb_chasing_season_total_episodes - emby_chasing_season_episode_count
+                    
+                    tmdb_status = tmdb_cache_data.get("details", {}).get("status")
+                    if tmdb_status in ["Ended", "Canceled"]:
+                        missing_info = {"count": max(0, missing_count), "status": "complete" if missing_count <= 0 else "missing"}
+                    else: # 播出中剧集的 missing_info 已在上面计算过，这里不再覆盖
+                        pass
+                
                 image_tags = emby_details.get("ImageTags", {})
                 if backdrop_tag := emby_details.get("BackdropImageTags", []):
                     image_tags['Backdrop'] = backdrop_tag[0]
 
-                # --- 核心修改：调整返回给前端的数据结构 ---
-                tmdb_total_episodes_display = len(chasing_episodes) if chasing_season_number is not None else tmdb_cache_data.get("details", {}).get("number_of_episodes")
-                emby_episode_count_display = emby_chasing_season_episode_count if chasing_season_number is not None else emby_total_episodes_count
+                emby_episode_count_display = sum(1 for ep in emby_episodes_full_list if ep.get("ParentIndexNumber") == chasing_season_number) if chasing_season_number is not None else emby_total_episodes_count
 
                 detailed_list.append({
                     "emby_id": emby_id,
@@ -235,14 +260,13 @@ class ChasingCenterLogic:
                     "year": emby_details.get("ProductionYear"),
                     "image_tags": image_tags,
                     "tmdb_status": tmdb_cache_data.get("details", {}).get("status"),
-                    "tmdb_total_episodes": tmdb_total_episodes_display,
+                    "tmdb_total_episodes": tmdb_chasing_season_total_episodes,
                     "tmdb_first_air_date": tmdb_cache_data.get("details", {}).get("first_air_date"),
                     "emby_episode_count": emby_episode_count_display,
                     "latest_episode": latest_episode_info,
                     "missing_info": missing_info,
                     "chasing_season_number": chasing_season_number
                 })
-                # --- 修改结束 ---
 
             except Exception as e:
                 logging.error(f"❌ [追更] 获取剧集 {emby_id} 的详细信息时失败: {e}", exc_info=True)
