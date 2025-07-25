@@ -27,7 +27,18 @@
 
         <!-- 右侧信息 -->
         <div class="info-section">
-          <h4 class="series-title">{{ series.name }}</h4>
+          <h4 class="series-title">
+            <span class="title-text">{{ series.name }}</span>
+            <el-tag 
+              v-if="chasingSeasonTag.visible"
+              class="chasing-season-tag" 
+              size="small" 
+              :type="chasingSeasonTag.type" 
+              effect="dark"
+            >
+              {{ chasingSeasonTag.text }}
+            </el-tag>
+          </h4>
           <div class="meta-info">
             <span>{{ series.year }}</span>
             <el-divider direction="vertical" />
@@ -148,6 +159,30 @@ const latestEpisodeText = computed(() => {
   }
   const dateStr = ep.air_date ? ` (${ep.air_date})` : '';
   return `S${String(ep.season_number).padStart(2, '0')}E${String(ep.episode_number).padStart(2, '0')}${dateStr}`;
+});
+
+const chasingSeasonTag = computed(() => {
+  const seasonNum = props.series.chasing_season_number;
+  if (seasonNum === null || seasonNum === undefined) {
+    return { visible: false };
+  }
+
+  const seasonText = `S${String(seasonNum).padStart(2, '0')}`;
+  const status = props.series.tmdb_status;
+
+  if (status === 'Ended' || status === 'Canceled') {
+    return {
+      visible: true,
+      text: seasonText,
+      type: 'info'
+    };
+  }
+  
+  return {
+    visible: true,
+    text: `追更 ${seasonText}`,
+    type: 'success'
+  };
 });
 
 // --- 新增 ---
@@ -290,6 +325,21 @@ const handleCommand = (command) => {
   text-overflow: ellipsis;
   color: #fff;
   text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.title-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+.chasing-season-tag {
+  flex-shrink: 0;
+  border-radius: 4px;
+  border: none;
 }
 
 .meta-info {
