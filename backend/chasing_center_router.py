@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from log_manager import ui_logger
 from models import ChasingCenterConfig
@@ -11,10 +11,16 @@ from task_manager import task_manager
 import config as app_config
 
 router = APIRouter()
+_logic_instance: Optional[ChasingCenterLogic] = None
 
 def get_logic() -> ChasingCenterLogic:
-    config = app_config.load_app_config()
-    return ChasingCenterLogic(config)
+    """获取 ChasingCenterLogic 的单例，确保内存缓存在请求间共享"""
+    global _logic_instance
+    if _logic_instance is None:
+        ui_logger.debug("➡️ [追更中心] 正在创建 ChasingCenterLogic 的新实例...", task_category="系统")
+        config = app_config.load_app_config()
+        _logic_instance = ChasingCenterLogic(config)
+    return _logic_instance
 
 @router.get("/config", response_model=ChasingCenterConfig)
 def get_chasing_center_config():
@@ -23,12 +29,17 @@ def get_chasing_center_config():
 
 @router.post("/config")
 def save_chasing_center_config(config: ChasingCenterConfig):
-    """保存追更中心的配置"""
+    """保存追更中心的配置，并重置逻辑实例以应用新配置"""
+    global _logic_instance
     try:
         current_app_config = app_config.load_app_config()
         current_app_config.chasing_center_config = config
         app_config.save_app_config(current_app_config)
-        # 这里需要一个方法来通知 main.py 中的调度器更新任务
+        
+        # 重置实例，以便下次请求时使用新配置重新创建
+        _logic_instance = None
+        ui_logger.info("✅ [追更中心] 配置已保存，逻辑实例将在下次使用时刷新。", task_category="系统配置")
+
         from main import update_chasing_scheduler
         update_chasing_scheduler()
         return {"status": "success", "message": "追更中心设置已保存！"}

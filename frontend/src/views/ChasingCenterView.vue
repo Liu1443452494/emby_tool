@@ -81,7 +81,7 @@
                 v-for="series in store.chasingList" 
                 :key="series.emby_id"
                 :series="series"
-                @remove="store.removeFromList"
+                @remove="series => store.removeFromList(series)"
               />
             </div>
             <el-empty v-else description="当前没有正在追更的剧集" />
