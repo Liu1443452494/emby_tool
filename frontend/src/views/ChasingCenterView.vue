@@ -26,7 +26,7 @@
             <el-collapse v-model="activeCollapse" accordion>
               <el-collapse-item name="1">
                 <template #title>
-                  <el-icon><Notification /></el-icon>  追剧日历通知
+                  <el-icon><Notification /></el-icon>  追剧维护和通知配置
                 </template>
                 <div class="collapse-content">
                   <!-- --- 新增 --- -->

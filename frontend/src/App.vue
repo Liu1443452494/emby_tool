@@ -29,62 +29,71 @@
           
           <div class="menu-divider"></div>
 
-          <el-menu-item index="/media-download">
-            <el-icon><Film /></el-icon>
-            <template #title>Emby媒体下载</template>
-          </el-menu-item>
-          
-          <el-menu-item index="/genre-mapper">
-            <el-icon><PriceTag /></el-icon>
-            <template #title>类型替换</template>
-          </el-menu-item>
+          <el-sub-menu index="media-tools">
+            <template #title>
+              <el-icon><Menu /></el-icon>
+              <span>媒体工具</span>
+            </template>
+            
+            <el-menu-item index="/media-download">
+              <el-icon><Film /></el-icon>
+              <template #title>Emby媒体下载</template>
+            </el-menu-item>
+            
+            <el-menu-item index="/genre-mapper">
+              <el-icon><PriceTag /></el-icon>
+              <template #title>类型替换</template>
+            </el-menu-item>
 
-          <el-menu-item index="/actor-localizer">
-            <el-icon><User /></el-icon>
-            <template #title>演员中文化</template>
-          </el-menu-item>
+            <el-menu-item index="/actor-localizer">
+              <el-icon><User /></el-icon>
+              <template #title>演员中文化</template>
+            </el-menu-item>
 
-          <el-menu-item index="/actor-gallery">
-            <el-icon><Avatar /></el-icon>
-            <template #title>媒体画廊</template>
-          </el-menu-item>
-          <el-menu-item index="/poster-manager">
-            <el-icon><Picture /></el-icon>
-            <template #title>海报管理器</template>
-          </el-menu-item>
-          <el-menu-item index="/actor-role-mapper">
-            <el-icon><UserFilled /></el-icon>
-            <template #title>演员角色映射</template>
-          </el-menu-item>
-          <el-menu-item index="/actor-avatar-mapper">
-            <el-icon><SwitchFilled /></el-icon>
-            <template #title>演员头像映射</template>
-          </el-menu-item>
-          <el-menu-item index="/chasing-center">
-            <el-icon><StarFilled /></el-icon>
-            <template #title>自动化追更</template>
-          </el-menu-item>
-           <el-menu-item index="/signin-center">
-            <el-icon><CircleCheck /></el-icon>
-            <template #title>插件中心</template>
-          </el-menu-item>
+            <el-menu-item index="/actor-gallery">
+              <el-icon><Avatar /></el-icon>
+              <template #title>媒体画廊</template>
+            </el-menu-item>
+            <el-menu-item index="/poster-manager">
+              <el-icon><Picture /></el-icon>
+              <template #title>海报管理器</template>
+            </el-menu-item>
+            <el-menu-item index="/actor-role-mapper">
+              <el-icon><UserFilled /></el-icon>
+              <template #title>演员角色映射</template>
+            </el-menu-item>
+            <el-menu-item index="/actor-avatar-mapper">
+              <el-icon><SwitchFilled /></el-icon>
+              <template #title>演员头像映射</template>
+            </el-menu-item>
+            <el-menu-item index="/douban-fixer">
+              <el-icon><MagicStick /></el-icon>
+              <template #title>豆瓣ID修复器</template>
+            </el-menu-item>
+            <el-menu-item index="/episode-renamer">
+              <el-icon><EditPen /></el-icon>
+              <template #title>网盘文件重命名</template>
+            </el-menu-item>
+          </el-sub-menu>
 
-          <!-- --- 新增菜单项 --- -->
-          <el-menu-item index="/douban-fixer">
-            <el-icon><MagicStick /></el-icon>
-            <template #title>豆瓣ID修复器</template>
-          </el-menu-item>
-          <!-- --- 结束新增 --- -->
-           <el-menu-item index="/episode-renamer">
-            <el-icon><EditPen /></el-icon>
-            <template #title>网盘文件重命名</template>
-          </el-menu-item>
-
-          <el-menu-item index="/scheduled-tasks">
-            <el-icon><Clock /></el-icon>
-            <template #title>定时任务</template>
-          </el-menu-item>
-          <!-- --- 结束新增 --- -->
+          <el-sub-menu index="automation-center">
+            <template #title>
+              <el-icon><Cpu /></el-icon>
+              <span>自动化中心</span>
+            </template>
+            <el-menu-item index="/chasing-center">
+              <el-icon><StarFilled /></el-icon>
+              <template #title>自动化追更</template>
+            </el-menu-item>
+            <el-menu-item index="/signin-center">
+              <el-icon><CircleCheck /></el-icon>
+              <template #title>插件中心</template>
+            </el-menu-item>
+            <el-menu-item index="/scheduled-tasks">
+              <el-icon><Clock /></el-icon>
+              <template #title>定时任务</template>
+            </el-menu-item>
+          </el-sub-menu>
 
           <div class="menu-divider"></div>
 
@@ -122,7 +131,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { ElConfigProvider, ElIcon } from 'element-plus'
-import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen, Picture, UserFilled, SwitchFilled, CircleCheck, StarFilled } from '@element-plus/icons-vue'
+import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen, Picture, UserFilled, SwitchFilled, CircleCheck, StarFilled, Menu, Cpu } from '@element-plus/icons-vue'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { useStorage } from '@vueuse/core'
 import { useConfigStore } from '@/stores/config'
@@ -356,5 +365,22 @@ body {
   padding: 20px 20px 20px 0;
   overflow-y: auto;
 }
+.sidebar-menu .el-sub-menu__title {
+  margin: 0 10px 8px 10px !important;
+  height: 48px !important;
+  line-height: 48px !important;
+  border-radius: 8px !important;
+}
 
+.sidebar-menu .el-sub-menu__title:hover {
+  background-color: var(--el-color-info-light-8) !important;
+}
+.dark .sidebar-menu .el-sub-menu__title:hover {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* 当子菜单下的某个 item 被激活时，高亮父级 sub-menu 的标题 */
+.sidebar-menu .el-sub-menu.is-active > .el-sub-menu__title {
+  color: var(--menu-active-text-color) !important;
+}
 </style>
