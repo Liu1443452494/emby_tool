@@ -44,6 +44,7 @@
 <!-- frontend/src/components/CalendarDialog.vue (script setup 替换) -->
 <script setup>
 import { ref, watch, computed } from 'vue';
+import { API_BASE_URL } from '@/config/apiConfig';
 import { useMediaStore } from '@/stores/media';
 import { useChasingCenterStore } from '@/stores/chasingCenter';
 import _ from 'lodash';
@@ -92,7 +93,8 @@ const processCalendarData = () => {
   if (!series) return;
 
   calendarTitle.value = series.name;
-  const posterUrl = `${serverUrl.value}/Items/${series.emby_id}/Images/Primary?api_key=${apiKey.value}&fillWidth=100&quality=90`;
+  const imagePath = `Items/${series.emby_id}/Images/Primary?api_key=${apiKey.value}&fillWidth=100&quality=90`;
+  const posterUrl = `${API_BASE_URL}/api/emby-image-proxy?path=${encodeURIComponent(imagePath)}`;
   
   const groupedByDate = chasingStore.calendarData;
   const processedData = {};
