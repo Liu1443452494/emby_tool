@@ -515,10 +515,16 @@ class ChasingCenterLogic:
         ui_logger.info(f"🔍 发现 {len(chasing_list)} 个追更剧集，开始逐一处理...", task_category=task_cat)
         task_manager.update_task_progress(task_id, 0, len(chasing_list))
 
-        for i, series_id in enumerate(chasing_list):
+        for i, series_item in enumerate(chasing_list):
             if cancellation_event.is_set():
                 ui_logger.warning("⚠️ 任务被取消。", task_category=task_cat)
                 return
+            
+            series_id = series_item.get("emby_id")
+            if not series_id:
+                ui_logger.warning(f"   - [跳过] 追更列表中的第 {i+1} 项缺少 'emby_id'，无法处理。", task_category=task_cat)
+                task_manager.update_task_progress(task_id, i + 1, len(chasing_list))
+                continue
             
             series_details = self.episode_refresher._get_emby_item_details(series_id, fields="Name")
             series_name = series_details.get("Name", f"ID {series_id}") if series_details else f"ID {series_id}"
@@ -554,7 +560,6 @@ class ChasingCenterLogic:
 
         ui_logger.info("🎉 每日追更维护任务执行完毕。", task_category=task_cat)
 
-    # backend/chasing_center_logic.py (函数替换)
 
     def send_calendar_notification_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
