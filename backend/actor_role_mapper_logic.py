@@ -484,6 +484,7 @@ class ActorRoleMapperLogic:
             ui_logger.error(f"❌ 从 GitHub 下载失败: {e}", task_category=task_cat, exc_info=True)
             raise e
         
+
     def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
         根据映射关系，恢复指定 Emby 媒体项列表的演员角色名。
@@ -496,8 +497,12 @@ class ActorRoleMapperLogic:
             raise ValueError("映射数据不完整")
 
         total_items = len(item_ids)
+        # --- 修改：增加对 task_manager 是否存在的判断 ---
         # 注意：这里的进度条是针对单个作品的多个Emby实例，而不是整个批量任务
-        # task_manager.update_task_progress(task_id, 0, total_items)
+        if task_manager:
+            # task_manager.update_task_progress(task_id, 0, total_items)
+            pass # 暂时不使用进度条
+        # --- 修改结束 ---
         ui_logger.info(f"  ➡️ 开始为作品《{title}》恢复演员角色，共涉及 {total_items} 个Emby媒体项。", task_category=task_cat)
 
         for i, item_id in enumerate(item_ids):

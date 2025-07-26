@@ -180,7 +180,7 @@ class WebhookLogic:
     def process_new_media_task(self, item_id: str, cancellation_event: threading.Event):
         from tmdb_logic import TmdbLogic
         from chasing_center_logic import ChasingCenterLogic
-        from actor_role_mapper_logic import ActorRoleMapperLogic
+        from actor_role_mapper_logic import ActorRoleMapperLogic, ACTOR_ROLE_MAP_FILE
 
         item_details_pre = self._get_emby_item_details(item_id)
         item_name_pre = item_details_pre.get("Name", f"Item {item_id}") if item_details_pre else f"Item {item_id}"
@@ -245,10 +245,8 @@ class WebhookLogic:
         if item_type == "Series" and self.config.chasing_center_config.enabled:
             ui_logger.info(f"【步骤 3/8 | 追更判断】检测到新入库剧集，开始判断是否加入追更列表...", task_category=task_cat)
             try:
-                # --- 核心修改：不再需要获取过多信息，仅判断状态 ---
                 provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
                 tmdb_id = provider_ids_lower.get("tmdb")
-                # --- 修改结束 ---
 
                 if tmdb_id:
                     tmdb_logic = TmdbLogic(self.config)
@@ -256,12 +254,10 @@ class WebhookLogic:
                     status = tmdb_details.get("status")
                     if status in ["Returning Series", "In Production"]:
                         chasing_logic = ChasingCenterLogic(self.config)
-                        # --- 核心修改：调用简化后的函数 ---
                         chasing_logic.add_to_chasing_list(
                             series_id=item_id, 
                             series_name=item_name
                         )
-                        # --- 修改结束 ---
                     else:
                         ui_logger.info(f"剧集《{item_name}》在 TMDB 的状态为 '{status}'，非播出中，跳过添加。", task_category=task_cat)
                 else:
@@ -288,28 +284,75 @@ class WebhookLogic:
         
         if cancellation_event.is_set(): return
 
-        ui_logger.info(f"【步骤 5/8 | 演员中文化】开始...", task_category=task_cat)
-        actor_localization_success = False
-        try:
-            localizer_logic = ActorLocalizerLogic(self.config)
-            localizer_logic._process_single_item_for_localization(item_id, self.config.actor_localizer_config, task_category=task_cat)
-            actor_localization_success = True
-        except Exception as e:
-            ui_logger.error(f"【演员中文化】步骤执行失败，但将继续后续任务。错误: {e}", task_category=task_cat, exc_info=True)
-        if cancellation_event.is_set(): return
+        # --- 新增：演员中文化前的检查与恢复逻辑 ---
+        actor_localization_skipped = False
+        ui_logger.info(f"【步骤 5/8 | 角色映射检查】开始...", task_category=task_cat)
+        
+        # 重新获取最新的 ProviderIds，确保 TMDB ID 存在
+        item_details_for_tmdb = self._get_emby_item_details(item_id, "ProviderIds")
+        provider_ids_lower_for_tmdb = {k.lower(): v for k, v in item_details_for_tmdb.get("ProviderIds", {}).items()}
+        tmdb_id = provider_ids_lower_for_tmdb.get("tmdb")
 
-        ui_logger.info(f"【步骤 6/8 | 演员角色映射】开始...", task_category=task_cat)
-        if actor_localization_success:
+        if tmdb_id and os.path.exists(ACTOR_ROLE_MAP_FILE):
+            ui_logger.info(f"   - 正在检查 TMDB ID: {tmdb_id} 是否存在于本地映射表中...", task_category=task_cat)
             try:
-                role_mapper_logic = ActorRoleMapperLogic(self.config)
-                role_mapper_logic.generate_map_for_single_item(item_id, task_category=task_cat)
-            except Exception as e:
-                ui_logger.error(f"【演员角色映射】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
+                with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
+                    actor_role_map = json.load(f)
+                
+                if str(tmdb_id) in actor_role_map:
+                    ui_logger.info(f"   - ✅ 命中！在映射表中找到了《{item_name}》的角色数据。", task_category=task_cat)
+                    actor_localization_skipped = True
+                    
+                    ui_logger.info(f"【步骤 6/8 | 演员中文化】➡️ [跳过] 因找到现有映射，跳过中文化步骤。", task_category=task_cat)
+                    ui_logger.info(f"【步骤 7/8 | 角色映射生成】➡️ [跳过] 因找到现有映射，跳过映射生成步骤。", task_category=task_cat)
+                    
+                    ui_logger.info(f"   - 🔄 [角色恢复] 开始将已存在的中文角色名应用到新入库的媒体项...", task_category=task_cat)
+                    role_mapper_logic = ActorRoleMapperLogic(self.config)
+                    map_data = actor_role_map[str(tmdb_id)]
+                    
+                    # 直接调用单体恢复任务，但由于不在task_manager上下文中，部分参数传None
+                    role_mapper_logic.restore_single_map_task(
+                        item_ids=[item_id],
+                        role_map=map_data.get("map", {}),
+                        title=map_data.get("title", item_name),
+                        cancellation_event=cancellation_event,
+                        task_id=None, # 非独立任务，无需task_id
+                        task_manager=None # 非独立任务，无需task_manager
+                    )
+                else:
+                    ui_logger.info(f"   - 未在映射表中找到 TMDB ID: {tmdb_id} 的记录，将执行标准流程。", task_category=task_cat)
+            except (IOError, json.JSONDecodeError) as e:
+                ui_logger.warning(f"   - ⚠️ 读取本地角色映射表失败，将执行标准流程。错误: {e}", task_category=task_cat)
         else:
-            ui_logger.warning("【演员角色映射】因演员中文化步骤失败，本步骤已跳过。", task_category=task_cat)
+            if not tmdb_id:
+                ui_logger.info(f"   - 媒体项缺少 TMDB ID，无法进行映射检查，将执行标准流程。", task_category=task_cat)
+            else:
+                ui_logger.info(f"   - 本地角色映射表不存在，将执行标准流程。", task_category=task_cat)
+
+        if not actor_localization_skipped:
+            ui_logger.info(f"【步骤 6/8 | 演员中文化】开始...", task_category=task_cat)
+            actor_localization_success = False
+            try:
+                localizer_logic = ActorLocalizerLogic(self.config)
+                localizer_logic._process_single_item_for_localization(item_id, self.config.actor_localizer_config, task_category=task_cat)
+                actor_localization_success = True
+            except Exception as e:
+                ui_logger.error(f"【演员中文化】步骤执行失败，但将继续后续任务。错误: {e}", task_category=task_cat, exc_info=True)
+            if cancellation_event.is_set(): return
+
+            ui_logger.info(f"【步骤 7/8 | 演员角色映射】开始...", task_category=task_cat)
+            if actor_localization_success:
+                try:
+                    role_mapper_logic = ActorRoleMapperLogic(self.config)
+                    role_mapper_logic.generate_map_for_single_item(item_id, task_category=task_cat)
+                except Exception as e:
+                    ui_logger.error(f"【演员角色映射】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
+            else:
+                ui_logger.warning("【演员角色映射】因演员中文化步骤失败，本步骤已跳过。", task_category=task_cat)
+        # --- 新增逻辑结束 ---
         if cancellation_event.is_set(): return
 
-        ui_logger.info(f"【步骤 7/8 | 豆瓣海报更新】开始...", task_category=task_cat)
+        ui_logger.info(f"【步骤 8/8 | 豆瓣海报更新】开始...", task_category=task_cat)
         try:
             poster_logic = DoubanPosterUpdaterLogic(self.config)
             poster_logic.run_poster_update_for_items([item_id], self.config.douban_poster_updater_config, cancellation_event, None, None)
@@ -317,8 +360,8 @@ class WebhookLogic:
             ui_logger.error(f"【豆瓣海报更新】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
         if cancellation_event.is_set(): return
         
-        ui_logger.info(f"【步骤 8/8 | 写入标记】所有自动化步骤执行完毕，开始写入完成标记...", task_category=task_cat)
+        ui_logger.info(f"【步骤 9/9 | 写入标记】所有自动化步骤执行完毕，开始写入完成标记...", task_category=task_cat)
         if self._set_processed_flag(item_id):
-            ui_logger.info(f"媒体【{item_name}】的首次自动化处理流程已全部执行完毕并成功标记。", task_category=task_cat)
+            ui_logger.info(f"🎉 媒体【{item_name}】的首次自动化处理流程已全部执行完毕并成功标记。", task_category=task_cat)
         else:
             ui_logger.warning(f"媒体【{item_name}】的自动化流程已执行，但写入完成标记失败。下次可能会重复执行。", task_category=task_cat)
