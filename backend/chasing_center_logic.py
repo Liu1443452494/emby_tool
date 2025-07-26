@@ -67,15 +67,14 @@ class ChasingCenterLogic:
 
 
 
+    # backend/chasing_center_logic.py (函数替换)
+
     def get_detailed_chasing_list(self) -> List[Dict]:
         """获取聚合了 Emby 和 TMDB 信息的详细追更列表，并实现两级缓存和动态分界线逻辑"""
         from trakt_manager import TraktManager
         from collections import Counter
         import pytz
         import os
-        # --- 新增：导入 requests 异常 ---
-        import requests
-        # --- 新增结束 ---
 
         task_cat = "追更中心"
         chasing_items_in_memory = self._get_chasing_list()
@@ -89,8 +88,8 @@ class ChasingCenterLogic:
         detailed_list = []
         updates_to_apply = {}
         
-        # --- 新增：用于记录无效项目的列表 ---
-        items_to_remove = []
+        # --- 新增 ---
+        ids_to_remove = []
         # --- 新增结束 ---
 
         trakt_manager = TraktManager(self.config)
@@ -100,19 +99,16 @@ class ChasingCenterLogic:
             tmdb_id = item_data.get("tmdb_id")
             
             try:
-                # --- 修改：将获取 Emby 详情的操作放入 try...except 块中 ---
-                try:
-                    emby_details = self.episode_refresher._get_emby_item_details(emby_id, fields="Name,ProductionYear,ProviderIds,ImageTags,BackdropImageTags")
-                except requests.exceptions.HTTPError as http_err:
-                    if http_err.response.status_code == 404:
-                        ui_logger.warning(f"⚠️ [追更] 检测到 Emby 媒体项 (ID: {emby_id}) 已不存在，将自动从追更列表中移除。", task_category=task_cat)
-                        items_to_remove.append(emby_id)
-                        items_to_resave = True
-                        continue # 跳过此项目的后续处理
-                    else:
-                        raise # 重新抛出其他 HTTP 错误
-                # --- 修改结束 ---
+                emby_details = self.episode_refresher._get_emby_item_details(emby_id, fields="Name,ProductionYear,ProviderIds,ImageTags,BackdropImageTags")
                 
+                # --- 新增：健康检查与自动清理逻辑 ---
+                if not emby_details:
+                    ui_logger.warning(f"⚠️ [追更维护] 检测到剧集 (Emby ID: {emby_id}) 已在 Emby 中被删除或无法访问，将自动从追更列表中移除。", task_category=task_cat)
+                    ids_to_remove.append(emby_id)
+                    items_to_resave = True
+                    continue
+                # --- 新增结束 ---
+
                 if not tmdb_id:
                     provider_ids_lower = {k.lower(): v for k, v in emby_details.get("ProviderIds", {}).items()}
                     tmdb_id = provider_ids_lower.get("tmdb")
@@ -400,29 +396,21 @@ class ChasingCenterLogic:
                 })
 
             except Exception as e:
-                # --- 修改：捕获 NoneType 错误并给出更友好的提示 ---
-                if isinstance(e, TypeError) and "'NoneType' object is not subscriptable" in str(e) or "'NoneType' object has no attribute 'get'" in str(e):
-                     # 这个错误通常是因为 emby_details 为 None 导致的，上面已经处理了404，这里可能是其他网络问题
-                     ui_logger.error(f"❌ [追更] 获取剧集 {emby_id} 的 Emby 详情时失败（可能网络超时或服务器无响应），已跳过。", task_category=task_cat)
-                else:
-                    logging.error(f"❌ [追更] 处理剧集 {emby_id} 的详细信息时发生未知错误: {e}", exc_info=True)
-                # --- 修改结束 ---
+                logging.error(f"❌ [追更] 获取剧集 {emby_id} 的详细信息时失败: {e}", exc_info=True)
                 continue
         
-        # --- 新增：在循环外执行清理和保存 ---
-        if items_to_remove:
-            ui_logger.info(f"🔄 [追更] 正在从追更列表中清理 {len(items_to_remove)} 个无效项目...", task_category=task_cat)
-            final_chasing_list = [item for item in chasing_items_in_memory if item.get("emby_id") not in items_to_remove]
-        else:
-            final_chasing_list = chasing_items_in_memory
-
         if items_to_resave:
-            ui_logger.info("✅ [追更] 检测到数据更新，正在回写到追更列表文件...", task_category=task_cat)
-            for item in final_chasing_list:
+            # --- 新增：在回写前，先执行清理操作 ---
+            if ids_to_remove:
+                ui_logger.info(f"✅ [追更] 正在从追更列表中移除 {len(ids_to_remove)} 个无效条目...", task_category=task_cat)
+                chasing_items_in_memory = [item for item in chasing_items_in_memory if item.get("emby_id") not in ids_to_remove]
+            # --- 新增结束 ---
+
+            ui_logger.info("✅ [追更] 检测缓存有变更，正在回写到追更列表文件...", task_category=task_cat)
+            for item in chasing_items_in_memory:
                 if item.get("tmdb_id") in updates_to_apply:
                     item["cache"] = updates_to_apply[item["tmdb_id"]]
-            self._save_chasing_list(final_chasing_list)
-        # --- 新增结束 ---
+            self._save_chasing_list(chasing_items_in_memory)
 
         return detailed_list
 
