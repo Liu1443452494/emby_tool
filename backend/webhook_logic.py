@@ -242,16 +242,11 @@ class WebhookLogic:
             return
         if cancellation_event.is_set(): return
 
-        # --- 新增：追更判断逻辑 ---
         if item_type == "Series" and self.config.chasing_center_config.enabled:
             ui_logger.info(f"【步骤 3/8 | 追更判断】检测到新入库剧集，开始判断是否加入追更列表...", task_category=task_cat)
             try:
-                # --- 修改：获取更详细的信息用于通知 ---
-                details_for_chasing = self._get_emby_item_details(item_id, fields="ProviderIds,ProductionYear,Overview,BackdropImageTags")
-                if not details_for_chasing:
-                    raise Exception("无法获取剧集详细信息")
-
-                provider_ids_lower = {k.lower(): v for k, v in details_for_chasing.get("ProviderIds", {}).items()}
+                # --- 核心修改：不再需要获取过多信息，仅判断状态 ---
+                provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
                 tmdb_id = provider_ids_lower.get("tmdb")
                 # --- 修改结束 ---
 
@@ -261,13 +256,10 @@ class WebhookLogic:
                     status = tmdb_details.get("status")
                     if status in ["Returning Series", "In Production"]:
                         chasing_logic = ChasingCenterLogic(self.config)
-                        # --- 修改：传递额外参数 ---
+                        # --- 核心修改：调用简化后的函数 ---
                         chasing_logic.add_to_chasing_list(
                             series_id=item_id, 
-                            series_name=item_name,
-                            series_year=details_for_chasing.get("ProductionYear"),
-                            overview=details_for_chasing.get("Overview"),
-                            backdrop_tags=details_for_chasing.get("BackdropImageTags")
+                            series_name=item_name
                         )
                         # --- 修改结束 ---
                     else:
@@ -276,7 +268,6 @@ class WebhookLogic:
                     ui_logger.warning(f"剧集《{item_name}》缺少 TMDB ID，无法判断其播出状态，跳过添加。", task_category=task_cat)
             except Exception as e:
                 ui_logger.error(f"❌ 在判断追更状态时发生错误: {e}", task_category=task_cat)
-        # --- 新增结束 ---
 
         ui_logger.info(f"【步骤 4/8 | 同步豆瓣数据】开始...", task_category=task_cat)
         

@@ -82,6 +82,10 @@ export const useConfigStore = defineStore('config', () => {
       bot_token: '',
       chat_id: ''
     },
+    trakt_config: {
+      enabled: false,
+      client_id: ''
+    },
     actor_role_mapper_config: {
       actor_limit: 50
     }
@@ -189,6 +193,9 @@ export const useConfigStore = defineStore('config', () => {
 
         if (!fullConfig.telegram_config) {
           fullConfig.telegram_config = { enabled: false, bot_token: '', chat_id: '' };
+        }
+        if (!fullConfig.trakt_config) {
+          fullConfig.trakt_config = { enabled: false, client_id: '' };
         }
 
         if (!fullConfig.actor_role_mapper_config) {
@@ -475,6 +482,38 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function saveTraktConfig(newConfig) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/config/trakt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '未知错误');
+      
+      appConfig.value.trakt_config = newConfig;
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  async function testTraktConfig(configToTest) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/trakt/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configToTest),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '测试请求失败');
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
   return { 
     appConfig, 
     isLoaded,
@@ -495,6 +534,8 @@ export const useConfigStore = defineStore('config', () => {
     saveEpisodeRenamerConfig,
     saveTelegramConfig,
     testTelegramConfig,
+    saveTraktConfig,
+    testTraktConfig,
     saveActorRoleMapperConfig
   }
 })

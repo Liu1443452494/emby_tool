@@ -342,6 +342,45 @@
         </el-form-item>
       </el-form>
 
+      <el-form
+        ref="traktFormRef"
+        :model="localTraktConfig"
+        :rules="traktFormRules"
+        class="config-section"
+        label-position="left"
+        :label-width="formLabelWidth"
+        @submit.prevent="handleSaveTrakt(traktFormRef)"
+        hide-required-asterisk
+      >
+        <h3>Trakt.tv 数据增强</h3>
+        <el-form-item label="启用 Trakt.tv">
+          <el-switch v-model="localTraktConfig.enabled" />
+          <div class="form-item-description">
+            从 Trakt.tv 获取精确到分钟的剧集播出时间，以优化追更中心的“缺失”和“下集”判断逻辑。
+          </div>
+        </el-form-item>
+        <el-form-item label="Client ID" prop="client_id">
+          <el-input 
+            v-model="localTraktConfig.client_id" 
+            class="glow-input" 
+            placeholder="在 Trakt.tv 官网创建应用后获取" 
+            :disabled="!localTraktConfig.enabled"
+            show-password
+          />
+           <div class="form-item-description">
+            <el-button type="primary" link @click="isTraktHelpVisible = true">如何获取 Client ID？</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item class="form-button-container multi-button">
+          <el-button @click="handleTestTrakt" :loading="isTraktTesting" :disabled="!localTraktConfig.enabled">
+            测试连接
+          </el-button>
+          <el-button type="success" native-type="submit" :loading="isTraktSaving">
+            保存 Trakt 设置
+          </el-button>
+        </el-form-item>
+      </el-form>
+
     </template>
 
     <template v-else>
@@ -494,6 +533,42 @@
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="isTraktHelpVisible"
+      title="如何获取 Trakt.tv Client ID？"
+      width="700px"
+    >
+      <div class="help-content">
+        <h4>第1步：注册并登录 Trakt.tv 账户</h4>
+        <p>如果您还没有账户，请先访问 <a href="https://trakt.tv/" target="_blank">Trakt.tv</a> 官网进行注册。</p>
+        
+        <el-divider />
+
+        <h4>第2步：创建新的 API 应用</h4>
+        <ol>
+          <li>登录后，访问您的 API 应用页面：<a href="https://trakt.tv/oauth/applications" target="_blank">https://trakt.tv/oauth/applications</a>。</li>
+          <li>点击 "NEW APPLICATION" 按钮。</li>
+          <li>填写应用信息：
+            <ul>
+              <li><strong>Name:</strong> 随意填写，例如 `Emby-Toolkit`。</li>
+              <li><strong>Description:</strong> 选填，可以简单描述用途。</li>
+              <li><strong>Redirect URI:</strong> 填写 <code>urn:ietf:wg:oauth:2.0:oob</code>。</li>
+              <li><strong>Permissions:</strong> 保持默认的 `/checkin` 即可，我们只需要读取公开数据的权限。</li>
+            </ul>
+          </li>
+          <li>点击 "SAVE APP"。</li>
+        </ol>
+
+        <el-divider />
+
+        <h4>第3步：复制 Client ID</h4>
+        <p>创建成功后，您会在应用列表中看到您刚刚创建的应用。页面上会直接显示 <strong>Client ID</strong> 和 Client Secret。我们只需要复制 <strong>Client ID</strong> 这一长串字符，并将其粘贴到本工具的输入框中即可。</p>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="isTraktHelpVisible = false">我明白了</el-button>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -521,10 +596,12 @@ const tmdbFormRef = ref(null)
 const proxyFormRef = ref(null)
 const doubanFixerFormRef = ref(null)
 const telegramFormRef = ref(null)
+const traktFormRef = ref(null)
 
 const localServerConfig = ref({ server: '', api_key: '', user_id: '' })
 const localDownloadConfig = ref({ download_directory: '', download_behavior: 'skip', directory_naming_rule: 'tmdb_id' , nfo_actor_limit: 20 })
 const localTelegramConfig = ref({ enabled: false, bot_token: '', chat_id: '' })
+const localTraktConfig = ref({ enabled: false, client_id: '' })
 const localDoubanConfig = ref({ directory: '', refresh_cron: '', extra_fields: [] })
 const localTmdbConfig = ref({ api_key: '', custom_api_domain_enabled: false, custom_api_domain: '' })
 const localProxyConfig = ref({ 
@@ -550,6 +627,9 @@ const isCookieTesting = ref(false)
 const isTelegramSaving = ref(false)
 const isTelegramTesting = ref(false)
 const isTelegramHelpVisible = ref(false)
+const isTraktSaving = ref(false)
+const isTraktTesting = ref(false)
+const isTraktHelpVisible = ref(false)
 
 const isProxyRulesDialogVisible = ref(false)
 const tempCustomRules = ref([])
@@ -577,6 +657,19 @@ const telegramFormRules = reactive({
     validator: (rule, value, callback) => {
       if (localTelegramConfig.value.enabled && !value) {
         callback(new Error('启用通知后，Chat ID 不能为空'))
+      } else {
+        callback()
+      }
+    },
+    trigger: 'blur'
+  }]
+})
+
+const traktFormRules = reactive({
+  client_id: [{
+    validator: (rule, value, callback) => {
+      if (localTraktConfig.value.enabled && !value) {
+        callback(new Error('启用 Trakt 后，Client ID 不能为空'))
       } else {
         callback()
       }
@@ -640,6 +733,7 @@ watch(() => configStore.appConfig, (newConfig) => {
     localDoubanConfig.value = { ...newConfig.douban_config, extra_fields: newConfig.douban_config.extra_fields || [] }
     localTmdbConfig.value = { ...newConfig.tmdb_config }
     localTelegramConfig.value = { enabled: false, bot_token: '', chat_id: '', ...newConfig.telegram_config }
+    localTraktConfig.value = { enabled: false, client_id: '', ...newConfig.trakt_config }
     localProxyConfig.value = {
       enabled: false, 
       url: '', 
@@ -794,6 +888,34 @@ const handleTestTelegram = async () => {
       const result = await configStore.testTelegramConfig(localTelegramConfig.value);
       showMessage(result.success ? 'success' : 'error', result.message);
       isTelegramTesting.value = false;
+    } else {
+      showMessage('warning', '请先填写必填项再测试！');
+    }
+  });
+};
+
+const handleSaveTrakt = async (formEl) => {
+  if (!formEl) return;
+  await formEl.validate(async (valid) => {
+    if (valid) {
+      isTraktSaving.value = true;
+      const result = await configStore.saveTraktConfig(localTraktConfig.value);
+      showMessage(result.success ? 'success' : 'error', result.message);
+      isTraktSaving.value = false;
+    } else {
+      showMessage('warning', '请填写所有必填项！');
+      return false;
+    }
+  });
+};
+
+const handleTestTrakt = async () => {
+  await traktFormRef.value.validate(async (valid) => {
+    if (valid) {
+      isTraktTesting.value = true;
+      const result = await configStore.testTraktConfig(localTraktConfig.value);
+      showMessage(result.success ? 'success' : 'error', result.message);
+      isTraktTesting.value = false;
     } else {
       showMessage('warning', '请先填写必填项再测试！');
     }

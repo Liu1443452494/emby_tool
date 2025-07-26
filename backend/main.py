@@ -590,6 +590,49 @@ app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper"
 app.include_router(signin_router, prefix="/api/signin")
 app.include_router(chasing_center_router, prefix="/api/chasing-center")
 
+from models import TraktConfig
+from trakt_manager import TraktManager
+
+@app.post("/api/config/trakt")
+def save_trakt_config_api(config: TraktConfig):
+    """保存 Trakt.tv 配置"""
+    try:
+        ui_logger.info("正在保存 Trakt.tv 设置...", task_category="系统配置")
+        current_app_config = app_config.load_app_config()
+        current_app_config.trakt_config = config
+        app_config.save_app_config(current_app_config)
+        ui_logger.info("✅ Trakt.tv 设置保存成功！", task_category="系统配置")
+        return {"success": True, "message": "设置已保存！"}
+    except Exception as e:
+        logging.error(f"保存 Trakt.tv 设置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
+
+@app.post("/api/trakt/test")
+def test_trakt_api(config: TraktConfig):
+    """测试 Trakt.tv API 连接"""
+    task_cat = "Trakt-测试"
+    if not config.enabled:
+        return {"success": True, "message": "Trakt 未启用，无需测试。"}
+    if not config.client_id:
+        raise HTTPException(status_code=400, detail="Client ID 不能为空。")
+    
+    ui_logger.info(f"➡️ [Trakt] 开始测试 Client ID...", task_category=task_cat)
+    
+    temp_app_config = app_config.load_app_config()
+    temp_app_config.trakt_config = config
+    trakt_manager = TraktManager(temp_app_config)
+    
+    # 使用一个常见的 TMDB ID 进行测试
+    test_tmdb_id = "1399" # Game of Thrones
+    result = trakt_manager.get_show_seasons_with_episodes(test_tmdb_id)
+    
+    if result is not None:
+        ui_logger.info(f"✅ [Trakt] 测试成功！成功获取到《权力的游戏》的 {len(result)} 条分集数据。", task_category=task_cat)
+        return {"success": True, "message": "Trakt API 连接成功！"}
+    else:
+        ui_logger.error(f"❌ [Trakt] 测试失败，请检查 Client ID 是否正确以及网络连接。", task_category=task_cat)
+        raise HTTPException(status_code=500, detail="无法从 Trakt.tv 获取数据，请检查 Client ID 或代理设置。")
+
 
 @app.get("/api/image-proxy")
 async def image_proxy(url: str):

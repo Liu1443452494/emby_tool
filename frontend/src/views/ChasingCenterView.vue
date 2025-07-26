@@ -3,7 +3,7 @@
   <div class="chasing-center-page">
     <div class="page-header">
       <h2>自动化追更中心</h2>
-      <p>启用后，新入库的“播出中”剧集将自动加入此列表，并由内置任务每日维护元数据，完结后自动移除。</p>
+      <p>启用后，新入库的“播出中”剧集将自动加入此列表，并由定时任务每日维护剧集元数据的刷新，完结后自动移除。</p>
     </div>
 
     <div class="main-content">
@@ -41,7 +41,7 @@
                     </div>
                   </el-form-item>
                   <!-- --- 新增结束 --- -->
-                  <el-form-item label="通知周期 (CRON 表达式)">
+                  <el-form-item label="日历通知周期 (CRON 表达式)">
                     <el-input 
                       v-model="localConfig.notification_cron" 
                       placeholder="例如: 0 9 * * *"

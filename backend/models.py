@@ -295,6 +295,11 @@ class TelegramConfig(BaseModel):
     bot_token: str = Field(default="", description="Telegram Bot Token")
     chat_id: str = Field(default="", description="接收通知的Chat ID")
 
+class TraktConfig(BaseModel):
+    """Trakt.tv API 配置"""
+    enabled: bool = Field(default=False, description="是否启用 Trakt.tv 数据增强")
+    client_id: str = Field(default="", description="Trakt.tv 应用的 Client ID")
+
 
 class HdhiveSigninConfig(BaseModel):
     """影巢签到模块的配置"""
@@ -346,6 +351,7 @@ class AppConfig(BaseModel):
     episode_renamer_config: EpisodeRenamerConfig = Field(default_factory=EpisodeRenamerConfig)
     poster_manager_config: PosterManagerConfig = Field(default_factory=PosterManagerConfig)
     telegram_config: TelegramConfig = Field(default_factory=TelegramConfig)
+    trakt_config: TraktConfig = Field(default_factory=TraktConfig)
     signin_config: SigninModulesConfig = Field(default_factory=SigninModulesConfig)
     chasing_center_config: ChasingCenterConfig = Field(default_factory=ChasingCenterConfig)
     actor_role_mapper_config: ActorRoleMapperConfig = Field(default_factory=ActorRoleMapperConfig)

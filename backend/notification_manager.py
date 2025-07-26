@@ -77,7 +77,6 @@ class NotificationManager:
             ui_logger.error(f"❌ 发送Telegram通知时发生未知异常: {e}", task_category=task_cat, exc_info=True)
             return {"success": False, "message": f"未知异常: {e}"}
         
-    # backend/notification_manager.py (函数替换)
 
     def send_telegram_photo_notification(
         self,

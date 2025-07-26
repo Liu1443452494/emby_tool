@@ -158,6 +158,9 @@ def load_app_config() -> AppConfig:
     if "telegram_config" not in config_data:
         config_data["telegram_config"] = {}
 
+    if "trakt_config" not in config_data:
+        config_data["trakt_config"] = {}
+
     if "signin_config" not in config_data:
         config_data["signin_config"] = {}
         migration_needed = True
