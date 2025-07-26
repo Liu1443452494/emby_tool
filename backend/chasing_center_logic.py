@@ -73,6 +73,9 @@ class ChasingCenterLogic:
         from collections import Counter
         import pytz
         import os
+        # --- 新增：导入 requests 异常 ---
+        import requests
+        # --- 新增结束 ---
 
         task_cat = "追更中心"
         chasing_items_in_memory = self._get_chasing_list()
@@ -85,6 +88,10 @@ class ChasingCenterLogic:
         items_to_resave = False
         detailed_list = []
         updates_to_apply = {}
+        
+        # --- 新增：用于记录无效项目的列表 ---
+        items_to_remove = []
+        # --- 新增结束 ---
 
         trakt_manager = TraktManager(self.config)
 
@@ -93,7 +100,18 @@ class ChasingCenterLogic:
             tmdb_id = item_data.get("tmdb_id")
             
             try:
-                emby_details = self.episode_refresher._get_emby_item_details(emby_id, fields="Name,ProductionYear,ProviderIds,ImageTags,BackdropImageTags")
+                # --- 修改：将获取 Emby 详情的操作放入 try...except 块中 ---
+                try:
+                    emby_details = self.episode_refresher._get_emby_item_details(emby_id, fields="Name,ProductionYear,ProviderIds,ImageTags,BackdropImageTags")
+                except requests.exceptions.HTTPError as http_err:
+                    if http_err.response.status_code == 404:
+                        ui_logger.warning(f"⚠️ [追更] 检测到 Emby 媒体项 (ID: {emby_id}) 已不存在，将自动从追更列表中移除。", task_category=task_cat)
+                        items_to_remove.append(emby_id)
+                        items_to_resave = True
+                        continue # 跳过此项目的后续处理
+                    else:
+                        raise # 重新抛出其他 HTTP 错误
+                # --- 修改结束 ---
                 
                 if not tmdb_id:
                     provider_ids_lower = {k.lower(): v for k, v in emby_details.get("ProviderIds", {}).items()}
@@ -121,6 +139,7 @@ class ChasingCenterLogic:
                 if tmdb_id in self.memory_cache:
                     cached_item = self.memory_cache[tmdb_id]
                     if time.time() - cached_item.get("timestamp", 0) < cache_duration_memory:
+                        # --- 修改：优化日志输出 ---
                         remaining_seconds = cache_duration_memory - (time.time() - cached_item.get("timestamp", 0))
                         remaining_time_str = f"{remaining_seconds / 60:.0f}分钟"
                         
@@ -129,6 +148,7 @@ class ChasingCenterLogic:
                         display_status = status_map.get(cached_status_text, cached_status_text)
 
                         ui_logger.debug(f"🔍 [追更-缓存] 命中内存缓存: {emby_details.get('Name')} (剧集状态: {display_status}, 剩余: {remaining_time_str})", task_category=task_cat)
+                        # --- 修改结束 ---
                         tmdb_cache_data = cached_item["data"]
 
                 if not tmdb_cache_data and item_data.get("cache"):
@@ -141,6 +161,7 @@ class ChasingCenterLogic:
                         cache_duration_file = 1 * 86400 # 24小时
 
                     if time.time() - datetime.fromisoformat(cached_item.get("timestamp", "1970-01-01T00:00:00Z")).timestamp() < cache_duration_file:
+                        # --- 修改：优化日志输出 ---
                         remaining_seconds = cache_duration_file - (time.time() - datetime.fromisoformat(cached_item.get("timestamp", "1970-01-01T00:00:00Z")).timestamp())
                         if remaining_seconds > 86400:
                             remaining_time_str = f"{remaining_seconds / 86400:.1f}天"
@@ -152,6 +173,7 @@ class ChasingCenterLogic:
                         display_status = status_map.get(cached_status_text, cached_status_text)
                         
                         ui_logger.debug(f"🔍 [追更-缓存] 命中文件缓存: {emby_details.get('Name')} (剧集状态: {display_status}, 有效期: {cache_duration_file // 86400}天, 剩余: {remaining_time_str})", task_category=task_cat)
+                        # --- 修改结束 ---
                         tmdb_cache_data = cached_item["data"]
                         self.memory_cache[tmdb_id] = {"timestamp": time.time(), "data": tmdb_cache_data}
 
@@ -378,15 +400,29 @@ class ChasingCenterLogic:
                 })
 
             except Exception as e:
-                logging.error(f"❌ [追更] 获取剧集 {emby_id} 的详细信息时失败: {e}", exc_info=True)
+                # --- 修改：捕获 NoneType 错误并给出更友好的提示 ---
+                if isinstance(e, TypeError) and "'NoneType' object is not subscriptable" in str(e) or "'NoneType' object has no attribute 'get'" in str(e):
+                     # 这个错误通常是因为 emby_details 为 None 导致的，上面已经处理了404，这里可能是其他网络问题
+                     ui_logger.error(f"❌ [追更] 获取剧集 {emby_id} 的 Emby 详情时失败（可能网络超时或服务器无响应），已跳过。", task_category=task_cat)
+                else:
+                    logging.error(f"❌ [追更] 处理剧集 {emby_id} 的详细信息时发生未知错误: {e}", exc_info=True)
+                # --- 修改结束 ---
                 continue
         
+        # --- 新增：在循环外执行清理和保存 ---
+        if items_to_remove:
+            ui_logger.info(f"🔄 [追更] 正在从追更列表中清理 {len(items_to_remove)} 个无效项目...", task_category=task_cat)
+            final_chasing_list = [item for item in chasing_items_in_memory if item.get("emby_id") not in items_to_remove]
+        else:
+            final_chasing_list = chasing_items_in_memory
+
         if items_to_resave:
             ui_logger.info("✅ [追更] 检测到数据更新，正在回写到追更列表文件...", task_category=task_cat)
-            for item in chasing_items_in_memory:
+            for item in final_chasing_list:
                 if item.get("tmdb_id") in updates_to_apply:
                     item["cache"] = updates_to_apply[item["tmdb_id"]]
-            self._save_chasing_list(chasing_items_in_memory)
+            self._save_chasing_list(final_chasing_list)
+        # --- 新增结束 ---
 
         return detailed_list
 
