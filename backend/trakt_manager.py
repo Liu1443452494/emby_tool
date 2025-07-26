@@ -82,10 +82,13 @@ class TraktManager:
         ui_logger.debug(f"   - [Trakt-步骤1/3] ✅ 成功找到剧集《{show_title}》的 Trakt ID: {trakt_id}", task_category=task_cat)
         return str(trakt_id), show_title
 
-    def get_show_seasons_with_episodes(self, tmdb_id: str) -> Optional[Dict[str, Any]]:
+    # backend/trakt_manager.py (函数替换)
+
+    def get_show_seasons_with_episodes(self, tmdb_id: str) -> Optional[Tuple[Dict[str, Any], int]]:
         """
-        通过 TMDB ID 获取剧集【最新一季】分集的详细信息。
+        通过 TMDB ID 获取剧集【最新一季】分集的详细信息，并返回分集播出时间图和该季的总集数。
         采用经过验证的三步查询法。
+        返回: (episodes_map, episode_count) 或 None
         """
         task_cat = "Trakt API"
         ui_logger.info(f"➡️ [Trakt] 正在为 TMDB ID: {tmdb_id} 获取精确分集播出时间...", task_category=task_cat)
@@ -94,9 +97,12 @@ class TraktManager:
         if not trakt_id:
             return None
 
-        ui_logger.debug(f"   - [Trakt-步骤2/3] 正在为《{show_title}》(Trakt ID: {trakt_id}) 获取季摘要列表...", task_category=task_cat)
+        ui_logger.debug(f"   - [Trakt-步骤2/3] 正在为《{show_title}》(Trakt ID: {trakt_id}) 获取包含总集数的季摘要列表...", task_category=task_cat)
+        # --- 核心修改：增加 extended=full 参数以获取 episode_count ---
         seasons_summary_endpoint = f"/shows/{trakt_id}/seasons"
-        seasons_summary_data = self._make_request(seasons_summary_endpoint)
+        seasons_summary_params = {"extended": "full"}
+        seasons_summary_data = self._make_request(seasons_summary_endpoint, seasons_summary_params)
+        # --- 修改结束 --
         
         if not seasons_summary_data:
             ui_logger.warning(f"   - [Trakt-步骤2/3] ⚠️ 未能获取到《{show_title}》的季摘要信息。", task_category=task_cat)
@@ -112,12 +118,18 @@ class TraktManager:
             ui_logger.warning(f"   - [Trakt-步骤2/3] ⚠️ 在《{show_title}》中未找到有效的最新季摘要。", task_category=task_cat)
             return None
         
+        # --- 核心修改：从摘要中提取 episode_count ---
         latest_season_number = latest_season_summary.get("number")
+        trakt_episode_count = latest_season_summary.get("episode_count", 0)
+        ui_logger.debug(f"   - [Trakt-步骤2/3] ✅ 从摘要中提取到第 {latest_season_number} 季的总集数为: {trakt_episode_count}", task_category=task_cat)
+        # --- 修改结束 ---
+
         ui_logger.debug(f"   - [Trakt-步骤3/3] 已定位到最新季: 第 {latest_season_number} 季，开始获取其详细分集...", task_category=task_cat)
 
         season_detail_endpoint = f"/shows/{trakt_id}/seasons/{latest_season_number}"
         params = {"extended": "full"}
         episodes_in_season = self._make_request(season_detail_endpoint, params)
+
 
         if not episodes_in_season:
             ui_logger.warning(f"   - [Trakt-步骤3/3] ⚠️ 获取第 {latest_season_number} 季的详细信息失败。", task_category=task_cat)
@@ -126,10 +138,14 @@ class TraktManager:
         episodes_map = {}
         for episode in episodes_in_season:
             episode_number = episode.get("number")
-            first_aired = episode.get("first_aired")
-            if episode_number is not None and first_aired:
+            if episode_number is not None:
                 key = f"S{latest_season_number}E{episode_number}"
-                episodes_map[key] = first_aired
+                episodes_map[key] = episode.get("first_aired")
         
-        ui_logger.info(f"✅ [Trakt] 成功为《{show_title}》的第 {latest_season_number} 季获取到 {len(episodes_map)} 条精确播出时间记录。", task_category=task_cat)
-        return episodes_map
+        valid_air_dates_count = sum(1 for air_date in episodes_map.values() if air_date)
+        total_episodes_count = len(episodes_map)
+        
+        ui_logger.info(f"✅ [Trakt] 成功为《{show_title}》的第 {latest_season_number} 季获取到 {total_episodes_count} 条分集记录，其中 {valid_air_dates_count} 条包含精确播出时间。", task_category=task_cat)
+        
+        # --- 核心修改：返回元组 (map, count) ---
+        return episodes_map, trakt_episode_count

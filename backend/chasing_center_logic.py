@@ -67,8 +67,6 @@ class ChasingCenterLogic:
 
 
 
-    # backend/chasing_center_logic.py (函数替换)
-
     def get_detailed_chasing_list(self) -> List[Dict]:
         """获取聚合了 Emby 和 TMDB 信息的详细追更列表，并实现两级缓存和动态分界线逻辑"""
         from trakt_manager import TraktManager
@@ -186,18 +184,22 @@ class ChasingCenterLogic:
                             season_number = latest_season_summary.get("season_number")
                             season_data = self.tmdb_logic.get_season_details(int(tmdb_id), season_number)
 
-                            logging.debug(f"【追更-调试】从 TMDB /season/{season_number} 获取到的原始数据:\n{json.dumps(season_data, indent=2)}")
+                            
                             if season_data and season_data.get("episodes"):
                                 chasing_season_details[str(season_number)] = season_data["episodes"]
                         
-                        # --- Trakt 数据增强与验证 ---
-                        trakt_episodes_map = trakt_manager.get_show_seasons_with_episodes(tmdb_id)
+                        
+                        trakt_result = trakt_manager.get_show_seasons_with_episodes(tmdb_id)
+                        trakt_episodes_map = None
+                        trakt_episode_count = 0
+                        if trakt_result:
+                            trakt_episodes_map, trakt_episode_count = trakt_result
+                        
 
-                        logging.debug(f"【追更-调试】从 Trakt 获取到的原始分集 Map:\n{json.dumps(trakt_episodes_map, indent=2)}")
+                        
                         if trakt_episodes_map and latest_season_summary:
                             tmdb_latest_season_num = latest_season_summary.get("season_number")
                             
-                            # 从 trakt_episodes_map 的 key 中提取季号
                             trakt_season_num = None
                             if trakt_episodes_map:
                                 first_key = next(iter(trakt_episodes_map))
@@ -208,17 +210,18 @@ class ChasingCenterLogic:
                                 ui_logger.info(f"     - ✅ 季号一致 (均为 S{tmdb_latest_season_num})，校验通过。", task_category=task_cat)
                                 
                                 tmdb_episode_count = latest_season_summary.get("episode_count", 0)
-                                trakt_episode_count = len(trakt_episodes_map)
+                                # --- 核心修改：使用从 Trakt 获取的声明值进行比较 ---
                                 if tmdb_episode_count == trakt_episode_count:
                                     ui_logger.info(f"     - ✅ 总集数一致 (均为 {tmdb_episode_count} 集)，数据完美匹配。", task_category=task_cat)
                                 else:
                                     ui_logger.warning(f"     - ⚠️ 总集数不一致 (TMDB: {tmdb_episode_count} 集, Trakt: {trakt_episode_count} 集)。将继续合并可用数据。", task_category=task_cat)
+                                # --- 修改结束 ---
 
                                 ui_logger.info(f"   - [追更-Trakt] 开始合并精确播出时间...", task_category=task_cat)
                                 for s_num, eps in chasing_season_details.items():
                                     for ep in eps:
                                         trakt_key = f"S{ep.get('season_number')}E{ep.get('episode_number')}"
-                                        if trakt_key in trakt_episodes_map:
+                                        if trakt_key in trakt_episodes_map and trakt_episodes_map[trakt_key]:
                                             try:
                                                 utc_time = datetime.fromisoformat(trakt_episodes_map[trakt_key].replace('Z', '+00:00'))
                                                 local_tz = pytz.timezone(os.environ.get('TZ', 'Asia/Shanghai'))
@@ -228,8 +231,7 @@ class ChasingCenterLogic:
                                                 logging.warning(f"   - [追更-Trakt] 解析时间戳失败: {trakt_episodes_map[trakt_key]}, 错误: {e}")
                             else:
                                 ui_logger.warning(f"   - [追更-Trakt] ❌ 季号不匹配 (TMDB 最新为 S{tmdb_latest_season_num}, Trakt 最新为 S{trakt_season_num})。将跳过 Trakt 数据合并。", task_category=task_cat)
-                        # --- 增强与验证结束 ---
-                        logging.debug(f"【追更-调试】合并 Trakt 时间后，最终用于缓存的 chasing_season_details:\n{json.dumps(chasing_season_details, indent=2)}")
+                        
                         tmdb_cache_data["chasing_season_details"] = {
                             s_num: [{"season_number": ep.get("season_number"), "episode_number": ep.get("episode_number"), "air_date": ep.get("air_date")} for ep in eps]
                             for s_num, eps in chasing_season_details.items()
@@ -286,7 +288,7 @@ class ChasingCenterLogic:
                         
                         emby_chasing_season_episode_count = sum(1 for ep in emby_episodes_full_list if ep.get("ParentIndexNumber") == chasing_season_number)
                         
-                        has_precise_time = any(":" in ep.get("air_date", "") for ep in chasing_episodes)
+                        has_precise_time = any(":" in (ep.get("air_date") or "") for ep in chasing_episodes)
 
                         if has_precise_time:
                             now = datetime.now(pytz.timezone(os.environ.get('TZ', 'Asia/Shanghai')))
@@ -301,7 +303,7 @@ class ChasingCenterLogic:
                                         dt = dt.replace(hour=h, minute=m)
                                     return dt.replace(tzinfo=now.tzinfo)
 
-                            time_parts = [ep.get("air_date").split(" ")[1] for ep in chasing_episodes if ":" in ep.get("air_date", "")]
+                            time_parts = [ep.get("air_date").split(" ")[1] for ep in chasing_episodes if ep.get("air_date") and ":" in ep.get("air_date", "")]
                             common_time = Counter(time_parts).most_common(1)[0][0] if time_parts else None
 
                             aired_episodes = [ep for ep in chasing_episodes if ep.get("air_date") and parse_air_datetime(ep["air_date"], common_time) < now]
@@ -328,7 +330,14 @@ class ChasingCenterLogic:
 
                             future_next_episode = next((ep for ep in chasing_episodes if ep.get("air_date") and datetime.strptime(ep["air_date"], "%Y-%m-%d").date() >= cutoff_date), None)
 
-                        target_ep = future_next_episode or (chasing_episodes[-1] if chasing_episodes else None)
+                        if future_next_episode:
+                            target_ep = future_next_episode
+                        else:
+                            # 查找最后一个有播出日期的分集
+                            episodes_with_air_date = [ep for ep in chasing_episodes if ep.get("air_date")]
+                            target_ep = episodes_with_air_date[-1] if episodes_with_air_date else None
+
+
                         is_next = bool(future_next_episode)
 
                         if target_ep:
