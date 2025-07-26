@@ -77,9 +77,13 @@ class DoubanFixerLogic:
             ui_logger.error(f"更新 Emby 媒体 (ID: {item_id}) 的豆瓣ID时失败: {e}", task_category=task_cat)
             return False
 
+
     def _search_douban(self, title: str, task_cat: str) -> Optional[List[Dict]]:
         try:
-            time.sleep(self.fixer_config.api_cooldown)
+            
+            cooldown = self.fixer_config.api_cooldown
+            ui_logger.info(f"➡️ [豆瓣搜索] 准备为【{title}】搜索，将等待 {cooldown:.1f} 秒冷却时间...", task_category=task_cat)
+            time.sleep(cooldown)
             
             search_url = f"https://search.douban.com/movie/subject_search?search_text={quote(title)}&cat=1002"
             response = self.session.get(search_url, timeout=20)
@@ -87,7 +91,8 @@ class DoubanFixerLogic:
 
             match = re.search(r'window\.__DATA__ = (\{.*\});', response.text)
             if not match:
-                ui_logger.warning(f"搜索【{title}】成功，但未在页面中找到 window.__DATA__ 数据块。", task_category=task_cat)
+                ui_logger.warning(f"⚠️ [豆瓣搜索] 搜索【{title}】成功，但未在页面中找到 window.__DATA__ 数据块。豆瓣页面结构可能已更新。", task_category=task_cat)
+
                 return []
 
             data = json.loads(match.group(1))
@@ -108,14 +113,23 @@ class DoubanFixerLogic:
                     "poster": item.get('cover_url', '')
                 })
             
-            ui_logger.info(f"通过解析JSON数据成功为【{title}】找到 {len(results)} 个结果。", task_category=task_cat)
+            
+            if results:
+                ui_logger.info(f"✅ [豆瓣搜索] 成功为【{title}】解析到 {len(results)} 个结果。", task_category=task_cat)
+            else:
+                ui_logger.warning(f"🔍 [豆瓣搜索] 为【{title}】的搜索请求成功，但解析到的结果列表为空。", task_category=task_cat)
             return results
             
+            
         except requests.RequestException as e:
-            ui_logger.error(f"搜索豆瓣【{title}】失败: {e}", task_category=task_cat)
+            
+            ui_logger.error(f"❌ [豆瓣搜索] 搜索【{title}】时发生网络错误: {e}", task_category=task_cat)
+            
             return None
         except Exception as e:
-            ui_logger.error(f"解析豆瓣搜索页面或JSON数据失败: {e}", task_category=task_cat, exc_info=True)
+            
+            ui_logger.error(f"❌ [豆瓣搜索] 解析【{title}】的搜索页面或JSON数据时失败: {e}", task_category=task_cat, exc_info=True)
+            
             return None
 
     def _find_match_in_results(self, emby_item: Dict, search_results: List[Dict], task_cat: str) -> Optional[str]:

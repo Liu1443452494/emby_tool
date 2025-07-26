@@ -893,6 +893,7 @@ def save_and_test_tmdb_config_api(tmdb_config: TmdbConfig):
     except Exception as e:
         logging.error(f"【TMDB测试】保存 TMDB 配置时发生未知错误: {e}")
         raise HTTPException(status_code=500, detail=f"处理 TMDB 配置时发生未知错误: {e}")
+    
 @app.post("/api/config/douban")
 def save_douban_config_api(douban_config: DoubanConfig):
     try:
@@ -925,7 +926,7 @@ def save_douban_fixer_config_api(config: DoubanFixerConfig):
         logging.info("正在保存豆瓣ID修复器设置...")
         current_app_config = app_config.load_app_config()
         current_app_config.douban_fixer_config = config
-        
+        app_config.save_app_config(current_app_config)
         if scheduler.running:
             job_id = "douban_fixer_scan_job"
             existing_job = scheduler.get_job(job_id)
