@@ -97,6 +97,7 @@ export const useConfigStore = defineStore('config', () => {
     upcoming_config: {
       enabled: true,
       notification_cron: '0 9 * * *',
+      pruning_cron: '0 1 * * *',
       filters: {
         fetch_days: 1,
         genre_blacklist: [],

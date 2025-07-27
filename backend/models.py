@@ -339,16 +339,10 @@ class UpcomingConfig(BaseModel):
     """即将上映功能的完整配置"""
     enabled: bool = Field(default=True, description="是否启用此功能")
     notification_cron: str = Field(default="0 9 * * *", description="每日订阅通知的CRON表达式")
+    pruning_cron: str = Field(default="0 1 * * *", description="每日清理过期项目的CRON表达式")
     filters: UpcomingFilterConfig = Field(default_factory=UpcomingFilterConfig)
 
-class UpcomingSubscriptionItem(BaseModel):
-    """单个订阅项目的数据模型"""
-    tmdb_id: int
-    media_type: Literal['movie', 'tv']
-    title: str
-    release_date: str
-    poster_path: Optional[str] = None
-    subscribed_at: str
+
 
 class ActorRoleMapperConfig(BaseModel):
     """演员角色映射器配置"""

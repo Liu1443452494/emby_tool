@@ -1,4 +1,4 @@
-<!-- ❗ 注意：以下是 frontend/src/views/UpcomingMediaView.vue 文件的完整文件代码，请直接覆盖整个文件内容。 -->
+<!-- frontend/src/views/UpcomingMediaView.vue (完整文件覆盖) -->
 <template>
   <div class="upcoming-page">
     <div class="page-header">
@@ -20,22 +20,54 @@
           :class="{ active: activeTab === 'movies' }"
           @click="activeTab = 'movies'"
         >
-          电影 ({{ upcomingMovies.length }})
+          电影 ({{ store.upcomingMovies.length }})
         </div>
         <div
           class="custom-tab-item"
           :class="{ active: activeTab === 'tv' }"
           @click="activeTab = 'tv'"
         >
-          电视剧 ({{ upcomingTvs.length }})
+          电视剧 ({{ store.upcomingTvs.length }})
         </div>
         <div
           class="custom-tab-item"
           :class="{ active: activeTab === 'subscriptions' }"
           @click="activeTab = 'subscriptions'"
         >
-          我的订阅 ({{ subscriptionList.length }})
+          我的订阅 ({{ store.subscriptionList.length }})
         </div>
+      </div>
+      <div v-if="activeTab !== 'subscriptions'" class="dynamic-filters">
+        <el-select
+          v-model="selectedCountry"
+          placeholder="按地区过滤"
+          clearable
+          filterable
+          size="small"
+          style="width: 180px;"
+        >
+          <el-option
+            v-for="option in countryOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+        <el-select
+          v-model="selectedGenre"
+          placeholder="按类型过滤"
+          clearable
+          filterable
+          size="small"
+          style="width: 180px;"
+        >
+          <el-option
+            v-for="option in genreOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
       </div>
 
       <div class="custom-tabs-content">
@@ -176,6 +208,15 @@
                 </el-form-item>
                 <el-form-item label="通知周期 (CRON 表达式)">
                   <el-input v-model="store.config.notification_cron" placeholder="例如: 0 9 * * *" />
+                  <div v-if="notificationCronDesc" class="cron-description" :class="{ 'error': notificationCronError }">
+                    {{ notificationCronDesc }}
+                  </div>
+                </el-form-item>
+                <el-form-item label="过期项目清理周期 (CRON 表达式)">
+                  <el-input v-model="store.config.pruning_cron" placeholder="例如: 0 1 * * *" />
+                  <div v-if="pruningCronDesc" class="cron-description" :class="{ 'error': pruningCronError }">
+                    {{ pruningCronDesc }}
+                  </div>
                 </el-form-item>
               </el-form>
             </div>
@@ -192,32 +233,108 @@
 </template>
 
 <script setup>
-import { onMounted, ref, computed } from 'vue';
+import { onMounted, ref, computed, watch } from 'vue';
 import { useUpcomingStore } from '@/stores/upcoming';
 import { Filter } from '@element-plus/icons-vue';
-import ResultsGrid from '@/components/ResultsGrid.vue'; // --- 核心修改：导入外部组件 ---
+import ResultsGrid from '@/components/ResultsGrid.vue';
+import { useStorage } from '@vueuse/core';
+import cronstrue from 'cronstrue/i18n';
+import { COUNTRY_MAP } from '@/config/filterConstants';
 
 const store = useUpcomingStore();
-const activeTab = ref('movies');
+const activeTab = useStorage('upcoming-active-tab', 'movies');
 const isDrawerVisible = ref(false);
 
-onMounted(() => {
-  store.fetchConfig();
-  store.fetchSubscriptions();
-  store.fetchUpcomingList(true);
+const selectedCountry = ref('');
+const selectedGenre = ref('');
+
+const countryOptions = computed(() => {
+  const items = activeTab.value === 'movies' ? store.upcomingMovies : store.upcomingTvs;
+  const countries = new Set();
+  items.forEach(item => {
+    item.origin_country?.forEach(code => countries.add(code));
+  });
+  return Array.from(countries).map(code => ({
+    value: code,
+    label: COUNTRY_MAP[code.toLowerCase()] || code
+  })).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
 });
 
-const upcomingMovies = computed(() => store.upcomingList.filter(item => item.media_type === 'movie'));
-const upcomingTvs = computed(() => store.upcomingList.filter(item => item.media_type === 'tv'));
-const subscriptionList = computed(() => Object.values(store.subscriptions).sort((a, b) => a.release_date.localeCompare(b.release_date)));
+const genreOptions = computed(() => {
+  const items = activeTab.value === 'movies' ? store.upcomingMovies : store.upcomingTvs;
+  const genres = new Set();
+  items.forEach(item => {
+    item.genres?.forEach(name => genres.add(name));
+  });
+  return Array.from(genres).map(name => ({
+    value: name,
+    label: name
+  })).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
+});
+
+const notificationCronDesc = ref('');
+const notificationCronError = ref(false);
+const pruningCronDesc = ref('');
+const pruningCronError = ref(false);
+
+
+const parseCron = (cron, descRef, errorRef) => {
+  if (!cron || cron.trim() === '') {
+    descRef.value = '';
+    errorRef.value = false;
+    return;
+  }
+  try {
+    descRef.value = cronstrue.toString(cron, { locale: "zh_CN" });
+    errorRef.value = false;
+  } catch (e) {
+    descRef.value = `表达式无效: ${e}`;
+    errorRef.value = true;
+  }
+};
+
+onMounted(async () => {
+  await store.fetchConfig();
+  // --- 修改：增加智能刷新逻辑 ---
+  await store.fetchAllData();
+  if (store.allData.length === 0) {
+    console.log("检测到本地数据为空，将自动触发一次数据初始化...");
+    await store.fetchUpcomingList(true); // 使用默认配置进行首次数据获取
+  }
+  // --- 修改结束 ---
+});
+
+watch(() => store.config.notification_cron, (newCron) => {
+  parseCron(newCron, notificationCronDesc, notificationCronError);
+}, { immediate: true });
+
+watch(() => store.config.pruning_cron, (newCron) => {
+  parseCron(newCron, pruningCronDesc, pruningCronError);
+}, { immediate: true });
 
 const currentItems = computed(() => {
+  let items;
   switch (activeTab.value) {
-    case 'movies': return upcomingMovies.value;
-    case 'tv': return upcomingTvs.value;
-    case 'subscriptions': return subscriptionList.value;
-    default: return [];
+    case 'movies': 
+      items = store.upcomingMovies;
+      break;
+    case 'tv': 
+      items = store.upcomingTvs;
+      break;
+    case 'subscriptions': 
+      return store.subscriptionList; // 订阅列表不参与过滤
+    default: 
+      return [];
   }
+
+  if (selectedCountry.value) {
+    items = items.filter(item => item.origin_country?.includes(selectedCountry.value));
+  }
+  if (selectedGenre.value) {
+    items = items.filter(item => item.genres?.includes(selectedGenre.value));
+  }
+  
+  return items;
 });
 
 const currentLoading = computed(() => {
@@ -245,12 +362,13 @@ const isBuiltIn = (key, value) => {
 };
 
 const handleSubscribe = (item) => {
-  store.subscribeItem(item);
+  store.updateSubscription(item, true);
 };
 
 const handleUnsubscribe = (item) => {
-  store.unsubscribeItem(item);
+  store.updateSubscription(item, false);
 };
+
 </script>
 
 <style scoped>
@@ -259,7 +377,7 @@ const handleUnsubscribe = (item) => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* 防止页面本身滚动 */
+  overflow: hidden;
 }
 .page-header {
   padding: 20px 0;
@@ -276,7 +394,7 @@ const handleUnsubscribe = (item) => {
   flex-grow: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* 确保容器本身不滚动 */
+  overflow: hidden;
   border: 1px solid var(--el-border-color);
   border-radius: 4px;
   margin-top: 20px;
@@ -306,7 +424,7 @@ const handleUnsubscribe = (item) => {
 }
 .custom-tabs-content {
   flex-grow: 1;
-  overflow-y: auto; /* 关键：让内容区域滚动 */
+  overflow-y: auto;
   position: relative;
 }
 
@@ -355,5 +473,25 @@ const handleUnsubscribe = (item) => {
 .builtin-tag {
   float: right;
   margin-left: 8px;
+}
+.cron-description {
+  font-size: 12px;
+  color: var(--el-color-success);
+  margin-top: 5px;
+  padding: 5px 8px;
+  background-color: var(--el-color-success-light-9);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+.cron-description.error {
+  color: var(--el-color-error);
+  background-color: var(--el-color-error-light-9);
+}.dynamic-filters {
+  display: flex;
+  gap: 15px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--el-border-color);
+  flex-shrink: 0;
+  background-color: var(--el-fill-color-lighter);
 }
 </style>

@@ -10,7 +10,6 @@
       <div v-for="item in props.items" :key="item.tmdb_id" class="media-card">
         <div class="card-background"></div>
         
-        <!-- --- 核心修改：新增图片容器 --- -->
         <div class="image-container">
           <el-image :src="getPosterUrl(item.poster_path)" fit="cover" class="poster-image" lazy>
             <template #placeholder><div class="image-slot-placeholder"></div></template>
@@ -21,9 +20,12 @@
             </template>
           </el-image>
           
+          <div class="badge top-left">{{ item.media_type === 'movie' ? '电影' : '剧集' }}</div>
+          <div class="badge top-right">{{ item.release_date }}</div>
+
           <div 
             class="subscribe-button" 
-            :class="{ 'subscribed': isSubscribed(item.tmdb_id) }"
+            :class="{ 'subscribed': isSubscribed(item) }"
             @click.stop="toggleSubscription(item)"
           >
             <svg class="heart-icon" viewBox="0 0 24 24">
@@ -31,14 +33,33 @@
             </svg>
           </div>
         </div>
-        <!-- --- 修改结束 --- -->
 
         <div class="card-content">
           <div class="title-wrapper">
-        <h4 class="title" :title="item.title">{{ item.title }}</h4>
-        <span class="tmdb-id">ID:{{ item.tmdb_id }}</span>
-      </div>
-      <p class="release-date">首播日期：{{ item.release_date }}</p>
+            <h4 class="title" :title="item.title">{{ item.title }}</h4>
+            <!-- --- 核心修改：将 span 改为 a 标签 --- -->
+            <a
+              :href="`https://www.themoviedb.org/${item.media_type === 'tv' ? 'tv' : 'movie'}/${item.tmdb_id}`"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="tmdb-id"
+              title="在 TMDB 中查看详情"
+              @click.stop
+            >
+              ID:{{ item.tmdb_id }}
+            </a>
+            <!-- --- 修改结束 --- -->
+          </div>
+          <!-- --- 新增：地区和类型 --- -->
+          <p class="info-line">
+            <span class="info-label">地区:</span>
+            <span class="info-value">{{ getCountryNames(item.origin_country) }}</span>
+          </p>
+          <p class="info-line">
+            <span class="info-label">类型:</span>
+            <span class="info-value">{{ getGenreNames(item.genres) }}</span>
+          </p>
+          <!-- --- 新增结束 --- -->
         </div>
       </div>
     </div>
@@ -50,18 +71,29 @@
 import { defineProps, defineEmits } from 'vue';
 import { useUpcomingStore } from '@/stores/upcoming';
 import { TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES } from '@/config/apiConfig';
+import { COUNTRY_MAP } from '@/config/filterConstants';
 import { Picture } from '@element-plus/icons-vue';
 
 const props = defineProps(['items', 'loading', 'type']);
 const emit = defineEmits(['subscribe', 'unsubscribe']);
 
 const store = useUpcomingStore();
+const getCountryNames = (codes) => {
+  if (!codes || codes.length === 0) return '未知';
+  return codes.map(code => COUNTRY_MAP[code.toLowerCase()] || code).join(' / ');
+};
+
+const getGenreNames = (genres) => {
+  if (!genres || genres.length === 0) return '未知';
+  return genres.join(' / ');
+};
 
 const getPosterUrl = (path) => path ? `${TMDB_IMAGE_BASE_URL}${TMDB_IMAGE_SIZES.poster}${path}` : '';
-const isSubscribed = (tmdbId) => tmdbId in store.subscriptions;
+const isSubscribed = (item) => item.is_subscribed;
 
 const toggleSubscription = (item) => {
-  if (isSubscribed(item.tmdb_id)) {
+  // --- 核心修改：直接使用 is_subscribed 字段判断 ---
+  if (item.is_subscribed) {
     emit('unsubscribe', item);
   } else {
     emit('subscribe', item);
@@ -106,13 +138,33 @@ const toggleSubscription = (item) => {
   z-index: 1;
 }
 
-/* --- 核心修改：新的图片容器和内部元素样式 --- */
 .image-container {
-  position: relative; /* 为按钮提供定位上下文 */
+  position: relative; /* 为按钮和角标提供定位上下文 */
   z-index: 2;
   width: 100%;
   aspect-ratio: 2 / 3;
   flex-shrink: 0;
+  overflow: hidden; /* 确保角标不会超出图片范围 */
+}
+.badge {
+  position: absolute;
+  z-index: 4;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: bold;
+  color: white;
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  border-radius: 4px;
+}
+.badge.top-left {
+  top: 8px;
+  left: 8px;
+  background-color: #67c23a;
+}
+.badge.top-right {
+  top: 8px;
+  right: 8px;
 }
 
 .poster-image {
@@ -172,6 +224,7 @@ const toggleSubscription = (item) => {
   justify-content: center;
   background-color: transparent;
   color: #fff;
+  min-height: 90px;
 }
 
 .title-wrapper {
@@ -201,14 +254,25 @@ const toggleSubscription = (item) => {
   font-weight: 900;
   flex-shrink: 0; /* 防止ID被压缩 */
   font-family: monospace;
+  text-decoration: none;
+}
+.tmdb-id:hover {
+  color: #85ce61;
+  transform: scale(1.08);
 }
 
-.release-date {
-  margin: 0;
+.info-line {
+  margin: 2px 0 0 0;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.8);
-  text-align: left; /* 左对齐 */
-  text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+  color: rgba(255, 255, 255, 0.7);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.info-label {
+  font-weight: bold;
+  margin-right: 5px;
 }
 
 .heart-icon {

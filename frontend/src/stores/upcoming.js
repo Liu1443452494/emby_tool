@@ -1,16 +1,18 @@
-// ❗ 注意：以下是 frontend/src/stores/upcoming.js 文件的完整文件代码，请直接覆盖整个文件内容。
+// frontend/src/stores/upcoming.js (完整文件覆盖)
 
-import { ref, reactive } from 'vue';
+import { ref, reactive, computed } from 'vue';
 import { defineStore } from 'pinia';
 import { ElMessage } from 'element-plus';
 import { API_BASE_URL } from '@/config/apiConfig';
 import { GENRE_MAP, COUNTRY_MAP, LANGUAGE_MAP, mapToOptions } from '@/config/filterConstants';
+import _ from 'lodash';
 
 export const useUpcomingStore = defineStore('upcoming', () => {
   // --- State ---
   const config = ref({
     enabled: true,
     notification_cron: '0 9 * * *',
+    pruning_cron: '0 1 * * *',
     filters: {
       fetch_days: 1,
       genre_blacklist: [],
@@ -28,27 +30,28 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     p1_countries: { available: [], selected: [], builtIn: [] },
   });
   
-  const upcomingList = ref([]);
-  const subscriptions = ref({});
+  const allData = ref([]);
   const isLoading = ref(false);
   const isListLoading = ref(false);
   const isSaving = ref(false);
+  
+  // --- 新增：用于检查配置是否变更的快照 ---
+  let filterSnapshot = null;
+
+  // --- Computed ---
+  const upcomingMovies = computed(() => allData.value.filter(item => item.media_type === 'movie'));
+  const upcomingTvs = computed(() => allData.value.filter(item => item.media_type === 'tv'));
+  const subscriptionList = computed(() => allData.value.filter(item => item.is_subscribed).sort((a, b) => a.release_date.localeCompare(b.release_date)));
 
   // --- Actions ---
   const showMessage = (type, message) => {
     ElMessage({ message, type, showClose: true, duration: 3000 });
   };
 
-
-
   function _buildFilterOptions(defaultFilters) {
     const build = (key, sourceMap) => {
       const defaults = defaultFilters[key] || [];
       const options = mapToOptions(sourceMap);
-
-      // --- 新增：排序逻辑 ---
-      // 1. 先按是否为内置项排序 (内置的在前)
-      // 2. 在相同类别内，按标签的字母顺序排序
       options.sort((a, b) => {
         const isABuiltIn = defaults.includes(a.value);
         const isBBuiltIn = defaults.includes(b.value);
@@ -56,8 +59,6 @@ export const useUpcomingStore = defineStore('upcoming', () => {
         if (!isABuiltIn && isBBuiltIn) return 1;
         return a.label.localeCompare(b.label, 'zh-CN');
       });
-      // --- 新增结束 ---
-
       filterOptions[key] = {
         available: options,
         selected: [...defaults],
@@ -70,7 +71,11 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     build('p0_countries', COUNTRY_MAP);
     build('p0_languages', LANGUAGE_MAP);
     build('p1_countries', COUNTRY_MAP);
+    
+    // 创建初始快照
+    filterSnapshot = _.cloneDeep(filterOptions);
   }
+
   async function fetchConfig() {
     isLoading.value = true;
     try {
@@ -89,7 +94,6 @@ export const useUpcomingStore = defineStore('upcoming', () => {
   async function saveConfig(newConfig) {
     isSaving.value = true;
     try {
-      // 从 filterOptions 中提取纯数组配置进行保存
       const configToSave = {
         ...newConfig,
         filters: {
@@ -109,7 +113,7 @@ export const useUpcomingStore = defineStore('upcoming', () => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '保存配置失败');
       showMessage('success', data.message);
-      await fetchConfig();
+      await fetchConfig(); // 重新获取配置以更新快照
       return true;
     } catch (error) {
       showMessage('error', error.message);
@@ -120,8 +124,14 @@ export const useUpcomingStore = defineStore('upcoming', () => {
   }
 
   async function fetchUpcomingList(useDefaults = false) {
+    // 检查配置是否变更
+    if (!useDefaults && _.isEqual(filterOptions, filterSnapshot)) {
+      showMessage('info', '筛选条件未发生变化，已跳过刷新。');
+      return;
+    }
+
     isListLoading.value = true;
-    upcomingList.value = [];
+    allData.value = [];
     try {
       let payload = {};
       if (useDefaults) {
@@ -144,7 +154,12 @@ export const useUpcomingStore = defineStore('upcoming', () => {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '获取列表失败');
-      upcomingList.value = data;
+      allData.value = data;
+      
+      // 强制刷新后，更新快照
+      if (!useDefaults) {
+        filterSnapshot = _.cloneDeep(filterOptions);
+      }
     } catch (error) {
       showMessage('error', error.message);
     } finally {
@@ -152,45 +167,38 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     }
   }
 
-  async function fetchSubscriptions() {
+  async function fetchAllData() {
+    console.log("fetchAllData: 正在从后端获取本地数据库内容...");
     try {
-      const response = await fetch(`${API_BASE_URL}/api/upcoming/subscriptions`);
-      if (!response.ok) throw new Error('获取订阅列表失败');
-      subscriptions.value = await response.json();
+      const response = await fetch(`${API_BASE_URL}/api/upcoming/data`);
+      if (!response.ok) throw new Error('获取数据失败');
+      allData.value = await response.json();
     } catch (error) {
       showMessage('error', error.message);
     }
   }
 
-  async function subscribeItem(item) {
+  async function updateSubscription(item, subscribe) {
+    const action = subscribe ? 'subscribe' : 'unsubscribe';
     try {
-      const response = await fetch(`${API_BASE_URL}/api/upcoming/subscribe`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(item),
-      });
-      if (!response.ok) throw new Error('订阅失败');
-      showMessage('success', `《${item.title}》已成功订阅！`);
-      await fetchSubscriptions();
-      return true;
-    } catch (error) {
-      showMessage('error', error.message);
-      return false;
-    }
-  }
-
-  async function unsubscribeItem(item) {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/upcoming/unsubscribe`, {
+      const response = await fetch(`${API_BASE_URL}/api/upcoming/${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tmdb_id: item.tmdb_id }),
       });
-      if (!response.ok) throw new Error('取消订阅失败');
-      showMessage('success', `已取消对《${item.title}》的订阅。`);
-      await fetchSubscriptions();
+      if (!response.ok) throw new Error(`${subscribe ? '订阅' : '取消订阅'}失败`);
+      
+      // 本地乐观更新
+      const targetItem = allData.value.find(i => i.tmdb_id === item.tmdb_id);
+      if (targetItem) {
+        targetItem.is_subscribed = subscribe;
+      }
+      
+      showMessage('success', `操作成功！`);
+      return true;
     } catch (error) {
       showMessage('error', error.message);
+      return false;
     }
   }
 
@@ -207,17 +215,18 @@ export const useUpcomingStore = defineStore('upcoming', () => {
   return {
     config,
     filterOptions,
-    upcomingList,
-    subscriptions,
+    allData,
+    upcomingMovies,
+    upcomingTvs,
+    subscriptionList,
     isLoading,
     isListLoading,
     isSaving,
     fetchConfig,
     saveConfig,
     fetchUpcomingList,
-    fetchSubscriptions,
-    subscribeItem,
-    unsubscribeItem,
+    fetchAllData,
+    updateSubscription,
     resetFilters,
   };
 });

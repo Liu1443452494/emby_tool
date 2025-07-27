@@ -488,27 +488,61 @@ def update_chasing_scheduler():
         scheduler.remove_job(job_id_calendar)
         ui_logger.info(f"  - 已移除追剧日历通知任务。", task_category=task_cat)
 
+
 def update_upcoming_scheduler():
     """更新即将上映功能的定时任务"""
     task_cat = "系统配置"
     ui_logger.info("【调度任务】检测到即将上映功能配置变更，正在更新调度器...", task_category=task_cat)
     config = app_config.load_app_config()
     
-    job_id = "upcoming_notification"
+    # --- 新增：清理任务的逻辑 ---
+    from upcoming_logic import UpcomingLogic
+    logic = UpcomingLogic(config)
+
+    def trigger_pruning_task():
+        """即将上映过期项目清理触发器"""
+        task_cat_prune = "定时任务-订阅清理"
+        if not config.upcoming_config.enabled:
+            logging.info(f"【调度任务】即将上映功能未启用，跳过过期项目清理。")
+            return
+        ui_logger.info("开始执行订阅列表过期项目清理任务...", task_category=task_cat_prune)
+        logic.prune_expired_items()
+    # --- 新增结束 ---
+
+    # 订阅通知任务
+    job_id_notify = "upcoming_notification"
     if config.upcoming_config.enabled and config.upcoming_config.notification_cron:
         try:
             scheduler.add_job(
                 trigger_upcoming_notification, 
                 CronTrigger.from_crontab(config.upcoming_config.notification_cron), 
-                id=job_id, 
+                id=job_id_notify, 
                 replace_existing=True
             )
             ui_logger.info(f"  - 已更新订阅通知任务 (CRON: {config.upcoming_config.notification_cron})", task_category=task_cat)
         except Exception as e:
             ui_logger.error(f"  - ❌ 更新订阅通知任务失败: {e}", task_category=task_cat)
-    elif scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)
+    elif scheduler.get_job(job_id_notify):
+        scheduler.remove_job(job_id_notify)
         ui_logger.info(f"  - 已禁用并移除订阅通知任务。", task_category=task_cat)
+
+    # --- 新增：清理任务的调度 ---
+    job_id_prune = "upcoming_pruning"
+    if config.upcoming_config.enabled and config.upcoming_config.pruning_cron:
+        try:
+            scheduler.add_job(
+                trigger_pruning_task, 
+                CronTrigger.from_crontab(config.upcoming_config.pruning_cron), 
+                id=job_id_prune, 
+                replace_existing=True
+            )
+            ui_logger.info(f"  - 已更新过期项目清理任务 (CRON: {config.upcoming_config.pruning_cron})", task_category=task_cat)
+        except Exception as e:
+            ui_logger.error(f"  - ❌ 更新过期项目清理任务失败: {e}", task_category=task_cat)
+    elif scheduler.get_job(job_id_prune):
+        scheduler.remove_job(job_id_prune)
+        ui_logger.info(f"  - 已禁用并移除过期项目清理任务。", task_category=task_cat)
+    # --- 新增结束 ---
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
