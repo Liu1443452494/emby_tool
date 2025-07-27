@@ -70,7 +70,11 @@
         </el-select>
       </div>
 
-      <div class="custom-tabs-content">
+      <div 
+        ref="scrollContainer"
+        class="custom-tabs-content" 
+        @scroll="handleScroll"
+      >
         <ResultsGrid 
           :items="currentItems" 
           :loading="currentLoading" 
@@ -78,6 +82,19 @@
           @subscribe="handleSubscribe"
           @unsubscribe="handleUnsubscribe"
         />
+        <!-- --- 新增：加载状态显示 --- -->
+        <div 
+          v-if="isLoadingMore" 
+          class="loading-more-container energy-ring-loading-container"
+          v-loading="true"
+          element-loading-text="正在加载更多..."
+          element-loading-background="transparent"
+        >
+        </div>
+        <div v-if="allDataLoaded && activeTab !== 'subscriptions' && !isLoadingMore && currentItems.length > 0" class="all-loaded-tip">
+          🎉 已全部加载
+        </div>
+        <!-- --- 新增结束 --- -->
       </div>
     </div>
 
@@ -232,12 +249,13 @@
   </div>
 </template>
 
+
 <script setup>
 import { onMounted, ref, computed, watch } from 'vue';
+import { useStorage } from '@vueuse/core';
 import { useUpcomingStore } from '@/stores/upcoming';
 import { Filter } from '@element-plus/icons-vue';
 import ResultsGrid from '@/components/ResultsGrid.vue';
-import { useStorage } from '@vueuse/core';
 import cronstrue from 'cronstrue/i18n';
 import { COUNTRY_MAP } from '@/config/filterConstants';
 
@@ -247,6 +265,13 @@ const isDrawerVisible = ref(false);
 
 const selectedCountry = ref('');
 const selectedGenre = ref('');
+
+// --- 新增：无限滚动状态 ---
+const itemsPerPage = 15;
+const currentPage = ref(1);
+const isLoadingMore = ref(false);
+const allDataLoaded = ref(false);
+const scrollContainer = ref(null); // 用于获取滚动容器的 DOM 引用
 
 const countryOptions = computed(() => {
   const items = activeTab.value === 'movies' ? store.upcomingMovies : store.upcomingTvs;
@@ -277,7 +302,42 @@ const notificationCronError = ref(false);
 const pruningCronDesc = ref('');
 const pruningCronError = ref(false);
 
+const currentItems = computed(() => {
+  let items;
+  switch (activeTab.value) {
+    case 'movies': 
+      items = store.upcomingMovies;
+      break;
+    case 'tv': 
+      items = store.upcomingTvs;
+      break;
+    case 'subscriptions': 
+      return store.subscriptionList;
+    default: 
+      return [];
+  }
 
+  if (selectedCountry.value) {
+    items = items.filter(item => item.origin_country?.includes(selectedCountry.value));
+  }
+  if (selectedGenre.value) {
+    items = items.filter(item => item.genres?.includes(selectedGenre.value));
+  }
+  
+  allDataLoaded.value = (currentPage.value * itemsPerPage) >= items.length;
+
+  return items.slice(0, currentPage.value * itemsPerPage);
+});
+
+const currentLoading = computed(() => {
+  return activeTab.value === 'subscriptions' ? store.isLoading : store.isListLoading;
+});
+
+const currentType = computed(() => {
+  return activeTab.value === 'subscriptions' ? 'subscription' : 'default';
+});
+
+// --- 核心修正：将 parseCron 函数定义移到最前面 ---
 const parseCron = (cron, descRef, errorRef) => {
   if (!cron || cron.trim() === '') {
     descRef.value = '';
@@ -295,13 +355,11 @@ const parseCron = (cron, descRef, errorRef) => {
 
 onMounted(async () => {
   await store.fetchConfig();
-  // --- 修改：增加智能刷新逻辑 ---
   await store.fetchAllData();
   if (store.allData.length === 0) {
     console.log("检测到本地数据为空，将自动触发一次数据初始化...");
-    await store.fetchUpcomingList(true); // 使用默认配置进行首次数据获取
+    await store.fetchUpcomingList(true);
   }
-  // --- 修改结束 ---
 });
 
 watch(() => store.config.notification_cron, (newCron) => {
@@ -311,39 +369,6 @@ watch(() => store.config.notification_cron, (newCron) => {
 watch(() => store.config.pruning_cron, (newCron) => {
   parseCron(newCron, pruningCronDesc, pruningCronError);
 }, { immediate: true });
-
-const currentItems = computed(() => {
-  let items;
-  switch (activeTab.value) {
-    case 'movies': 
-      items = store.upcomingMovies;
-      break;
-    case 'tv': 
-      items = store.upcomingTvs;
-      break;
-    case 'subscriptions': 
-      return store.subscriptionList; // 订阅列表不参与过滤
-    default: 
-      return [];
-  }
-
-  if (selectedCountry.value) {
-    items = items.filter(item => item.origin_country?.includes(selectedCountry.value));
-  }
-  if (selectedGenre.value) {
-    items = items.filter(item => item.genres?.includes(selectedGenre.value));
-  }
-  
-  return items;
-});
-
-const currentLoading = computed(() => {
-  return activeTab.value === 'subscriptions' ? store.isLoading : store.isListLoading;
-});
-
-const currentType = computed(() => {
-  return activeTab.value === 'subscriptions' ? 'subscription' : 'default';
-});
 
 const handleApplyFilters = () => {
   store.fetchUpcomingList(false);
@@ -369,6 +394,35 @@ const handleUnsubscribe = (item) => {
   store.updateSubscription(item, false);
 };
 
+const handleScroll = (event) => {
+  if (activeTab.value === 'subscriptions' || isLoadingMore.value || allDataLoaded.value) {
+    return;
+  }
+
+  const container = event.target;
+  const threshold = 100;
+  const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+
+  if (isAtBottom) {
+    loadMore();
+  }
+};
+
+const loadMore = () => {
+  isLoadingMore.value = true;
+  setTimeout(() => {
+    currentPage.value++;
+    isLoadingMore.value = false;
+  }, 500);
+};
+
+watch([activeTab, selectedCountry, selectedGenre], () => {
+  currentPage.value = 1;
+  allDataLoaded.value = false;
+  if (scrollContainer.value) {
+    scrollContainer.value.scrollTop = 0;
+  }
+});
 </script>
 
 <style scoped>
@@ -493,5 +547,16 @@ const handleUnsubscribe = (item) => {
   border-bottom: 1px solid var(--el-border-color);
   flex-shrink: 0;
   background-color: var(--el-fill-color-lighter);
+}.loading-more-container {
+  height: 80px;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.all-loaded-tip {
+  text-align: center;
+  padding: 20px;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
 }
 </style>
