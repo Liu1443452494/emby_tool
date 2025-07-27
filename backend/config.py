@@ -164,6 +164,15 @@ def load_app_config() -> AppConfig:
     if "signin_config" not in config_data:
         config_data["signin_config"] = {}
         migration_needed = True
+    
+    if "chasing_center_config" not in config_data:
+        config_data["chasing_center_config"] = {}
+        migration_needed = True
+
+    # --- 新增 ---
+    if "upcoming_config" not in config_data:
+        config_data["upcoming_config"] = {}
+        migration_needed = True
 
     if "actor_role_mapper_config" not in config_data:
         config_data["actor_role_mapper_config"] = {}

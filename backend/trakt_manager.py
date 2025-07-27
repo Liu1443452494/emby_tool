@@ -2,7 +2,7 @@
 
 import logging
 import requests
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, Literal
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -149,3 +149,20 @@ class TraktManager:
         
         # --- 核心修改：返回元组 (map, count) ---
         return episodes_map, trakt_episode_count
+    
+    def get_upcoming_calendar_raw(self, media_type: Literal['movies', 'shows'], start_date: str, days: int) -> Optional[list]:
+        """
+        从 Trakt 获取指定类型、指定时间范围的原始日历数据。
+        """
+        task_cat = "Trakt API"
+        if media_type == 'movies':
+            endpoint = f"/calendars/all/movies/{start_date}/{days}"
+            params = {"extended": "full"}
+        elif media_type == 'shows':
+            endpoint = f"/calendars/all/shows/new/{start_date}/{days}"
+            params = {"extended": "full"}
+        else:
+            return None
+        
+        ui_logger.debug(f"   - [Trakt-日历] 正在请求 {media_type} 日历数据...", task_category=task_cat)
+        return self._make_request(endpoint, params)

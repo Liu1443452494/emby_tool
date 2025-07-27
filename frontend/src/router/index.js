@@ -65,6 +65,11 @@ const router = createRouter({
       component: () => import('../views/ChasingCenterView.vue')
     },
     {
+      path: '/upcoming-media',
+      name: 'upcoming-media',
+      component: () => import('../views/UpcomingMediaView.vue')
+    },
+    {
       path: '/episode-renamer',
       name: 'episode-renamer',
       component: () => import('../views/EpisodeRenamerView.vue')

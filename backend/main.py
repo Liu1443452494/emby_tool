@@ -27,6 +27,7 @@ from actor_role_mapper_router import router as actor_role_mapper_router
 from actor_avatar_mapper_router import router as actor_avatar_mapper_router
 from signin_router import router as signin_router
 from chasing_center_router import router as chasing_center_router
+from upcoming_router import router as upcoming_router
 
 from media_selector import MediaSelector
 from models import ScheduledTasksConfig, ScheduledTasksTargetScope
@@ -418,6 +419,20 @@ def trigger_chasing_workflow():
     logic = ChasingCenterLogic(config)
     task_manager.register_task(logic.run_chasing_workflow_task, "定时任务-追更每日维护")
 
+def trigger_upcoming_notification():
+    """即将上映订阅通知触发器"""
+    task_cat = "定时任务-订阅通知"
+    config = app_config.load_app_config()
+    if not config.upcoming_config.enabled:
+        logging.info(f"【调度任务】即将上映功能未启用，跳过订阅通知。")
+        return
+    
+    ui_logger.info("开始执行订阅列表通知任务...", task_category=task_cat)
+    from upcoming_logic import UpcomingLogic
+    logic = UpcomingLogic(config)
+    # 这是一个快速任务，直接在主线程执行，不注册到 task_manager
+    logic.check_and_notify()
+
 def trigger_calendar_notification():
     """追剧日历通知触发器"""
     task_cat = "定时任务-追剧日历"
@@ -472,6 +487,28 @@ def update_chasing_scheduler():
     elif scheduler.get_job(job_id_calendar):
         scheduler.remove_job(job_id_calendar)
         ui_logger.info(f"  - 已移除追剧日历通知任务。", task_category=task_cat)
+
+def update_upcoming_scheduler():
+    """更新即将上映功能的定时任务"""
+    task_cat = "系统配置"
+    ui_logger.info("【调度任务】检测到即将上映功能配置变更，正在更新调度器...", task_category=task_cat)
+    config = app_config.load_app_config()
+    
+    job_id = "upcoming_notification"
+    if config.upcoming_config.enabled and config.upcoming_config.notification_cron:
+        try:
+            scheduler.add_job(
+                trigger_upcoming_notification, 
+                CronTrigger.from_crontab(config.upcoming_config.notification_cron), 
+                id=job_id, 
+                replace_existing=True
+            )
+            ui_logger.info(f"  - 已更新订阅通知任务 (CRON: {config.upcoming_config.notification_cron})", task_category=task_cat)
+        except Exception as e:
+            ui_logger.error(f"  - ❌ 更新订阅通知任务失败: {e}", task_category=task_cat)
+    elif scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+        ui_logger.info(f"  - 已禁用并移除订阅通知任务。", task_category=task_cat)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -555,6 +592,9 @@ async def lifespan(app: FastAPI):
     ui_logger.info("【调度任务】开始设置追更中心任务...", task_category=task_cat)
     update_chasing_scheduler()
 
+    ui_logger.info("【调度任务】开始设置即将上映任务...", task_category=task_cat)
+    update_upcoming_scheduler()
+
     if not scheduler.running:
         scheduler.start()
 
@@ -589,6 +629,7 @@ app.include_router(actor_role_mapper_router, prefix="/api/actor-role-mapper")
 app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper")
 app.include_router(signin_router, prefix="/api/signin")
 app.include_router(chasing_center_router, prefix="/api/chasing-center")
+app.include_router(upcoming_router, prefix="/api/upcoming")
 
 from models import TraktConfig
 from trakt_manager import TraktManager

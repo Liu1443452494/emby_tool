@@ -327,7 +327,28 @@ class ChasingCenterConfig(BaseModel):
     calendar_days: int = Field(default=7, description="追剧日历预告未来的天数")
     completion_deadline_days: int = Field(default=30, description="完结剧集等待元数据补全的最后期限(天)")
 
-# --- 新增结束 ---
+class UpcomingFilterConfig(BaseModel):
+    """即将上映功能的筛选配置"""
+    fetch_days: int = Field(default=1, description="获取未来多少天的数据")
+    genre_blacklist: List[str] = Field(default_factory=lambda: ['talk-show', 'reality', 'news', 'game-show', 'documentary'], description="类型黑名单")
+    p0_countries: List[str] = Field(default_factory=lambda: ['cn', 'hk', 'tw'], description="P0 核心市场国家/地区列表")
+    p0_languages: List[str] = Field(default_factory=lambda: ['zh'], description="P0 核心市场语言列表")
+    p1_countries: List[str] = Field(default_factory=lambda: ['us', 'jp', 'gb', 'kr'], description="P1 潜力市场国家/地区列表")
+
+class UpcomingConfig(BaseModel):
+    """即将上映功能的完整配置"""
+    enabled: bool = Field(default=True, description="是否启用此功能")
+    notification_cron: str = Field(default="0 9 * * *", description="每日订阅通知的CRON表达式")
+    filters: UpcomingFilterConfig = Field(default_factory=UpcomingFilterConfig)
+
+class UpcomingSubscriptionItem(BaseModel):
+    """单个订阅项目的数据模型"""
+    tmdb_id: int
+    media_type: Literal['movie', 'tv']
+    title: str
+    release_date: str
+    poster_path: Optional[str] = None
+    subscribed_at: str
 
 class ActorRoleMapperConfig(BaseModel):
     """演员角色映射器配置"""
@@ -354,6 +375,7 @@ class AppConfig(BaseModel):
     trakt_config: TraktConfig = Field(default_factory=TraktConfig)
     signin_config: SigninModulesConfig = Field(default_factory=SigninModulesConfig)
     chasing_center_config: ChasingCenterConfig = Field(default_factory=ChasingCenterConfig)
+    upcoming_config: UpcomingConfig = Field(default_factory=UpcomingConfig)
     actor_role_mapper_config: ActorRoleMapperConfig = Field(default_factory=ActorRoleMapperConfig)
 
 class TargetScope(BaseModel):

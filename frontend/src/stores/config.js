@@ -86,6 +86,25 @@ export const useConfigStore = defineStore('config', () => {
       enabled: false,
       client_id: ''
     },
+    chasing_center_config: {
+      enabled: false,
+      maintenance_cron: '0 3 * * *',
+      notification_cron: '0 9 * * *',
+      calendar_days: 7,
+      completion_deadline_days: 30
+    },
+    // --- 新增 ---
+    upcoming_config: {
+      enabled: true,
+      notification_cron: '0 9 * * *',
+      filters: {
+        fetch_days: 1,
+        genre_blacklist: [],
+        p0_countries: [],
+        p0_languages: [],
+        p1_countries: [],
+      }
+    },
     actor_role_mapper_config: {
       actor_limit: 50
     }
