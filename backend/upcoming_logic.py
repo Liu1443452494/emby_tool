@@ -166,18 +166,21 @@ class UpcomingLogic:
             # --- 核心修改：引入计数器 ---
             new_items_count = 0
             skipped_items_count = 0
-            # --- 修改结束 ---
+            
+
+            # backend/upcoming_logic.py (部分修改 - for循环体替换)
             for item in filtered_items:
                 tmdb_id_str = str(item['tmdb_id'])
                 if tmdb_id_str in db_content['data']:
                     logging.debug(f"  - [跳过] TMDB ID: {tmdb_id_str} 已存在于本地数据库。")
-                    # 更新上映日期，以防 Trakt 数据有变
                     db_content['data'][tmdb_id_str]['release_date'] = item['release_date']
                     continue
                 
                 try:
                     endpoint = f"{item['media_type']}/{item['tmdb_id']}"
-                    params = {'language': 'zh-CN', 'append_to_response': 'images'}
+                    # --- 核心修改：增加 'credits' 到 append_to_response ---
+                    params = {'language': 'zh-CN', 'append_to_response': 'images,credits'}
+                    # --- 修改结束 ---
                     details = self.tmdb_logic._tmdb_request(endpoint, params)
                     
                     if not details.get('poster_path'):
@@ -193,6 +196,9 @@ class UpcomingLogic:
                     ]
                     origin_country = details.get('origin_country', [])
                     popularity = details.get('popularity', 0)
+                    # --- 新增：提取主要演员 ---
+                    cast = details.get('credits', {}).get('cast', [])
+                    actors = [actor['name'] for actor in cast[:6]] # 提取前5位主要演员
                     # --- 新增结束 ---
 
                     db_content['data'][tmdb_id_str] = {
@@ -204,10 +210,11 @@ class UpcomingLogic:
                         "release_date": item['release_date'],
                         "is_subscribed": False,
                         "subscribed_at": None,
-                        # --- 新增：保存新字段 ---
                         "genres": genres,
                         "origin_country": origin_country,
-                        "popularity": popularity
+                        "popularity": popularity,
+                        # --- 新增：保存演员列表 ---
+                        "actors": actors
                         # --- 新增结束 ---
                     }
                     new_items_count += 1
@@ -280,6 +287,8 @@ class UpcomingLogic:
             ui_logger.error(f"❌ 操作失败: {e}", task_category=task_cat)
             return False
 
+    # backend/upcoming_logic.py (函数替换)
+
     def check_and_notify(self):
         task_cat = "定时任务-订阅通知"
         ui_logger.info("➡️ 开始检查订阅列表并发送通知...", task_category=task_cat)
@@ -297,6 +306,7 @@ class UpcomingLogic:
 
         today = datetime.now().date()
         notifications = {0: [], 1: [], 2: [], 3: []}
+        all_notified_items = []
 
         for item_info in subs:
             try:
@@ -304,38 +314,80 @@ class UpcomingLogic:
                 delta_days = (release_date - today).days
                 
                 if 0 <= delta_days <= 3:
-                    notifications[delta_days].append(item_info['title'])
+                    notifications[delta_days].append(item_info)
+                    all_notified_items.append(item_info)
             except (ValueError, KeyError):
                 continue
         
-        message_parts = []
-        if notifications[0]:
-            titles = "、".join([f"《{escape_markdown(t)}》" for t in notifications[0]])
-            message_parts.append(f"🎉 *今日首映*\n{titles}")
-        
-        upcoming_parts = []
-        if notifications[1]:
-            titles = "、".join([f"《{escape_markdown(t)}》" for t in notifications[1]])
-            upcoming_parts.append(f"明天: {titles}")
-        if notifications[2]:
-            titles = "、".join([f"《{escape_markdown(t)}》" for t in notifications[2]])
-            upcoming_parts.append(f"后天: {titles}")
-        if notifications[3]:
-            titles = "、".join([f"《{escape_markdown(t)}》" for t in notifications[3]])
-            upcoming_parts.append(f"3天后: {titles}")
-        
-        if upcoming_parts:
-            message_parts.append(f"📅 *即将上映*\n- " + "\n- ".join(upcoming_parts))
-
-        if not message_parts:
+        if not all_notified_items:
             ui_logger.info("✅ 检查完毕，未来3天内没有即将上映的订阅项目。", task_category=task_cat)
             return
-            
-        final_message = "🔔 *订阅日历提醒*\n\n" + "\n\n".join(message_parts)
-        notification_manager.send_telegram_message(final_message, self.app_config)
-        ui_logger.info("✅ 成功发送订阅通知！", task_category=task_cat)
 
-    # backend/upcoming_logic.py (函数替换)
+        hottest_item = max(all_notified_items, key=lambda x: x.get('popularity', 0))
+        poster_url = f"https://image.tmdb.org/t/p/w780{hottest_item['poster_path']}" if hottest_item.get('poster_path') else None
+        ui_logger.info(f"🖼️ 已选择《{hottest_item['title']}》作为封面海报 (热度: {hottest_item.get('popularity', 0):.2f})。", task_category=task_cat)
+
+        message_parts = []
+        day_map = {0: "今日首映", 1: "明日上映", 2: "后天上映", 3: "3天后上映"}
+        
+        for day, items in notifications.items():
+            if not items:
+                continue
+            
+            date_obj = today + timedelta(days=day)
+            date_str = date_obj.strftime('%Y-%m-%d')
+            
+            header = f"🎉 *{day_map[day]}* `({date_str})`"
+            
+            item_details_parts = []
+            for item in sorted(items, key=lambda x: -x.get('popularity', 0)):
+                title = escape_markdown(item['title'])
+                year = escape_markdown(f"({item['release_date'][:4]})") if item.get('release_date') else ""
+                actors = " / ".join(item.get('actors', []))
+                actors_line = f" \- {escape_markdown(actors)}" if actors else ""
+                
+                item_details_parts.append(f"《{title}》{year}{actors_line}")
+
+            message_parts.append(header + "\n" + "\n".join(item_details_parts))
+
+        final_caption = "🔔 *订阅日历提醒*\n\n" + "\n\n".join(message_parts)
+        
+        result = None
+        if poster_url:
+            try:
+                # --- 核心修改：在此处下载图片 ---
+                import requests
+                from proxy_manager import ProxyManager
+                proxy_manager = ProxyManager(self.app_config)
+                image_proxies = proxy_manager.get_proxies(poster_url)
+                ui_logger.debug(f"   - [调试] 正在下载封面图片: {poster_url}", task_category=task_cat)
+                response_img = requests.get(poster_url, timeout=30, proxies=image_proxies)
+                response_img.raise_for_status()
+                image_bytes = response_img.content
+                # --- 下载结束 ---
+
+                # --- 核心修改：将下载好的二进制数据传递给通知函数 ---
+                result = notification_manager.send_telegram_photo_notification(
+                    image_source=image_bytes,
+                    caption=final_caption,
+                    app_config=self.app_config
+                )
+            except Exception as e:
+                ui_logger.error(f"❌ 下载封面图片或发送通知时失败: {e}。将降级为纯文本通知。", task_category=task_cat, exc_info=True)
+                # 发生异常时，result 保持为 None，会触发下面的降级逻辑
+        
+        # 如果没有海报URL，或者图片下载/发送失败，则降级为纯文本
+        if result is None:
+            if poster_url: # 仅在下载失败时打印降级日志
+                 ui_logger.warning("⚠️ 封面项目图片处理失败，已自动降级为纯文本通知。", task_category=task_cat)
+            else: # 仅在项目本身无海报时打印
+                 ui_logger.warning("⚠️ 封面项目缺少海报，将发送纯文本通知。", task_category=task_cat)
+            result = notification_manager.send_telegram_message(final_caption, self.app_config)
+
+        if result.get("success"):
+            ui_logger.info("✅ 成功发送订阅通知！", task_category=task_cat)
+        else:
+            ui_logger.error(f"❌ 发送订阅通知失败，原因: {result.get('message', '未知错误')}", task_category=task_cat)
 
     def prune_expired_items(self):
         """定时清理任务的执行逻辑"""

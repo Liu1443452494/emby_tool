@@ -72,3 +72,26 @@ def unsubscribe_item(payload: Dict[str, int]):
     if logic.update_subscription(tmdb_id, subscribe=False):
         return {"success": True}
     raise HTTPException(status_code=500, detail="取消订阅失败")
+
+
+@router.post("/trigger-notification")
+def trigger_notification_now():
+    """手动触发一次订阅通知检查"""
+    try:
+        config = app_config.load_app_config()
+        logic = UpcomingLogic(config)
+        logic.check_and_notify()
+        return {"success": True, "message": "订阅通知任务已成功触发！"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/trigger-pruning")
+def trigger_pruning_now():
+    """手动触发一次过期项目清理"""
+    try:
+        config = app_config.load_app_config()
+        logic = UpcomingLogic(config)
+        logic.prune_expired_items()
+        return {"success": True, "message": "过期项目清理任务已成功触发！"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

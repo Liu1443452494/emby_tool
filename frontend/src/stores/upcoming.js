@@ -211,6 +211,37 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     filterOptions.fetch_days = config.value.filters.fetch_days;
     showMessage('info', '筛选条件已重置为默认值，请点击“应用筛选”或“保存设置”以生效。');
   }
+  async function triggerNotification() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/upcoming/trigger-notification`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '触发失败');
+      showMessage('success', data.message);
+      return true;
+    } catch (error) {
+      showMessage('error', error.message);
+      return false;
+    }
+  }
+
+  async function triggerPruning() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/upcoming/trigger-pruning`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '触发失败');
+      showMessage('success', data.message);
+      // 清理后刷新一下本地数据
+      await fetchAllData();
+      return true;
+    } catch (error) {
+      showMessage('error', error.message);
+      return false;
+    }
+  }
 
   return {
     config,
@@ -228,5 +259,7 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     fetchAllData,
     updateSubscription,
     resetFilters,
+    triggerNotification,
+    triggerPruning,
   };
 });

@@ -224,13 +224,23 @@
                   <el-switch v-model="store.config.enabled" />
                 </el-form-item>
                 <el-form-item label="通知周期 (CRON 表达式)">
-                  <el-input v-model="store.config.notification_cron" placeholder="例如: 0 9 * * *" />
+                  <!-- --- 核心修改：将 el-input 和 el-button 包裹在 div 中 --- -->
+                  <div class="cron-input-group">
+                    <el-input v-model="store.config.notification_cron" placeholder="例如: 0 9 * * *" />
+                    <el-button @click="handleTriggerNotification" :loading="isTriggeringNotification">立即执行一次</el-button>
+                  </div>
+                  <!-- --- 修改结束 --- -->
                   <div v-if="notificationCronDesc" class="cron-description" :class="{ 'error': notificationCronError }">
                     {{ notificationCronDesc }}
                   </div>
                 </el-form-item>
                 <el-form-item label="过期项目清理周期 (CRON 表达式)">
-                  <el-input v-model="store.config.pruning_cron" placeholder="例如: 0 1 * * *" />
+                  <!-- --- 核心修改：将 el-input 和 el-button 包裹在 div 中 --- -->
+                  <div class="cron-input-group">
+                    <el-input v-model="store.config.pruning_cron" placeholder="例如: 0 1 * * *" />
+                    <el-button @click="handleTriggerPruning" :loading="isTriggeringPruning">立即执行一次</el-button>
+                  </div>
+                  <!-- --- 修改结束 --- -->
                   <div v-if="pruningCronDesc" class="cron-description" :class="{ 'error': pruningCronError }">
                     {{ pruningCronDesc }}
                   </div>
@@ -301,6 +311,8 @@ const notificationCronDesc = ref('');
 const notificationCronError = ref(false);
 const pruningCronDesc = ref('');
 const pruningCronError = ref(false);
+const isTriggeringNotification = ref(false);
+const isTriggeringPruning = ref(false);
 
 const currentItems = computed(() => {
   let items;
@@ -392,6 +404,18 @@ const handleSubscribe = (item) => {
 
 const handleUnsubscribe = (item) => {
   store.updateSubscription(item, false);
+};
+
+const handleTriggerNotification = async () => {
+  isTriggeringNotification.value = true;
+  await store.triggerNotification();
+  isTriggeringNotification.value = false;
+};
+
+const handleTriggerPruning = async () => {
+  isTriggeringPruning.value = true;
+  await store.triggerPruning();
+  isTriggeringPruning.value = false;
 };
 
 const handleScroll = (event) => {
@@ -558,5 +582,9 @@ watch([activeTab, selectedCountry, selectedGenre], () => {
   padding: 20px;
   color: var(--el-text-color-secondary);
   font-size: 14px;
+}.cron-input-group {
+  display: flex;
+  gap: 10px;
+  width: 100%;
 }
 </style>
