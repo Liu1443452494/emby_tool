@@ -1,6 +1,11 @@
 <!-- frontend/src/components/ResultsGrid.vue (新文件) -->
 <template>
-  <div class="results-container" v-loading="props.loading">
+  <div
+    class="results-container energy-ring-loading-container"
+    v-loading="props.loading"
+    element-loading-text="正在获取上映列表..."
+    element-loading-background="rgba(var(--custom-bg-overlay-rgb), 0.7)"
+  >
     <div v-if="props.items && props.items.length > 0" class="results-grid">
       <div v-for="item in props.items" :key="item.tmdb_id" class="media-card">
         <div class="card-background"></div>
