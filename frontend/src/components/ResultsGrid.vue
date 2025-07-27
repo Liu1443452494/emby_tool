@@ -74,7 +74,7 @@
 <script setup>
 import { defineProps, defineEmits } from 'vue';
 import { useUpcomingStore } from '@/stores/upcoming';
-import { TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES } from '@/config/apiConfig';
+import { API_BASE_URL, TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES } from '@/config/apiConfig';
 import { COUNTRY_MAP } from '@/config/filterConstants';
 import { Picture } from '@element-plus/icons-vue';
 
@@ -97,7 +97,12 @@ const getActorNames = (actors) => {
   return actors.join(' / ');
 };
 
-const getPosterUrl = (path) => path ? `${TMDB_IMAGE_BASE_URL}${TMDB_IMAGE_SIZES.poster}${path}` : '';
+const getPosterUrl = (path) => {
+  if (!path) return '';
+  const fullUrl = `${TMDB_IMAGE_BASE_URL}${TMDB_IMAGE_SIZES.poster}${path}`;
+  // --- 核心修改：返回代理 URL ---
+  return `${API_BASE_URL}/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+};
 const isSubscribed = (item) => item.is_subscribed;
 
 const toggleSubscription = (item) => {
