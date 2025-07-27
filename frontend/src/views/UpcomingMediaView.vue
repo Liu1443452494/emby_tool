@@ -58,6 +58,21 @@
       <div class="drawer-content">
         <el-tabs>
           <el-tab-pane label="筛选条件">
+            <el-alert
+              title="数据处理流程说明"
+              type="info"
+              show-icon
+              :closable="false"
+              style="margin-top: 10px; margin-bottom: 15px;"
+            >
+              <p style="line-height: 1.6; margin: 0;">
+                ➡️ **第一步 (Trakt):** 从 Trakt.tv 获取原始的全球上映日历。<br>
+                ➡️ **第二步 (筛选):** 应用下方的筛选条件，对原始日历进行预处理。<br>
+                ➡️ **第三步 (TMDB):** 为通过筛选的项目，从 TMDB 获取详细的中文信息和海报。<br>
+                <br>
+                因此，所有筛选条件均作用于第一步的 Trakt 原始数据。防止过多的请求tmdb api
+              </p>
+            </el-alert>
             <div class="filter-content">
               <el-form label-position="top">
                 <el-form-item label="基础设置">
