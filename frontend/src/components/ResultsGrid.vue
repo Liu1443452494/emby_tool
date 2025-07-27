@@ -46,7 +46,7 @@
               title="在 TMDB 中查看详情"
               @click.stop
             >
-              ID:{{ item.tmdb_id }}
+              ID: {{ item.tmdb_id }}
             </a>
             <!-- --- 修改结束 --- -->
           </div>
@@ -58,6 +58,10 @@
           <p class="info-line">
             <span class="info-label">类型:</span>
             <span class="info-value">{{ getGenreNames(item.genres) }}</span>
+          </p>
+          <p v-if="item.actors && item.actors.length > 0" class="info-line">
+            <span class="info-label">主演:</span>
+            <span class="info-value">{{ item.actors.join(' / ') }}</span>
           </p>
           <!-- --- 新增结束 --- -->
         </div>
@@ -86,6 +90,11 @@ const getCountryNames = (codes) => {
 const getGenreNames = (genres) => {
   if (!genres || genres.length === 0) return '未知';
   return genres.join(' / ');
+};
+
+const getActorNames = (actors) => {
+  if (!actors || actors.length === 0) return '暂无';
+  return actors.join(' / ');
 };
 
 const getPosterUrl = (path) => path ? `${TMDB_IMAGE_BASE_URL}${TMDB_IMAGE_SIZES.poster}${path}` : '';
@@ -149,22 +158,23 @@ const toggleSubscription = (item) => {
 .badge {
   position: absolute;
   z-index: 4;
-  padding: 4px 8px;
+  padding: 4px 6px;
   font-size: 12px;
   font-weight: bold;
   color: white;
-  background-color: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
-  border-radius: 4px;
+  background-color: rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(10px);
+  border-radius: 15px;
+  
 }
 .badge.top-left {
-  top: 8px;
-  left: 8px;
-  background-color: #67c23a;
+  top: 0px;
+  left: 0px;
+  background-color: rgba(31, 14, 213, 0.5);
 }
 .badge.top-right {
-  top: 8px;
-  right: 8px;
+  top: 0px;
+  right: 4px;
 }
 
 .poster-image {
@@ -221,10 +231,9 @@ const toggleSubscription = (item) => {
   flex-grow: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: center; /* 垂直居中 */
   background-color: transparent;
   color: #fff;
-  min-height: 90px;
 }
 
 .title-wrapper {
@@ -251,9 +260,9 @@ const toggleSubscription = (item) => {
 .tmdb-id {
   font-size: 13px;
   color: #67c23a;
-  font-weight: 900;
+  font-weight: 700;
   flex-shrink: 0; /* 防止ID被压缩 */
-  font-family: monospace;
+  
   text-decoration: none;
 }
 .tmdb-id:hover {
