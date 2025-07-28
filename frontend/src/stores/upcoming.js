@@ -49,11 +49,18 @@ export const useUpcomingStore = defineStore('upcoming', () => {
   // --- 新增：用于检查配置是否变更的快照 ---
   let filterSnapshot = null;
 
-  // --- Computed ---
-  const upcomingMovies = computed(() => allData.value.filter(item => item.media_type === 'movie'));
-  const upcomingTvs = computed(() => allData.value.filter(item => item.media_type === 'tv'));
-  const subscriptionList = computed(() => allData.value.filter(item => item.is_subscribed).sort((a, b) => a.release_date.localeCompare(b.release_date)));
+   const isUpcoming = (item) => {
+    if (!item.release_date) return false; // 没有日期信息，不视为“即将上映”
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // 标准化到当天的零点
+    const releaseDate = new Date(item.release_date);
+    releaseDate.setHours(0, 0, 0, 0); // 同样标准化，以避免时区问题
+    return releaseDate >= today;
+  };
 
+  const upcomingMovies = computed(() => allData.value.filter(item => item.media_type === 'movie' && isUpcoming(item)));
+  const upcomingTvs = computed(() => allData.value.filter(item => item.media_type === 'tv' && isUpcoming(item)));
+  const subscriptionList = computed(() => allData.value.filter(item => item.is_subscribed && isUpcoming(item)).sort((a, b) => a.release_date.localeCompare(b.release_date)));
   const permanentList = computed(() => allData.value.filter(item => item.is_permanent).sort((a, b) => a.release_date.localeCompare(b.release_date)));
   // --- Actions ---
   const showMessage = (type, message) => {

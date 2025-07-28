@@ -20,14 +20,14 @@
           :class="{ active: activeTab === 'movies' }"
           @click="activeTab = 'movies'"
         >
-          电影 ({{ store.upcomingMovies.length }})
+          即将上映电影 ({{ store.upcomingMovies.length }})
         </div>
         <div
           class="custom-tab-item"
           :class="{ active: activeTab === 'tv' }"
           @click="activeTab = 'tv'"
         >
-          电视剧 ({{ store.upcomingTvs.length }})
+          即将上映电视剧 ({{ store.upcomingTvs.length }})
         </div>
         <div
           class="custom-tab-item"
@@ -41,7 +41,7 @@
           :class="{ active: activeTab === 'permanent' }"
           @click="activeTab = 'permanent'"
         >
-          永久收藏 ({{ store.permanentList.length }})
+          永久收藏({{ store.permanentList.length }})
         </div>
       </div>
       <div v-if="activeTab !== 'subscriptions'" class="dynamic-filters">
