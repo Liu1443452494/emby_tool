@@ -168,7 +168,6 @@ class UpcomingLogic:
             skipped_items_count = 0
             
 
-            # backend/upcoming_logic.py (部分修改 - for循环体替换)
             for item in filtered_items:
                 tmdb_id_str = str(item['tmdb_id'])
                 if tmdb_id_str in db_content['data']:
@@ -198,7 +197,7 @@ class UpcomingLogic:
                     popularity = details.get('popularity', 0)
                     # --- 新增：提取主要演员 ---
                     cast = details.get('credits', {}).get('cast', [])
-                    actors = [actor['name'] for actor in cast[:6]] 
+                    actors = [actor['name'] for actor in cast[:6]] # 提取前6位主要演员
                     # --- 新增结束 ---
 
                     db_content['data'][tmdb_id_str] = {
@@ -230,6 +229,69 @@ class UpcomingLogic:
                 summary_log += f" 跳过了 {skipped_items_count} 条 (因TMDB数据不完整)。"
             ui_logger.info(summary_log, task_category=task_cat)
             # --- 修改结束 ---
+            
+            # 自动化订阅逻辑
+            rules = self.config.auto_subscribe_rules
+            if rules.enabled:
+                ui_logger.info("➡️ [步骤 4/4] 开始执行自动化订阅...", task_category=task_cat)
+                auto_subscribed_count = 0
+                
+                # 规范化规则，去除空字符串和前后空格
+                rule_actors = {actor.strip().lower() for actor in rules.actors if actor.strip()}
+                rule_countries = {country.strip().lower() for country in rules.countries if country.strip()}
+
+                if not rule_actors and (not rule_countries or rules.min_popularity <= 0):
+                     ui_logger.warning("   - [跳过] 自动化订阅已启用，但未配置任何有效规则。", task_category=task_cat)
+                else:
+                    today = datetime.now(timezone.utc).date()
+                    for item in db_content['data'].values():
+                        if item.get('is_subscribed'):
+                            continue
+
+                        # --- 新增：日期前置检查 ---
+                        try:
+                            release_date_str = item.get('release_date')
+                            if not release_date_str:
+                                logging.debug(f"   - [跳过-自动订阅]《{item.get('title', '未知')}》因缺少上映日期而被忽略。")
+                                continue
+                            
+                            item_release_date = datetime.fromisoformat(release_date_str).date()
+                            
+                            if item_release_date < today:
+                                logging.debug(f"   - [跳过-自动订阅]《{item.get('title', '未知')}》因已上映 (日期: {release_date_str}) 而被忽略。")
+                                continue
+                        except (ValueError, TypeError):
+                            logging.debug(f"   - [跳过-自动订阅]《{item.get('title', '未知')}》因日期格式无效 ({item.get('release_date')}) 而被忽略。")
+                            continue
+                        # --- 新增结束 ---
+
+                        # 规则一：演员匹配
+                        if rule_actors:
+                            item_actors_lower = {actor.lower() for actor in item.get('actors', [])}
+                            # 使用集合交集操作查找匹配项
+                            matched_actors = rule_actors.intersection(item_actors_lower)
+                            if matched_actors:
+                                item['is_subscribed'] = True
+                                item['subscribed_at'] = datetime.now(timezone.utc).isoformat()
+                                auto_subscribed_count += 1
+                                ui_logger.info(f"   - ✅ 自动订阅《{item['title']}》，原因：匹配到演员关键词 '{next(iter(matched_actors))}'。", task_category=task_cat)
+                                continue
+
+                        # 规则二：国家与热门度综合匹配
+                        if rule_countries and rules.min_popularity > 0:
+                            item_countries_lower = {country.lower() for country in item.get('origin_country', [])}
+                            if item_countries_lower.intersection(rule_countries):
+                                if item.get('popularity', 0) >= rules.min_popularity:
+                                    item['is_subscribed'] = True
+                                    item['subscribed_at'] = datetime.now(timezone.utc).isoformat()
+                                    auto_subscribed_count += 1
+                                    ui_logger.info(f"   - ✅ 自动订阅《{item['title']}》，原因：满足国家匹配且热门度 ({item.get('popularity', 0):.2f}) >= {rules.min_popularity}。", task_category=task_cat)
+                    
+                    if auto_subscribed_count > 0:
+                        ui_logger.info(f"🎉 [步骤 4/4] 自动化订阅完成，共新增 {auto_subscribed_count} 个订阅。", task_category=task_cat)
+                    else:
+                        ui_logger.info("   - [步骤 4/4] 自动化订阅检查完成，没有发现符合条件的新项目。", task_category=task_cat)
+            # --- 新增结束 ---
             
             db_content['timestamp'] = datetime.now(timezone.utc).isoformat()
             self._write_db(db_content)

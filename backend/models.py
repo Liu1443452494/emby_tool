@@ -335,12 +335,20 @@ class UpcomingFilterConfig(BaseModel):
     p0_languages: List[str] = Field(default_factory=lambda: ['zh'], description="P0 核心市场语言列表")
     p1_countries: List[str] = Field(default_factory=lambda: ['us', 'jp', 'gb', 'kr'], description="P1 潜力市场国家/地区列表")
 
+class AutoSubscribeRules(BaseModel):
+    """自动化订阅规则"""
+    enabled: bool = Field(default=False, description="是否启用自动化订阅")
+    actors: List[str] = Field(default_factory=list, description="匹配的演员关键词列表")
+    min_popularity: float = Field(default=0.0, description="热门度最小阈值")
+    countries: List[str] = Field(default_factory=list, description="匹配的国家/地区列表")
+
 class UpcomingConfig(BaseModel):
     """即将上映功能的完整配置"""
     enabled: bool = Field(default=True, description="是否启用此功能")
     notification_cron: str = Field(default="0 9 * * *", description="每日订阅通知的CRON表达式")
     pruning_cron: str = Field(default="0 1 * * *", description="每日清理过期项目的CRON表达式")
     filters: UpcomingFilterConfig = Field(default_factory=UpcomingFilterConfig)
+    auto_subscribe_rules: AutoSubscribeRules = Field(default_factory=AutoSubscribeRules)
 
 
 

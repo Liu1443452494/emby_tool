@@ -19,7 +19,15 @@ export const useUpcomingStore = defineStore('upcoming', () => {
       p0_countries: [],
       p0_languages: [],
       p1_countries: [],
+    },
+    // --- 新增 ---
+    auto_subscribe_rules: {
+      enabled: false,
+      actors: [],
+      min_popularity: 5.0,
+      countries: [],
     }
+    // --- 新增结束 ---
   });
 
   const filterOptions = reactive({

@@ -121,6 +121,8 @@
       size="500px"
     >
       <div class="drawer-content">
+        <!-- frontend/src/views/UpcomingMediaView.vue (代码块替换) -->
+
         <el-tabs>
           <el-tab-pane label="筛选条件">
             <el-alert
@@ -240,23 +242,19 @@
                   <el-switch v-model="store.config.enabled" />
                 </el-form-item>
                 <el-form-item label="通知周期 (CRON 表达式)">
-                  <!-- --- 核心修改：将 el-input 和 el-button 包裹在 div 中 --- -->
                   <div class="cron-input-group">
                     <el-input v-model="store.config.notification_cron" placeholder="例如: 0 9 * * *" />
                     <el-button @click="handleTriggerNotification" :loading="isTriggeringNotification">立即执行一次</el-button>
                   </div>
-                  <!-- --- 修改结束 --- -->
                   <div v-if="notificationCronDesc" class="cron-description" :class="{ 'error': notificationCronError }">
                     {{ notificationCronDesc }}
                   </div>
                 </el-form-item>
                 <el-form-item label="过期项目清理周期 (CRON 表达式)">
-                  <!-- --- 核心修改：将 el-input 和 el-button 包裹在 div 中 --- -->
                   <div class="cron-input-group">
                     <el-input v-model="store.config.pruning_cron" placeholder="例如: 0 1 * * *" />
                     <el-button @click="handleTriggerPruning" :loading="isTriggeringPruning">立即执行一次</el-button>
                   </div>
-                  <!-- --- 修改结束 --- -->
                   <div v-if="pruningCronDesc" class="cron-description" :class="{ 'error': pruningCronError }">
                     {{ pruningCronDesc }}
                   </div>
@@ -264,7 +262,80 @@
               </el-form>
             </div>
           </el-tab-pane>
+          <!-- --- 新增：自动化订阅 Tab --- -->
+          <el-tab-pane label="自动化订阅">
+            <div class="settings-content">
+              <el-form label-position="top" v-if="store.config.auto_subscribe_rules">
+                <el-form-item label="启用自动化订阅">
+                  <el-switch v-model="store.config.auto_subscribe_rules.enabled" />
+                  <div class="form-item-description">
+                    开启后，每次后台更新数据时，将根据下方规则自动订阅符合条件的未订阅项目。
+                  </div>
+                </el-form-item>
+                
+                <el-divider>规则一：演员匹配 (或逻辑)</el-divider>
+                <el-form-item label="关键词演员">
+                  <el-select
+                    v-model="store.config.auto_subscribe_rules.actors"
+                    multiple
+                    filterable
+                    allow-create
+                    default-first-option
+                    placeholder="输入演员名后按回车创建"
+                    style="width: 100%"
+                    :disabled="!store.config.auto_subscribe_rules.enabled"
+                  >
+                  </el-select>
+                   <div class="form-item-description">
+                    只要项目的演员列表中包含任何一个您在此处添加的演员，该项目就会被自动订阅。
+                  </div>
+                </el-form-item>
+
+                <el-divider>规则二：国家与热门度 (与逻辑)</el-divider>
+                <el-form-item label="国家/地区">
+                  <el-select
+                    v-model="store.config.auto_subscribe_rules.countries"
+                    multiple
+                    filterable
+                    placeholder="选择国家/地区"
+                    style="width: 100%"
+                    :disabled="!store.config.auto_subscribe_rules.enabled"
+                  >
+                    <el-option
+                      v-for="item in countryOptionsForRules"
+                      :key="item.value"
+                      :label="item.label"
+                      :value="item.value"
+                    />
+                  </el-select>
+                </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    <span>热门度 (Popularity) 阈值</span>
+                  </template>
+                  <el-slider 
+                    v-model="store.config.auto_subscribe_rules.min_popularity" 
+                    :min="0" 
+                    :max="100" 
+                    :step="0.1" 
+                    show-input
+                    :disabled="!store.config.auto_subscribe_rules.enabled"
+                  />
+                  <div class="form-item-description">
+                    <b>提示：</b>TMDB 的“热门度”是一个动态变化的数值。根据经验，对于<b>未上映</b>的影视剧：<br>
+                    • <b>0 - 5</b>：普通关注度<br>
+                    • <b>5 - 15</b>：较高关注度 (如热门剧集)<br>
+                    • <b>15 - 40</b>：非常热门 (如漫威电影)<br>
+                    • <b>40+</b>：现象级作品<br>
+                    建议初始值设置为 <b>5.0</b> 左右进行尝试。
+                  </div>
+                </el-form-item>
+              </el-form>
+            </div>
+          </el-tab-pane>
+          <!-- --- 新增结束 --- -->
         </el-tabs>
+      
       </div>
       <div class="drawer-footer">
         <el-button @click="store.resetFilters">重置筛选</el-button>
@@ -559,6 +630,11 @@ const loadMore = () => {
     isLoadingMore.value = false;
   }, 500);
 };
+
+const countryOptionsForRules = computed(() => {
+  return Object.entries(COUNTRY_MAP).map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
+});
 
 watch([activeTab, selectedCountry, selectedGenre], () => {
   currentPage.value = 1;
