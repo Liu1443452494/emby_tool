@@ -36,6 +36,13 @@
         >
           我的订阅 ({{ store.subscriptionList.length }})
         </div>
+        <div
+          class="custom-tab-item"
+          :class="{ active: activeTab === 'permanent' }"
+          @click="activeTab = 'permanent'"
+        >
+          永久收藏 ({{ store.permanentList.length }})
+        </div>
       </div>
       <div v-if="activeTab !== 'subscriptions'" class="dynamic-filters">
         <el-select
@@ -68,6 +75,14 @@
             :value="option.value"
           />
         </el-select>
+        <el-button 
+          v-if="activeTab === 'permanent'" 
+          :icon="Plus" 
+          @click="openSearchDialog"
+          size="small"
+        >
+          搜索添加
+        </el-button>
       </div>
 
       <div 
@@ -81,6 +96,7 @@
           :type="currentType"
           @subscribe="handleSubscribe"
           @unsubscribe="handleUnsubscribe"
+          @permanent-toggle="handlePermanentToggle"
         />
         <!-- --- 新增：加载状态显示 --- -->
         <div 
@@ -256,6 +272,67 @@
         <el-button type="primary" @click="handleApplyFilters" :loading="store.isListLoading">应用筛选</el-button>
       </div>
     </el-drawer>
+    <el-dialog
+      v-model="isSearchDialogVisible"
+      title="搜索并添加永久收藏"
+      width="70%"
+      top="5vh"
+    >
+      <div class="search-add-dialog">
+        <div class="search-controls">
+          <div class="media-type-selector">
+            <el-radio-group v-model="searchMediaType">
+              <el-radio-button value="movie">电影</el-radio-button>
+              <el-radio-button value="tv">电视剧</el-radio-button>
+            </el-radio-group>
+          </div>
+          <el-input
+            v-model="searchQuery"
+            placeholder="输入标题或 TMDB ID..."
+            clearable
+            @keyup.enter="handleSearch"
+            style="flex-grow: 1;"
+          />
+          <el-button type="primary" @click="handleSearch" :loading="store.isSearching">搜索</el-button>
+        </div>
+        <div 
+          class="search-results-container energy-ring-loading-container" 
+          v-loading="store.isSearching"
+          element-loading-text="正在搜索..."
+          element-loading-background="rgba(var(--custom-bg-overlay-rgb), 0.7)"
+        >
+          <el-table
+            :data="store.searchResults"
+            height="100%"
+            highlight-current-row
+            @current-change="handleSelectionChange"
+            empty-text="请输入关键词进行搜索"
+          >
+            <el-table-column label="海报" width="80">
+              <template #default="scope">
+                <el-image 
+                  :src="scope.row.poster_path ? `https://image.tmdb.org/t/p/w200${scope.row.poster_path}` : ''" 
+                  fit="cover" 
+                  style="width: 50px; height: 75px; border-radius: 4px;"
+                >
+                  <template #error><div class="image-slot-error">无图</div></template>
+                </el-image>
+              </template>
+            </el-table-column>
+            <el-table-column prop="title" label="标题" />
+            <el-table-column prop="overview" label="简介" show-overflow-tooltip />
+          </el-table>
+        </div>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="isSearchDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleAddItem" :disabled="!selectedSearchItem">
+            添加选中项
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -264,7 +341,7 @@
 import { onMounted, ref, computed, watch } from 'vue';
 import { useStorage } from '@vueuse/core';
 import { useUpcomingStore } from '@/stores/upcoming';
-import { Filter } from '@element-plus/icons-vue';
+import { Filter, Plus } from '@element-plus/icons-vue';
 import ResultsGrid from '@/components/ResultsGrid.vue';
 import cronstrue from 'cronstrue/i18n';
 import { COUNTRY_MAP } from '@/config/filterConstants';
@@ -283,10 +360,44 @@ const isLoadingMore = ref(false);
 const allDataLoaded = ref(false);
 const scrollContainer = ref(null); // 用于获取滚动容器的 DOM 引用
 
+const isSearchDialogVisible = ref(false);
+const searchMediaType = ref('movie');
+const searchQuery = ref('');
+const selectedSearchItem = ref(null);
+
+const openSearchDialog = () => {
+  searchQuery.value = '';
+  store.searchResults = [];
+  selectedSearchItem.value = null;
+  isSearchDialogVisible.value = true;
+};
+
+const handleSearch = () => {
+  if (!searchQuery.value) {
+    store.showMessage('warning', '请输入搜索内容！');
+    return;
+  }
+  store.searchTmdb(searchMediaType.value, searchQuery.value);
+};
+
+const handleSelectionChange = (item) => {
+  selectedSearchItem.value = item;
+};
+
+const handleAddItem = async () => {
+  if (!selectedSearchItem.value) {
+    store.showMessage('warning', '请先从列表中选择一个项目！');
+    return;
+  }
+  const success = await store.addPermanentItem(selectedSearchItem.value, searchMediaType.value);
+  if (success) {
+    isSearchDialogVisible.value = false;
+  }
+};
+
 const countryOptions = computed(() => {
-  const items = activeTab.value === 'movies' ? store.upcomingMovies : store.upcomingTvs;
   const countries = new Set();
-  items.forEach(item => {
+  baseItems.value.forEach(item => {
     item.origin_country?.forEach(code => countries.add(code));
   });
   return Array.from(countries).map(code => ({
@@ -296,9 +407,8 @@ const countryOptions = computed(() => {
 });
 
 const genreOptions = computed(() => {
-  const items = activeTab.value === 'movies' ? store.upcomingMovies : store.upcomingTvs;
   const genres = new Set();
-  items.forEach(item => {
+  baseItems.value.forEach(item => {
     item.genres?.forEach(name => genres.add(name));
   });
   return Array.from(genres).map(name => ({
@@ -306,7 +416,6 @@ const genreOptions = computed(() => {
     label: name
   })).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
 });
-
 const notificationCronDesc = ref('');
 const notificationCronError = ref(false);
 const pruningCronDesc = ref('');
@@ -314,21 +423,21 @@ const pruningCronError = ref(false);
 const isTriggeringNotification = ref(false);
 const isTriggeringPruning = ref(false);
 
-const currentItems = computed(() => {
-  let items;
+const baseItems = computed(() => {
   switch (activeTab.value) {
-    case 'movies': 
-      items = store.upcomingMovies;
-      break;
-    case 'tv': 
-      items = store.upcomingTvs;
-      break;
-    case 'subscriptions': 
-      return store.subscriptionList;
-    default: 
-      return [];
+    case 'movies': return store.upcomingMovies;
+    case 'tv': return store.upcomingTvs;
+    case 'subscriptions': return store.subscriptionList;
+    case 'permanent': return store.permanentList;
+    default: return [];
   }
+});
 
+
+const currentItems = computed(() => {
+  let items = [...baseItems.value]; // 从基础列表开始
+
+  // 应用地区和类型过滤
   if (selectedCountry.value) {
     items = items.filter(item => item.origin_country?.includes(selectedCountry.value));
   }
@@ -336,8 +445,14 @@ const currentItems = computed(() => {
     items = items.filter(item => item.genres?.includes(selectedGenre.value));
   }
   
-  allDataLoaded.value = (currentPage.value * itemsPerPage) >= items.length;
+  // 订阅和收藏页不分页
+  if (['subscriptions', 'permanent'].includes(activeTab.value)) {
+    allDataLoaded.value = true;
+    return items;
+  }
 
+  // 其他页面应用分页
+  allDataLoaded.value = (currentPage.value * itemsPerPage) >= items.length;
   return items.slice(0, currentPage.value * itemsPerPage);
 });
 
@@ -406,6 +521,10 @@ const handleUnsubscribe = (item) => {
   store.updateSubscription(item, false);
 };
 
+const handlePermanentToggle = (item) => {
+  store.togglePermanence(item, !item.is_permanent);
+};
+
 const handleTriggerNotification = async () => {
   isTriggeringNotification.value = true;
   await store.triggerNotification();
@@ -419,7 +538,8 @@ const handleTriggerPruning = async () => {
 };
 
 const handleScroll = (event) => {
-  if (activeTab.value === 'subscriptions' || isLoadingMore.value || allDataLoaded.value) {
+  // --- 修改 ---
+  if (['subscriptions', 'permanent'].includes(activeTab.value) || isLoadingMore.value || allDataLoaded.value) {
     return;
   }
 
@@ -586,5 +706,47 @@ watch([activeTab, selectedCountry, selectedGenre], () => {
   display: flex;
   gap: 10px;
   width: 100%;
+}
+.search-add-dialog {
+  height: 65vh;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+.search-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.media-type-selector {
+  flex-shrink: 0; /* 防止被压缩 */
+}
+.media-type-selector .el-radio-group {
+  display: flex; /* 确保内部也是 flex 布局 */
+}
+.media-type-selector .el-radio-button:first-child :deep(.el-radio-button__inner) {
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+}
+.media-type-selector .el-radio-button:last-child :deep(.el-radio-button__inner) {
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+.search-results-container {
+  flex-grow: 1;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 4px;
+}
+.image-slot-error {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 </style>

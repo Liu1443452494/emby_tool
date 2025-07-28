@@ -34,6 +34,9 @@ export const useUpcomingStore = defineStore('upcoming', () => {
   const isLoading = ref(false);
   const isListLoading = ref(false);
   const isSaving = ref(false);
+
+  const searchResults = ref([]);
+  const isSearching = ref(false);
   
   // --- 新增：用于检查配置是否变更的快照 ---
   let filterSnapshot = null;
@@ -43,6 +46,7 @@ export const useUpcomingStore = defineStore('upcoming', () => {
   const upcomingTvs = computed(() => allData.value.filter(item => item.media_type === 'tv'));
   const subscriptionList = computed(() => allData.value.filter(item => item.is_subscribed).sort((a, b) => a.release_date.localeCompare(b.release_date)));
 
+  const permanentList = computed(() => allData.value.filter(item => item.is_permanent).sort((a, b) => a.release_date.localeCompare(b.release_date)));
   // --- Actions ---
   const showMessage = (type, message) => {
     ElMessage({ message, type, showClose: true, duration: 3000 });
@@ -202,6 +206,68 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     }
   }
 
+  async function togglePermanence(item, is_permanent) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/upcoming/toggle-permanent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tmdb_id: item.tmdb_id, is_permanent: is_permanent }),
+      });
+      if (!response.ok) throw new Error(`操作失败`);
+      
+      const targetItem = allData.value.find(i => i.tmdb_id === item.tmdb_id);
+      if (targetItem) {
+        targetItem.is_permanent = is_permanent;
+      }
+      
+      showMessage('success', `操作成功！`);
+      return true;
+    } catch (error) {
+      showMessage('error', error.message);
+      return false;
+    }
+  }
+
+  async function searchTmdb(media_type, query) {
+    isSearching.value = true;
+    searchResults.value = [];
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/upcoming/search-tmdb`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ media_type, query }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '搜索失败');
+      searchResults.value = data;
+      if (data.length === 0) {
+        showMessage('info', '未找到匹配的结果。');
+      }
+    } catch (error) {
+      showMessage('error', error.message);
+    } finally {
+      isSearching.value = false;
+    }
+  }
+
+  async function addPermanentItem(item, media_type) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/upcoming/add-permanent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tmdb_id: item.tmdb_id, media_type }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '添加失败');
+      showMessage('success', data.message);
+      await fetchAllData(); // 添加成功后刷新列表
+      return true;
+    } catch (error) {
+      showMessage('error', error.message);
+      return false;
+    }
+  }
+
   function resetFilters() {
     for (const key in filterOptions) {
       if (typeof filterOptions[key] === 'object' && filterOptions[key] !== null && 'builtIn' in filterOptions[key]) {
@@ -250,14 +316,20 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     upcomingMovies,
     upcomingTvs,
     subscriptionList,
+    permanentList,
     isLoading,
     isListLoading,
     isSaving,
+    searchResults,
+    isSearching,
     fetchConfig,
     saveConfig,
     fetchUpcomingList,
     fetchAllData,
     updateSubscription,
+    togglePermanence,
+    searchTmdb,
+    addPermanentItem,
     resetFilters,
     triggerNotification,
     triggerPruning,

@@ -214,7 +214,8 @@ class UpcomingLogic:
                         "origin_country": origin_country,
                         "popularity": popularity,
                         # --- 新增：保存演员列表 ---
-                        "actors": actors
+                        "actors": actors,
+                        "is_permanent": False
                         # --- 新增结束 ---
                     }
                     new_items_count += 1
@@ -237,7 +238,7 @@ class UpcomingLogic:
         today_str = datetime.now().strftime('%Y-%m-%d')
         final_list = [
             item for item in db_content['data'].values() 
-            if item.get('release_date') and item['release_date'] >= today_str
+            if item.get('is_permanent', False) or (item.get('release_date') and item['release_date'] >= today_str)
         ]
         return sorted(final_list, key=lambda x: (x['release_date'], -x.get('popularity', 0)))
 
@@ -251,7 +252,7 @@ class UpcomingLogic:
         today_str = datetime.now().strftime('%Y-%m-%d')
         final_list = [
             item for item in db_content['data'].values() 
-            if item.get('release_date') and item['release_date'] >= today_str
+            if item.get('is_permanent', False) or (item.get('release_date') and item['release_date'] >= today_str)
         ]
         return sorted(final_list, key=lambda x: (x['release_date'], -x.get('popularity', 0)))
 
@@ -287,7 +288,32 @@ class UpcomingLogic:
             ui_logger.error(f"❌ 操作失败: {e}", task_category=task_cat)
             return False
 
-    # backend/upcoming_logic.py (函数替换)
+    def update_permanence(self, tmdb_id: int, is_permanent: bool) -> bool:
+        task_cat = "即将上映-收藏"
+        try:
+            with FileLock(UPCOMING_DB_FILE + ".lock", timeout=10):
+                db_content = self._read_db()
+                tmdb_id_str = str(tmdb_id)
+                
+                if tmdb_id_str not in db_content['data']:
+                    ui_logger.error(f"❌ 操作失败：数据库中未找到 TMDB ID 为 {tmdb_id} 的项目。", task_category=task_cat)
+                    return False
+                
+                item = db_content['data'][tmdb_id_str]
+                item['is_permanent'] = is_permanent
+                
+                with open(UPCOMING_DB_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(db_content, f, ensure_ascii=False, indent=4)
+            
+            action_text = "永久收藏" if is_permanent else "取消收藏"
+            ui_logger.info(f"✅ 成功{action_text}《{item['title']}》！", task_category=task_cat)
+            return True
+        except Timeout:
+            ui_logger.error("❌ 操作失败：获取文件锁超时。", task_category=task_cat)
+            return False
+        except Exception as e:
+            ui_logger.error(f"❌ 操作失败: {e}", task_category=task_cat)
+            return False
 
     def check_and_notify(self):
         task_cat = "定时任务-订阅通知"
@@ -389,6 +415,7 @@ class UpcomingLogic:
         else:
             ui_logger.error(f"❌ 发送订阅通知失败，原因: {result.get('message', '未知错误')}", task_category=task_cat)
 
+
     def prune_expired_items(self):
         """定时清理任务的执行逻辑"""
         task_cat = "定时任务-订阅清理"
@@ -404,23 +431,159 @@ class UpcomingLogic:
                 original_count = len(db_content['data'])
                 today_str = datetime.now().strftime('%Y-%m-%d')
                 
-                items_to_keep = {
-                    tmdb_id: item for tmdb_id, item in db_content['data'].items()
-                    if item.get('release_date') and item['release_date'] >= today_str
-                }
+                # --- 核心修改：引入详细的分类和计数 ---
+                items_to_keep = {}
+                items_to_prune = []
+                exempted_count = 0
+
+                for tmdb_id, item in db_content['data'].items():
+                    is_expired = item.get('release_date') and item['release_date'] < today_str
+                    is_permanent = item.get('is_permanent', False)
+
+                    if is_expired and not is_permanent:
+                        items_to_prune.append(item)
+                    else:
+                        if is_expired and is_permanent:
+                            exempted_count += 1
+                            logging.debug(f"  - [豁免]《{item.get('title', tmdb_id)}》已过期但因永久收藏被保留。")
+                        items_to_keep[tmdb_id] = item
                 
-                pruned_count = original_count - len(items_to_keep)
+                pruned_count = len(items_to_prune)
                 
                 if pruned_count > 0:
                     db_content['data'] = items_to_keep
-                    # --- 核心修改：直接写入，不再调用 _write_db ---
                     with open(UPCOMING_DB_FILE, 'w', encoding='utf-8') as f:
                         json.dump(db_content, f, ensure_ascii=False, indent=4)
-                    ui_logger.info(f"✅ 清理完成！共移除了 {pruned_count} 个已上映的过期项目。", task_category=task_cat)
+                    
+                    summary_log = f"✅ 清理完成！共移除了 {pruned_count} 个已上映的过期项目。"
+                    if exempted_count > 0:
+                        summary_log += f" (另有 {exempted_count} 个项目因永久收藏被豁免)"
+                    ui_logger.info(summary_log, task_category=task_cat)
+                    
+                    # 打印被删除的项目的详细日志
+                    pruned_titles = "、".join([f"《{item.get('title', '未知')}》" for item in items_to_prune])
+                    logging.info(f"  - [详情] 被移除的项目: {pruned_titles}")
+
                 else:
-                    ui_logger.info("✅ 检查完成，没有发现需要清理的过期项目。", task_category=task_cat)
+                    summary_log = "✅ 检查完成，没有发现需要清理的过期项目。"
+                    if exempted_count > 0:
+                        summary_log += f" (有 {exempted_count} 个日期过期项目因永久收藏被保留)"
+                    ui_logger.info(summary_log, task_category=task_cat)
+                # --- 修改结束 ---
 
         except Timeout:
             ui_logger.error("❌ 清理任务失败：获取文件锁超时。", task_category=task_cat)
         except Exception as e:
             ui_logger.error(f"❌ 清理任务时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+
+    def search_tmdb(self, media_type: str, query: str) -> List[Dict]:
+        """根据关键词或ID在TMDB中搜索媒体"""
+        task_cat = "即将上映-手动搜索"
+        ui_logger.info(f"🔍 正在为 [{media_type}] 搜索 '{query}'...", task_category=task_cat)
+        
+        results = []
+        # 优先尝试按 ID 搜索
+        if query.isdigit():
+            try:
+                endpoint = f"{media_type}/{query}"
+                params = {'language': 'zh-CN'}
+                details = self.tmdb_logic._tmdb_request(endpoint, params)
+                results.append(details)
+                ui_logger.info(f"✅ 按 TMDB ID '{query}' 精确匹配成功。", task_category=task_cat)
+            except Exception:
+                ui_logger.warning(f"⚠️ 按 TMDB ID '{query}' 查找失败，将尝试作为标题进行模糊搜索。", task_category=task_cat)
+                results = [] # 清空，以便进行后续搜索
+
+        # 如果 ID 搜索无果或 query 不是数字，则按标题搜索
+        if not results:
+            try:
+                endpoint = f"search/{media_type}"
+                params = {'language': 'zh-CN', 'query': query}
+                search_data = self.tmdb_logic._tmdb_request(endpoint, params)
+                results = search_data.get('results', [])
+                ui_logger.info(f"✅ 按标题 '{query}' 搜索到 {len(results)} 个结果。", task_category=task_cat)
+            except Exception as e:
+                ui_logger.error(f"❌ 按标题 '{query}' 搜索时发生错误: {e}", task_category=task_cat)
+                return []
+        
+        # 统一处理结果，只返回包含标题和年份的基本信息
+        candidates = []
+        for item in results:
+            title = item.get('title') or item.get('name')
+            release_date = item.get('release_date') or item.get('first_air_date')
+            year = release_date[:4] if release_date else "N/A"
+            candidates.append({
+                "tmdb_id": item.get('id'),
+                "title": f"{title} ({year})",
+                "poster_path": item.get('poster_path'),
+                "overview": item.get('overview')
+            })
+        return candidates
+
+    def add_permanent_item(self, tmdb_id: int, media_type: str) -> Tuple[bool, str]:
+        """获取单个TMDB项目的完整信息并将其作为永久收藏添加到数据库"""
+        task_cat = "即将上映-手动添加"
+        try:
+            # 1. 获取完整信息
+            ui_logger.info(f"➡️ 正在获取 TMDB ID: {tmdb_id} 的完整信息...", task_category=task_cat)
+            endpoint = f"{media_type}/{tmdb_id}"
+            params = {'language': 'zh-CN', 'append_to_response': 'images,credits'}
+            details = self.tmdb_logic._tmdb_request(endpoint, params)
+
+            # 2. 检查海报
+            if not details.get('poster_path'):
+                msg = f"媒体《{details.get('title') or details.get('name')}》因缺少海报图而无法添加。"
+                ui_logger.warning(f"⚠️ {msg}", task_category=task_cat)
+                return False, msg
+
+            # 3. 构建数据对象
+            raw_genres = [genre['name'] for genre in details.get('genres', [])]
+            genres = ["科幻奇幻" if g == "Sci-Fi & Fantasy" else g for g in raw_genres]
+            origin_country = details.get('origin_country', [])
+            popularity = details.get('popularity', 0)
+            cast = details.get('credits', {}).get('cast', [])
+            actors = [actor['name'] for actor in cast[:5]]
+            release_date = details.get('release_date') or details.get('first_air_date')
+
+            item_data = {
+                "tmdb_id": details['id'],
+                "media_type": media_type,
+                "title": details.get('title') or details.get('name'),
+                "overview": details.get('overview'),
+                "poster_path": details.get('poster_path'),
+                "release_date": release_date,
+                "is_subscribed": False,
+                "subscribed_at": None,
+                "genres": genres,
+                "origin_country": origin_country,
+                "popularity": popularity,
+                "actors": actors,
+                "is_permanent": True # 核心：直接设为 True
+            }
+
+            # 4. 写入数据库
+            with FileLock(UPCOMING_DB_FILE + ".lock", timeout=10):
+                db_content = self._read_db()
+                tmdb_id_str = str(tmdb_id)
+                
+                if tmdb_id_str in db_content['data']:
+                    ui_logger.info(f"数据库中已存在《{item_data['title']}》，将直接将其设置为永久收藏。", task_category=task_cat)
+                    db_content['data'][tmdb_id_str]['is_permanent'] = True
+                else:
+                    db_content['data'][tmdb_id_str] = item_data
+                
+                with open(UPCOMING_DB_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(db_content, f, ensure_ascii=False, indent=4)
+            
+            msg = f"🎉 成功将《{item_data['title']}》添加到永久收藏！"
+            ui_logger.info(msg, task_category=task_cat)
+            return True, msg
+
+        except Timeout:
+            msg = "操作失败：获取文件锁超时。"
+            ui_logger.error(f"❌ {msg}", task_category=task_cat)
+            return False, msg
+        except Exception as e:
+            msg = f"操作失败: {e}"
+            ui_logger.error(f"❌ {msg}", task_category=task_cat, exc_info=True)
+            return False, msg

@@ -23,14 +23,28 @@
           <div class="badge top-left">{{ item.media_type === 'movie' ? '电影' : '剧集' }}</div>
           <div class="badge top-right">{{ item.release_date }}</div>
 
-          <div 
-            class="subscribe-button" 
-            :class="{ 'subscribed': isSubscribed(item) }"
-            @click.stop="toggleSubscription(item)"
-          >
-            <svg class="heart-icon" viewBox="0 0 24 24">
-              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-            </svg>
+          <div class="card-actions">
+            <div 
+              class="action-button permanent-button"
+              :class="{ 'is-permanent': item.is_permanent }"
+              @click.stop="$emit('permanent-toggle', item)"
+              title="永久收藏"
+            >
+              <el-icon>
+                <StarFilled v-if="item.is_permanent" />
+                <Star v-else />
+              </el-icon>
+            </div>
+            <div 
+              class="action-button subscribe-button" 
+              :class="{ 'subscribed': isSubscribed(item) }"
+              @click.stop="toggleSubscription(item)"
+              title="订阅"
+            >
+              <svg class="heart-icon" viewBox="0 0 24 24">
+                <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+              </svg>
+            </div>
           </div>
         </div>
 
@@ -76,10 +90,10 @@ import { defineProps, defineEmits } from 'vue';
 import { useUpcomingStore } from '@/stores/upcoming';
 import { API_BASE_URL, TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES } from '@/config/apiConfig';
 import { COUNTRY_MAP } from '@/config/filterConstants';
-import { Picture } from '@element-plus/icons-vue';
+import { Picture, Star, StarFilled } from '@element-plus/icons-vue';
 
 const props = defineProps(['items', 'loading', 'type']);
-const emit = defineEmits(['subscribe', 'unsubscribe']);
+const emit = defineEmits(['subscribe', 'unsubscribe', 'permanent-toggle']);
 
 const store = useUpcomingStore();
 const getCountryNames = (codes) => {
@@ -191,11 +205,24 @@ const toggleSubscription = (item) => {
   background-color: transparent;
 }
 
-.subscribe-button {
+.card-actions {
   position: absolute;
-  bottom: 10px; /* 直接相对于图片容器定位 */
+  bottom: 10px;
   right: 10px;
-  z-index: 3; /* 确保在图片之上 */
+  z-index: 3;
+  display: flex;
+  gap: 10px;
+  opacity: 0;
+  transform: scale(0.8) translateY(10px);
+  transition: all 0.3s ease;
+}
+
+.media-card:hover .card-actions {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+.action-button {
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -204,17 +231,40 @@ const toggleSubscription = (item) => {
   justify-content: center;
   align-items: center;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
   backdrop-filter: blur(5px);
-  opacity: 0;
-  transform: scale(0.8);
+}
+
+.action-button:hover {
+  transform: scale(1.1);
+  background-color: rgba(0, 0, 0, 0.7);
+}
+
+.permanent-button {
+  font-size: 20px;
+  color: #e6a23c;
+}
+.permanent-button.is-permanent {
+  color: #f7ba2a;
+  background-color: rgba(247, 186, 42, 0.2);
+}
+
+.subscribe-button .heart-icon {
+  width: 20px;
+  height: 20px;
+  transition: all 0.3s ease;
+  stroke: #fff;
+  stroke-width: 2;
+  fill: none;
+}
+.subscribe-button.subscribed {
+  background-color: rgba(245, 108, 108, 0.2);
+}
+.subscribe-button.subscribed .heart-icon {
+  fill: #f56c6c;
+  stroke: #f56c6c;
 }
 /* --- 修改结束 --- */
-
-.media-card:hover .subscribe-button {
-  opacity: 1;
-  transform: scale(1);
-}
 
 .image-slot-placeholder, .image-slot-error {
   display: flex;

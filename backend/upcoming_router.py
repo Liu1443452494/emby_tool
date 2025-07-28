@@ -95,3 +95,46 @@ def trigger_pruning_now():
         return {"success": True, "message": "过期项目清理任务已成功触发！"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/toggle-permanent")
+def toggle_permanent_status(payload: Dict[str, Any]):
+    """切换一个项目的永久收藏状态"""
+    tmdb_id = payload.get("tmdb_id")
+    is_permanent = payload.get("is_permanent")
+    if not tmdb_id or not isinstance(is_permanent, bool):
+        raise HTTPException(status_code=400, detail="缺少 tmdb_id 或 is_permanent 参数")
+    
+    config = app_config.load_app_config()
+    logic = UpcomingLogic(config)
+    if logic.update_permanence(tmdb_id, is_permanent):
+        return {"success": True}
+    raise HTTPException(status_code=500, detail="更新永久收藏状态失败")
+
+@router.post("/search-tmdb")
+def search_tmdb_for_permanent(payload: Dict[str, str]):
+    """在TMDB中搜索以供手动添加"""
+    media_type = payload.get("media_type")
+    query = payload.get("query")
+    if not media_type or not query:
+        raise HTTPException(status_code=400, detail="缺少 media_type 或 query 参数")
+    
+    config = app_config.load_app_config()
+    logic = UpcomingLogic(config)
+    results = logic.search_tmdb(media_type, query)
+    return results
+
+@router.post("/add-permanent")
+def add_permanent_item(payload: Dict[str, Any]):
+    """将一个TMDB项目添加为永久收藏"""
+    tmdb_id = payload.get("tmdb_id")
+    media_type = payload.get("media_type")
+    if not tmdb_id or not media_type:
+        raise HTTPException(status_code=400, detail="缺少 tmdb_id 或 media_type 参数")
+
+    config = app_config.load_app_config()
+    logic = UpcomingLogic(config)
+    success, message = logic.add_permanent_item(tmdb_id, media_type)
+    if success:
+        return {"success": True, "message": message}
+    else:
+        raise HTTPException(status_code=500, detail=message)
