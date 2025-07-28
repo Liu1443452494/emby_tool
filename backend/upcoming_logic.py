@@ -229,7 +229,7 @@ class UpcomingLogic:
                 summary_log += f" 跳过了 {skipped_items_count} 条 (因TMDB数据不完整)。"
             ui_logger.info(summary_log, task_category=task_cat)
             # --- 修改结束 ---
-            
+
             # 自动化订阅逻辑
             rules = self.config.auto_subscribe_rules
             if rules.enabled:
@@ -543,6 +543,8 @@ class UpcomingLogic:
         except Exception as e:
             ui_logger.error(f"❌ 清理任务时发生未知错误: {e}", task_category=task_cat, exc_info=True)
 
+    # backend/upcoming_logic.py (函数替换)
+
     def search_tmdb(self, media_type: str, query: str) -> List[Dict]:
         """根据关键词或ID在TMDB中搜索媒体"""
         task_cat = "即将上映-手动搜索"
@@ -573,15 +575,16 @@ class UpcomingLogic:
                 ui_logger.error(f"❌ 按标题 '{query}' 搜索时发生错误: {e}", task_category=task_cat)
                 return []
         
-        # 统一处理结果，只返回包含标题和年份的基本信息
+        # --- 核心修改：返回完整日期，而不是只返回年份 ---
         candidates = []
         for item in results:
             title = item.get('title') or item.get('name')
             release_date = item.get('release_date') or item.get('first_air_date')
-            year = release_date[:4] if release_date else "N/A"
+            
             candidates.append({
                 "tmdb_id": item.get('id'),
-                "title": f"{title} ({year})",
+                "title": title,
+                "release_date": release_date, # 直接传递完整日期
                 "poster_path": item.get('poster_path'),
                 "overview": item.get('overview')
             })

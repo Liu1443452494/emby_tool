@@ -391,6 +391,7 @@
               </template>
             </el-table-column>
             <el-table-column prop="title" label="标题" />
+            <el-table-column prop="release_date" label="上映日期" width="120" />
             <el-table-column prop="overview" label="简介" show-overflow-tooltip />
           </el-table>
         </div>
