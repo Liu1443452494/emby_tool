@@ -198,7 +198,7 @@ class UpcomingLogic:
                     popularity = details.get('popularity', 0)
                     # --- 新增：提取主要演员 ---
                     cast = details.get('credits', {}).get('cast', [])
-                    actors = [actor['name'] for actor in cast[:6]] # 提取前5位主要演员
+                    actors = [actor['name'] for actor in cast[:6]] 
                     # --- 新增结束 ---
 
                     db_content['data'][tmdb_id_str] = {
@@ -318,6 +318,11 @@ class UpcomingLogic:
     def check_and_notify(self):
         task_cat = "定时任务-订阅通知"
         ui_logger.info("➡️ 开始检查订阅列表并发送通知...", task_category=task_cat)
+
+        ui_logger.info("   - [步骤 1/3] 自动检查并按需更新“即将上映”数据...", task_category=task_cat)
+        # 传入 use_defaults: True 来触发标准的缓存检查逻辑
+        self.get_upcoming_list(dynamic_filters={'use_defaults': True})
+        ui_logger.info("   - [步骤 1/3] 数据更新检查完成。", task_category=task_cat)
         
         if not self.app_config.telegram_config.enabled:
             ui_logger.warning("⚠️ Telegram 通知未启用，任务跳过。", task_category=task_cat)
