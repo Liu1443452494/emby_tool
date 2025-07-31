@@ -94,7 +94,7 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_id = {executor.submit(selector._get_emby_item_details, item_id, "ProviderIds,Name"): item_id for item_id in all_item_ids}
+        future_to_id = {executor.submit(selector._get_emby_item_details, item_id, "ProviderIds,Name,Type"): item_id for item_id in all_item_ids}
         
         for future in as_completed(future_to_id):
             if cancellation_event.is_set():
@@ -109,16 +109,25 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
                 provider_ids = details.get("ProviderIds", {})
                 provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
                 tmdb_id = provider_ids_lower.get("tmdb")
-                if tmdb_id:
-                    # --- 核心修改 2: 构建一对多的映射关系 ---
-                    tmdb_id_str = str(tmdb_id)
-                    if tmdb_id_str not in id_map:
-                        id_map[tmdb_id_str] = []
-                    id_map[tmdb_id_str].append(item_id)
-                    # --- 修改结束 ---
+                
+                # --- 核心修改 2: 获取媒体类型并构建新的带前缀的键 ---
+                item_type = details.get("Type") # "Movie" or "Series"
+                
+                if tmdb_id and item_type:
+                    prefix = 'tv' if item_type == 'Series' else 'movie'
+                    map_key = f"{prefix}-{tmdb_id}"
+                    
+                    # 初始化键
+                    if map_key not in id_map:
+                        id_map[map_key] = []
+                    
+                    # 追加 Emby ID
+                    id_map[map_key].append(item_id)
+                # --- 修改结束 ---
                 else:
                     item_name = details.get("Name", f"ID {item_id}")
-                    ui_logger.info(f"   - [跳过] 媒体【{item_name}】(ID: {item_id}) 因缺少 TMDB ID 而被忽略。", task_category=task_cat)
+                    reason = "缺少 TMDB ID" if not tmdb_id else "缺少媒体类型信息"
+                    ui_logger.info(f"   - [跳过] 媒体【{item_name}】(ID: {item_id}) 因 {reason} 而被忽略。", task_category=task_cat)
                     skipped_count += 1
             except Exception as e:
                 ui_logger.error(f"   - ❌ 处理媒体 {item_id} 时出错: {e}", task_category=task_cat)
@@ -135,7 +144,7 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
         
         # --- 核心修改 3: 更新最终的日志输出 ---
         total_emby_ids_mapped = sum(len(v) for v in id_map.values())
-        ui_logger.info(f"✅ 映射表生成完毕。共映射 {len(id_map)} 个唯一TMDB ID，关联 {total_emby_ids_mapped} 个Emby媒体项。跳过: {skipped_count} 项, 失败: {failed_count} 项。", task_category=task_cat)
+        ui_logger.info(f"✅ 映射表生成完毕。共映射 {len(id_map)} 个唯一的 TMDB-ID-类型 组合，关联 {total_emby_ids_mapped} 个Emby媒体项。跳过: {skipped_count} 项, 失败: {failed_count} 项。", task_category=task_cat)
         # --- 修改结束 ---
     except IOError as e:
         ui_logger.error(f"❌ 写入映射表文件失败: {e}", task_category=task_cat)

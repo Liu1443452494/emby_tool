@@ -288,12 +288,18 @@ class EmbyDownloader:
             save_dir = os.path.join(self.download_config.download_directory, *safe_path_parts)
             
         else: # tmdb_id 规则
-            ui_logger.debug(f"[{item_name}] 使用 'tmdb_id' 规则创建目录。", task_category=self.task_category)
+            # --- 核心修改：增加媒体类型前缀 ---
             provider_ids = details.get("ProviderIds", {})
             tmdb_id = next((v for k, v in provider_ids.items() if k.lower() == 'tmdb'), None)
             if not tmdb_id:
                 raise ValueError(f"项目 '{item_name}' (ID: {item_id}) 缺少 TMDB ID，无法创建目录。")
-            save_dir = os.path.join(self.download_config.download_directory, tmdb_id)
+
+            item_type = details.get("Type")
+            prefix = 'tv-' if item_type == 'Series' else 'movie-'
+            folder_name = f"{prefix}{tmdb_id}"
+            
+            ui_logger.debug(f"[{item_name}] 使用 'tmdb_id' 规则创建目录，类型: {item_type}, 文件夹名: {folder_name}", task_category=self.task_category)
+            save_dir = os.path.join(self.download_config.download_directory, folder_name)
 
         os.makedirs(save_dir, exist_ok=True)
         ui_logger.debug(f"[{item_name}] 最终文件保存目录为: {save_dir}", task_category=self.task_category)
