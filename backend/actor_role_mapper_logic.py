@@ -52,27 +52,25 @@ class ActorRoleMapperLogic:
         response.raise_for_status()
         return response.json()
 
+    
+
     def generate_map_task(self, scope: ScheduledTasksTargetScope, generation_mode: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员角色映射-生成"
         actor_limit = self.config.actor_role_mapper_config.actor_limit
         
-        # --- 新增：更详细的模式文本 ---
         mode_map = {
             'overwrite': '覆盖模式',
             'incremental': '增量模式',
             'update_selected': '更新指定模式'
         }
         mode_text = mode_map.get(generation_mode, '未知模式')
-        # --- 新增结束 ---
 
         ui_logger.info(f"🎉 任务启动 ({mode_text})，范围: {scope.mode}，演员上限: {actor_limit}", task_category=task_cat)
 
         try:
             actor_role_map = {}
-            # --- 修改：调整加载条件 ---
             if generation_mode in ['incremental', 'update_selected']:
                 ui_logger.info(f"➡️ [阶段1/6] {mode_text}：正在加载现有映射表...", task_category=task_cat)
-            # --- 修改结束 ---
                 if os.path.exists(ACTOR_ROLE_MAP_FILE):
                     try:
                         with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
@@ -93,12 +91,14 @@ class ActorRoleMapperLogic:
             ui_logger.info(f"🔍 已获取 {len(media_ids)} 个媒体项，开始预处理...", task_category=task_cat)
 
             media_ids_to_process = []
-            tmdb_id_to_item_id_map = {}
+            # --- 修改 1: 重命名 map，使其更清晰 ---
+            tmdb_key_to_item_id_map = {}
             skipped_count = 0
             
-            ui_logger.info("➡️ [阶段3/6] 正在并发获取所有媒体的 TMDB ID 并进行预过滤...", task_category=task_cat)
+            ui_logger.info("➡️ [阶段3/6] 正在并发获取所有媒体的 TMDB ID 及类型并进行预过滤...", task_category=task_cat)
             with ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "ProviderIds"): item_id for item_id in media_ids}
+                # --- 修改 2: 请求的字段中增加 Type ---
+                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "ProviderIds,Type"): item_id for item_id in media_ids}
                 for future in as_completed(future_to_id):
                     if cancellation_event.is_set(): return
                     item_id = future_to_id[future]
@@ -106,21 +106,25 @@ class ActorRoleMapperLogic:
                         details = future.result()
                         provider_ids_lower = {k.lower(): v for k, v in details.get("ProviderIds", {}).items()}
                         tmdb_id = provider_ids_lower.get("tmdb")
-                        if not tmdb_id:
+                        item_type = details.get("Type") # "Movie" or "Series"
+                        
+                        if not tmdb_id or not item_type:
                             continue
                         
-                        # --- 核心逻辑：此处的判断无需修改，因为它天然排除了 'update_selected' 模式 ---
-                        if generation_mode == 'incremental' and str(tmdb_id) in actor_role_map:
+                        # --- 修改 3: 构建带前缀的 map_key ---
+                        type_prefix = 'tv' if item_type == 'Series' else 'movie'
+                        map_key = f"{type_prefix}-{tmdb_id}"
+                        
+                        if generation_mode == 'incremental' and map_key in actor_role_map:
                             skipped_count += 1
                             continue
                         
                         media_ids_to_process.append(item_id)
-                        tmdb_id_to_item_id_map[item_id] = tmdb_id
+                        tmdb_key_to_item_id_map[item_id] = map_key
                     except Exception as e:
                         logging.error(f"【调试】预处理媒体 {item_id} 时出错: {e}")
 
             if not media_ids_to_process:
-                # --- 修改：更新日志 ---
                 if generation_mode == 'incremental':
                     ui_logger.info(f"✅ 预处理完成，所有 {len(media_ids)} 个媒体项均已存在于映射表中，任务结束。", task_category=task_cat)
                 else:
@@ -182,7 +186,8 @@ class ActorRoleMapperLogic:
                 ui_logger.info("➡️ [阶段6/6] 开始构建最终映射表...", task_category=task_cat)
                 for item_id, details in media_details_map.items():
                     item_name = details.get("Name", f"ID {item_id}")
-                    tmdb_id = tmdb_id_to_item_id_map.get(item_id)
+                    # --- 修改 4: 使用新的 map 获取带前缀的 key ---
+                    map_key = tmdb_key_to_item_id_map.get(item_id)
                     
                     people = details.get("People", [])
                     actors = [p for p in people if p.get('Type') == 'Actor']
@@ -214,8 +219,8 @@ class ActorRoleMapperLogic:
                             "role": role
                         }
                     
-                    if work_map:
-                        actor_role_map[str(tmdb_id)] = {
+                    if work_map and map_key:
+                        actor_role_map[map_key] = {
                             "title": item_name,
                             "map": work_map
                         }
@@ -243,22 +248,27 @@ class ActorRoleMapperLogic:
             ui_logger.error(f"❌ 生成映射表任务失败: {e}", task_category=task_cat, exc_info=True)
             raise e
         
+
     def generate_map_for_single_item(self, item_id: str, task_category: str):
         """为单个媒体项生成角色映射，并以增量模式更新到本地文件。"""
         ui_logger.info(f"➡️ [单体模式] 开始为媒体 (ID: {item_id}) 生成角色映射...", task_category=task_category)
         
         try:
-            # 1. 获取 TMDB ID
-            item_details = self._get_emby_item_details(item_id, "ProviderIds,Name,People")
+            # --- 修改 1: 请求字段增加 Type ---
+            item_details = self._get_emby_item_details(item_id, "ProviderIds,Name,People,Type")
             item_name = item_details.get("Name", f"ID {item_id}")
             provider_ids_lower = {k.lower(): v for k, v in item_details.get("ProviderIds", {}).items()}
             tmdb_id = provider_ids_lower.get("tmdb")
+            item_type = item_details.get("Type")
 
-            if not tmdb_id:
-                ui_logger.warning(f"   - ⚠️ 媒体【{item_name}】缺少 TMDB ID，无法生成映射。", task_category=task_category)
+            if not tmdb_id or not item_type:
+                ui_logger.warning(f"   - ⚠️ 媒体【{item_name}】缺少 TMDB ID 或媒体类型，无法生成映射。", task_category=task_category)
                 return
 
-            # 2. 带锁读写文件
+            # --- 修改 2: 构建带前缀的 map_key ---
+            type_prefix = 'tv' if item_type == 'Series' else 'movie'
+            map_key = f"{type_prefix}-{tmdb_id}"
+
             with FileLock(ACTOR_ROLE_MAP_LOCK_FILE, timeout=10):
                 actor_role_map = {}
                 if os.path.exists(ACTOR_ROLE_MAP_FILE):
@@ -266,14 +276,13 @@ class ActorRoleMapperLogic:
                         with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
                             actor_role_map = json.load(f)
                     except (json.JSONDecodeError, IOError):
-                        pass # 文件损坏或为空，当作新文件处理
+                        pass
 
-                # 3. 增量模式判断
-                if str(tmdb_id) in actor_role_map:
+                # --- 修改 3: 使用新的 map_key 进行判断和写入 ---
+                if map_key in actor_role_map:
                     ui_logger.info(f"   - ✅ 媒体【{item_name}】的映射已存在于本地文件中，跳过本次生成。", task_category=task_category)
                     return
 
-                # 4. 生成映射数据
                 actor_limit = self.config.actor_role_mapper_config.actor_limit
                 people = item_details.get("People", [])
                 actors = [p for p in people if p.get('Type') == 'Actor']
@@ -299,7 +308,7 @@ class ActorRoleMapperLogic:
                                 p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
                                 person_tmdb_id = p_ids_lower.get("tmdb")
                         except Exception:
-                            pass # 获取失败则 tmdb_id 为 None
+                            pass
 
                         work_map[actor_name] = {
                             "tmdb_id": person_tmdb_id,
@@ -307,13 +316,12 @@ class ActorRoleMapperLogic:
                         }
                 
                 if work_map:
-                    actor_role_map[str(tmdb_id)] = {
+                    actor_role_map[map_key] = {
                         "title": item_name,
                         "map": work_map
                     }
                     ui_logger.info(f"   - 🔍 已为【{item_name}】成功生成 {len(work_map)} 条演员角色映射。", task_category=task_category)
                 
-                # 5. 写回文件
                 with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
                     json.dump(actor_role_map, f, ensure_ascii=False, indent=2)
                 
@@ -485,6 +493,8 @@ class ActorRoleMapperLogic:
             raise e
         
 
+    # backend/actor_role_mapper_logic.py (函数替换)
+
     def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
         根据映射关系，恢复指定 Emby 媒体项列表的演员角色名。
@@ -497,12 +507,8 @@ class ActorRoleMapperLogic:
             raise ValueError("映射数据不完整")
 
         total_items = len(item_ids)
-        # --- 修改：增加对 task_manager 是否存在的判断 ---
-        # 注意：这里的进度条是针对单个作品的多个Emby实例，而不是整个批量任务
         if task_manager:
-            # task_manager.update_task_progress(task_id, 0, total_items)
-            pass # 暂时不使用进度条
-        # --- 修改结束 ---
+            pass
         ui_logger.info(f"  ➡️ 开始为作品《{title}》恢复演员角色，共涉及 {total_items} 个Emby媒体项。", task_category=task_cat)
 
         for i, item_id in enumerate(item_ids):
@@ -513,22 +519,40 @@ class ActorRoleMapperLogic:
             try:
                 ui_logger.info(f"     - 正在处理第 {i+1}/{total_items} 个媒体项 (ID: {item_id})...", task_category=task_cat)
                 
-                # 1. 获取并预处理 Emby 演员列表
-                item_details = self._get_emby_item_details(item_id, "People")
-                current_people = item_details.get("People", [])
-                if not current_people:
+                # --- 核心修改 1: 重构 Emby 演员列表的获取和预处理逻辑 ---
+                # 1a. 先获取基础的 People 列表
+                item_details_base = self._get_emby_item_details(item_id, "People")
+                current_people_base = item_details_base.get("People", [])
+                if not current_people_base:
                     ui_logger.info(f"       - [跳过] 媒体项 {item_id} 没有演职员信息。", task_category=task_cat)
                     continue
+                
+                emby_actors_base = [p for p in current_people_base if p.get("Type") == "Actor"]
 
+                # 1b. 并发为每个演员获取完整的 ProviderIds
                 emby_actors_by_id = {}
                 emby_actors_by_name = {}
-                for person in current_people:
-                    if person.get("Type") == "Actor":
-                        provider_ids_lower = {k.lower(): v for k, v in person.get("ProviderIds", {}).items()}
-                        person_tmdb_id = provider_ids_lower.get("tmdb")
-                        if person_tmdb_id:
-                            emby_actors_by_id[str(person_tmdb_id)] = person
-                        emby_actors_by_name[person.get("Name")] = person
+                
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    future_to_person = {executor.submit(self._get_emby_item_details, p['Id'], "ProviderIds"): p for p in emby_actors_base}
+                    for future in as_completed(future_to_person):
+                        original_person = future_to_person[future]
+                        try:
+                            full_person_details = future.result()
+                            # 将获取到的完整信息（主要是ProviderIds）更新回原始的 person 对象
+                            original_person.update(full_person_details)
+                            
+                            provider_ids_lower = {k.lower(): v for k, v in full_person_details.get("ProviderIds", {}).items()}
+                            person_tmdb_id = provider_ids_lower.get("tmdb")
+                            
+                            if person_tmdb_id:
+                                emby_actors_by_id[str(person_tmdb_id)] = original_person
+                            emby_actors_by_name[original_person.get("Name")] = original_person
+                        except Exception as e:
+                            # 如果获取某个演员详情失败，至少保证能按名字匹配
+                            emby_actors_by_name[original_person.get("Name")] = original_person
+                            logging.debug(f"【调试】恢复时获取演员 {original_person.get('Name')} (ID: {original_person.get('Id')}) 的详情失败: {e}")
+                # --- 核心修改 1 结束 ---
 
                 # 2. 遍历映射表，进行匹配和更新
                 has_changes = False
@@ -563,14 +587,15 @@ class ActorRoleMapperLogic:
                 # 3. 如果有变更，则写回 Emby
                 if has_changes:
                     ui_logger.info(f"     - 发现角色变更，正在写回 Emby...", task_category=task_cat)
-                    item_details["People"] = current_people
+                    # --- 核心修改 2: 使用原始的 People 列表进行更新，而不是只包含 Actor 的列表 ---
+                    item_details_base["People"] = current_people_base
                     
                     update_url = f"{self.server_config.server}/Items/{item_id}"
                     headers = {'Content-Type': 'application/json'}
                     params = {"api_key": self.server_config.api_key}
                     proxies = self.proxy_manager.get_proxies(update_url)
                     
-                    response = self.session.post(update_url, params=params, json=item_details, headers=headers, timeout=30, proxies=proxies)
+                    response = self.session.post(update_url, params=params, json=item_details_base, headers=headers, timeout=30, proxies=proxies)
                     response.raise_for_status()
                     
                     for log_line in updated_logs:
@@ -583,33 +608,33 @@ class ActorRoleMapperLogic:
                 ui_logger.error(f"  - ❌ 处理媒体项 {item_id} 时发生错误: {e}", task_category=task_cat, exc_info=True)
 
 
+
     def update_single_map_file(self, single_map_data: Dict):
         """
         根据传入的单条映射数据，更新本地的 actor_role_map.json 文件。
         """
         task_cat = "演员角色映射-文件更新"
-        tmdb_id = single_map_data.get("tmdb_id")
-        if not tmdb_id:
-            raise ValueError("传入的数据缺少 tmdb_id")
+        # --- 修改 1: 字段名从 tmdb_id 改为 map_key，更准确 ---
+        map_key = single_map_data.get("map_key")
+        if not map_key:
+            raise ValueError("传入的数据缺少 map_key")
 
-        ui_logger.info(f"➡️ 准备更新映射文件，目标作品 TMDB ID: {tmdb_id}", task_category=task_cat)
+        ui_logger.info(f"➡️ 准备更新映射文件，目标作品 Key: {map_key}", task_category=task_cat)
         
         try:
             with FileLock(ACTOR_ROLE_MAP_LOCK_FILE, timeout=10):
-                # 1. 读取现有文件
                 if os.path.exists(ACTOR_ROLE_MAP_FILE):
                     with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
                         full_map = json.load(f)
                 else:
                     full_map = {}
                 
-                # 2. 更新指定条目 (不再包含 Emby_itemid)
-                full_map[tmdb_id] = {
+                # --- 修改 2: 使用新的 map_key 作为主键 ---
+                full_map[map_key] = {
                     "title": single_map_data.get("title", "未知作品"),
                     "map": single_map_data.get("map", {})
                 }
 
-                # 3. 写回文件
                 with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
                     json.dump(full_map, f, ensure_ascii=False, indent=2)
                 
@@ -623,6 +648,8 @@ class ActorRoleMapperLogic:
             ui_logger.error(f"❌ 更新文件时发生未知错误: {e}", task_category=task_cat, exc_info=True)
             raise e
         
+    # backend/actor_role_mapper_logic.py (函数替换)
+
     def restore_roles_from_map_task(self, scope: ScheduledTasksTargetScope, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
         根据通用范围和本地映射表，批量恢复演员角色名。
@@ -631,7 +658,6 @@ class ActorRoleMapperLogic:
         task_cat = "演员角色映射-批量恢复"
         ui_logger.info(f"🎉 任务启动，范围: {scope.mode}", task_category=task_cat)
 
-        # 1. 加载本地映射表
         ui_logger.info("➡️ [阶段1/4] 正在加载本地角色映射表...", task_category=task_cat)
         if not os.path.exists(ACTOR_ROLE_MAP_FILE):
             raise FileNotFoundError("本地角色映射表文件 actor_role_map.json 不存在，请先生成。")
@@ -643,7 +669,6 @@ class ActorRoleMapperLogic:
             ui_logger.warning("⚠️ 本地角色映射表为空，任务中止。", task_category=task_cat)
             return
 
-        # --- 核心修改：加载 id_map.json ---
         ui_logger.info("➡️ [阶段2/4] 正在加载 TMDB-Emby ID 映射表...", task_category=task_cat)
         id_map_file = os.path.join('/app/data', 'id_map.json')
         if not os.path.exists(id_map_file):
@@ -652,9 +677,7 @@ class ActorRoleMapperLogic:
         with open(id_map_file, 'r', encoding='utf-8') as f:
             id_map = json.load(f)
         ui_logger.info("   - ❗ 提示：恢复操作将基于您上一次生成的 `id_map.json`。为确保结果准确，建议在恢复前重新生成ID映射表。", task_category=task_cat)
-        # --- 修改结束 ---
 
-        # 2. 获取目标媒体项
         ui_logger.info("➡️ [阶段3/4] 正在根据范围获取媒体列表...", task_category=task_cat)
         selector = MediaSelector(self.config)
         media_ids_in_scope = set(selector.get_item_ids(scope))
@@ -662,13 +685,13 @@ class ActorRoleMapperLogic:
             ui_logger.info("✅ 在指定范围内未找到任何媒体项，任务完成。", task_category=task_cat)
             return
 
-        # 3. 遍历本地映射表，执行恢复
         ui_logger.info("➡️ [阶段4/4] 开始根据处理计划，逐一恢复作品...", task_category=task_cat)
         total_works_to_process = len(role_map)
         task_manager.update_task_progress(task_id, 0, total_works_to_process)
         processed_works_count = 0
 
-        for tmdb_id, map_data in role_map.items():
+        # --- 核心修改 1: 变量名从 tmdb_id 改为 map_key，并直接使用它查询 id_map ---
+        for map_key, map_data in role_map.items():
             if cancellation_event.is_set():
                 ui_logger.warning("⚠️ 任务被用户取消。", task_category=task_cat)
                 return
@@ -676,17 +699,14 @@ class ActorRoleMapperLogic:
             processed_works_count += 1
             task_manager.update_task_progress(task_id, processed_works_count, total_works_to_process)
 
-            # --- 核心修改：通过 id_map 查找 ItemId，并与范围求交集 ---
-            emby_ids_from_map = id_map.get(str(tmdb_id), [])
+            emby_ids_from_map = id_map.get(map_key, [])
             item_ids_to_process = list(media_ids_in_scope.intersection(emby_ids_from_map))
-            # --- 修改结束 ---
             
             if not item_ids_to_process:
                 continue
 
-            title = map_data.get("title", f"TMDB ID {tmdb_id}")
+            title = map_data.get("title", f"Map Key {map_key}")
             
-            # 复用单体恢复的逻辑
             self.restore_single_map_task(
                 item_ids=item_ids_to_process,
                 role_map=map_data.get("map", {}),

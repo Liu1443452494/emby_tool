@@ -187,7 +187,8 @@
             element-loading-background="rgba(var(--custom-bg-overlay-rgb), 0.7)"
           >
             <el-collapse v-if="filteredMap.length > 0" v-model="activeCollapseNames" @change="handleCollapseChange">
-              <el-collapse-item v-for="item in filteredMap" :key="item.tmdb_id" :name="item.tmdb_id">
+              <!-- --- 修改 1: :key 和 :name 都使用 map_key --- -->
+              <el-collapse-item v-for="item in filteredMap" :key="item.map_key" :name="item.map_key">
                 <template #title>
                   <div class="collapse-title-container">
                     <span class="collapse-title">{{ item.title }}</span>
@@ -204,16 +205,19 @@
                   </div>
                 </template>
                 <div class="actor-list-toolbar">
-                  <el-button type="success" size="small" @click="handleSaveItem(item)" :loading="isSavingItem[item.tmdb_id]">保存此作品的修改</el-button>
+                  <!-- --- 修改 2: handleSaveItem 的 loading 状态也使用 map_key --- -->
+                  <el-button type="success" size="small" @click="handleSaveItem(item)" :loading="isSavingItem[item.map_key]">保存此作品的修改</el-button>
                   <span class="toolbar-tip">可直接在下方表格中修改角色名</span>
                 </div>
                 <div class="actor-list">
                   <div v-for="(actor, name) in item.map" :key="name" class="actor-item">
-                    <el-avatar :size="40" :src="getActorAvatar(item.tmdb_id, name)" shape="square">
+                    <!-- --- 修改 3: getActorAvatar 调用时传递 map_key --- -->
+                    <el-avatar :size="40" :src="getActorAvatar(item.map_key, name)" shape="square">
                       <el-icon><User /></el-icon>
                     </el-avatar>
                     <span class="actor-name">{{ name }}</span>
                     <el-input v-model="actor.role" class="actor-role-input" placeholder="无角色名" />
+                    <!-- --- 修改 4: actor.tmdb_id 这个字段本身不需要改，因为它指的是演员的TMDB ID --- -->
                     <el-tag v-if="actor.tmdb_id" size="small" class="actor-tmdb-id">ID: {{ actor.tmdb_id }}</el-tag>
                   </div>
                 </div>
@@ -559,6 +563,7 @@ const actions = ref([
 
 const handleCollapseChange = (activeNames) => {
   if (!activeNames || activeNames.length === 0) return;
+  // --- 修改 1: newActiveId 现在是 map_key ---
   const newActiveId = activeNames[activeNames.length - 1];
   if (newActiveId && !actorAvatarsCache[newActiveId]) {
     fetchAvatars(newActiveId);
@@ -566,22 +571,20 @@ const handleCollapseChange = (activeNames) => {
 };
 
 
-const fetchAvatars = async (tmdbId) => {
-  // 初始化缓存，防止重复请求
-  actorAvatarsCache[tmdbId] = {}; 
+const fetchAvatars = async (mapKey) => {
+  // --- 修改 2: 函数参数从 tmdbId 改为 mapKey ---
+  actorAvatarsCache[mapKey] = {}; 
   
   try {
-    // --- 核心修改：调用新的后端接口 ---
-    const response = await fetch(`${API_BASE_URL}/api/actor-role-mapper/avatars/${tmdbId}`);
+    const response = await fetch(`${API_BASE_URL}/api/actor-role-mapper/avatars/${mapKey}`);
     if (!response.ok) {
-      // 如果接口返回404或500等，静默失败，不在UI上报错
-      console.error(`获取 TMDB ID ${tmdbId} 的演员头像信息失败`);
+      console.error(`获取 Map Key ${mapKey} 的演员头像信息失败`);
       return;
     }
     
     const actorsData = await response.json();
     if (!actorsData || actorsData.length === 0) {
-      return; // 没有找到演员或头像信息
+      return;
     }
 
     const avatarMap = {};
@@ -590,18 +593,16 @@ const fetchAvatars = async (tmdbId) => {
     actorsData.forEach(actor => {
       if (actor.PrimaryImageTag) {
         const imagePath = `Items/${actor.Id}/Images/Primary?tag=${actor.PrimaryImageTag}&api_key=${apiKey}`;
-        // 使用 encodeURIComponent 确保 URL 安全
         avatarMap[actor.Name] = `${API_BASE_URL}/api/emby-image-proxy?path=${encodeURIComponent(imagePath)}`;
       } else {
-        avatarMap[actor.Name] = ''; // 保持无头像的为空字符串
+        avatarMap[actor.Name] = '';
       }
     });
     
-    actorAvatarsCache[tmdbId] = avatarMap;
+    actorAvatarsCache[mapKey] = avatarMap;
 
   } catch (error) {
-    // 网络层面的错误，也静默处理
-    console.error(`获取 TMDB ID ${tmdbId} 的演员头像时发生网络错误:`, error);
+    console.error(`获取 Map Key ${mapKey} 的演员头像时发生网络错误:`, error);
   }
 };
 

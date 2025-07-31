@@ -20,10 +20,10 @@ export const useActorRoleMapperStore = defineStore('actorRoleMapper', () => {
   const totalMapCount = computed(() => fullActorMap.value.length);
   // --- 新增结束 ---
 
-  // --- Actions ---
+// frontend/src/stores/actorRoleMapper.js (函数替换)
+
   async function fetchMap() {
     isLoading.value = true;
-    // 重置所有状态
     fullActorMap.value = [];
     displayedActorMap.value = [];
     isFullyLoaded.value = false;
@@ -40,16 +40,51 @@ export const useActorRoleMapperStore = defineStore('actorRoleMapper', () => {
       }
       const data = await response.json();
       
-      // 将原始数据存储在 fullActorMap 中
-      fullActorMap.value = Object.entries(data).map(([tmdb_id, value]) => ({
-        tmdb_id,
+      // --- 核心修改 1: 将 tmdb_id 重命名为 map_key ---
+      fullActorMap.value = Object.entries(data).map(([map_key, value]) => ({
+        map_key,
         ...value
       })).sort((a, b) => a.title.localeCompare(b.title));
 
-      // 初始化第一页显示的数据
       displayedActorMap.value = fullActorMap.value.slice(0, itemsPerLoad);
       
-      // 检查是否一次性就加载完了
+      if (displayedActorMap.value.length >= fullActorMap.value.length) {
+        isFullyLoaded.value = true;
+      }
+
+    } catch (error) {
+      ElMessage.error(error.message);
+    } finally {
+      isLoading.value = false;
+    }
+  }// frontend/src/stores/actorRoleMapper.js (函数替换)
+
+  async function fetchMap() {
+    isLoading.value = true;
+    fullActorMap.value = [];
+    displayedActorMap.value = [];
+    isFullyLoaded.value = false;
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/actor-role-mapper/map`);
+      if (response.status === 404) {
+        ElMessage.info('本地不存在 actor_role_map.json 文件。');
+        return;
+      }
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.detail || '获取映射表失败');
+      }
+      const data = await response.json();
+      
+      // --- 核心修改 1: 将 tmdb_id 重命名为 map_key ---
+      fullActorMap.value = Object.entries(data).map(([map_key, value]) => ({
+        map_key,
+        ...value
+      })).sort((a, b) => a.title.localeCompare(b.title));
+
+      displayedActorMap.value = fullActorMap.value.slice(0, itemsPerLoad);
+      
       if (displayedActorMap.value.length >= fullActorMap.value.length) {
         isFullyLoaded.value = true;
       }
@@ -123,8 +158,10 @@ export const useActorRoleMapperStore = defineStore('actorRoleMapper', () => {
     }
   }
 
+
   async function saveMapChanges(mapData) {
-    isSavingItem.value[mapData.tmdb_id] = true;
+    // --- 核心修改 1: 使用 map_key 作为 loading 状态的键 ---
+    isSavingItem.value[mapData.map_key] = true;
     try {
       const response = await fetch(`${API_BASE_URL}/api/actor-role-mapper/update-single-map`, {
         method: 'POST',
@@ -134,12 +171,10 @@ export const useActorRoleMapperStore = defineStore('actorRoleMapper', () => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '保存失败');
       
-      // --- 修改：保存成功后，同步更新 fullActorMap 中的数据 ---
-      const index = fullActorMap.value.findIndex(item => item.tmdb_id === mapData.tmdb_id);
+      const index = fullActorMap.value.findIndex(item => item.map_key === mapData.map_key);
       if (index !== -1) {
         fullActorMap.value[index] = { ...fullActorMap.value[index], ...mapData };
       }
-      // --- 修改结束 ---
 
       ElMessage.success(data.message);
       return true;
@@ -147,7 +182,7 @@ export const useActorRoleMapperStore = defineStore('actorRoleMapper', () => {
       ElMessage.error(`保存失败: ${error.message}`);
       return false;
     } finally {
-      isSavingItem.value[mapData.tmdb_id] = false;
+      isSavingItem.value[mapData.map_key] = false;
     }
   }
 

@@ -284,22 +284,27 @@ class WebhookLogic:
         
         if cancellation_event.is_set(): return
 
-        # --- 新增：演员中文化前的检查与恢复逻辑 ---
         actor_localization_skipped = False
         ui_logger.info(f"【步骤 5/8 | 角色映射检查】开始...", task_category=task_cat)
         
-        # 重新获取最新的 ProviderIds，确保 TMDB ID 存在
-        item_details_for_tmdb = self._get_emby_item_details(item_id, "ProviderIds")
-        provider_ids_lower_for_tmdb = {k.lower(): v for k, v in item_details_for_tmdb.get("ProviderIds", {}).items()}
-        tmdb_id = provider_ids_lower_for_tmdb.get("tmdb")
+        # --- 核心修改：重新获取最新的 ProviderIds 和 Type，确保信息完整 ---
+        item_details_for_map_check = self._get_emby_item_details(item_id, "ProviderIds,Type")
+        provider_ids_lower_for_map = {k.lower(): v for k, v in item_details_for_map_check.get("ProviderIds", {}).items()}
+        tmdb_id_for_map = provider_ids_lower_for_map.get("tmdb")
+        item_type_for_map = item_details_for_map_check.get("Type")
 
-        if tmdb_id and os.path.exists(ACTOR_ROLE_MAP_FILE):
-            ui_logger.info(f"   - 正在检查 TMDB ID: {tmdb_id} 是否存在于本地映射表中...", task_category=task_cat)
+        if tmdb_id_for_map and item_type_for_map and os.path.exists(ACTOR_ROLE_MAP_FILE):
+            # --- 核心修改：构建正确的 map_key ---
+            type_prefix = 'tv' if item_type_for_map == 'Series' else 'movie'
+            map_key = f"{type_prefix}-{tmdb_id_for_map}"
+            
+            ui_logger.info(f"   - 正在检查 Key: {map_key} 是否存在于本地映射表中...", task_category=task_cat)
             try:
                 with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
                     actor_role_map = json.load(f)
                 
-                if str(tmdb_id) in actor_role_map:
+                # --- 核心修改：使用 map_key 进行判断 ---
+                if map_key in actor_role_map:
                     ui_logger.info(f"   - ✅ 命中！在映射表中找到了《{item_name}》的角色数据。", task_category=task_cat)
                     actor_localization_skipped = True
                     
@@ -308,24 +313,23 @@ class WebhookLogic:
                     
                     ui_logger.info(f"   - 🔄 [角色恢复] 开始将已存在的中文角色名应用到新入库的媒体项...", task_category=task_cat)
                     role_mapper_logic = ActorRoleMapperLogic(self.config)
-                    map_data = actor_role_map[str(tmdb_id)]
+                    map_data = actor_role_map[map_key]
                     
-                    # 直接调用单体恢复任务，但由于不在task_manager上下文中，部分参数传None
                     role_mapper_logic.restore_single_map_task(
                         item_ids=[item_id],
                         role_map=map_data.get("map", {}),
                         title=map_data.get("title", item_name),
                         cancellation_event=cancellation_event,
-                        task_id=None, # 非独立任务，无需task_id
-                        task_manager=None # 非独立任务，无需task_manager
+                        task_id=None,
+                        task_manager=None
                     )
                 else:
-                    ui_logger.info(f"   - 未在映射表中找到 TMDB ID: {tmdb_id} 的记录，将执行标准流程。", task_category=task_cat)
+                    ui_logger.info(f"   - 未在映射表中找到 Key: {map_key} 的记录，将执行标准流程。", task_category=task_cat)
             except (IOError, json.JSONDecodeError) as e:
                 ui_logger.warning(f"   - ⚠️ 读取本地角色映射表失败，将执行标准流程。错误: {e}", task_category=task_cat)
         else:
-            if not tmdb_id:
-                ui_logger.info(f"   - 媒体项缺少 TMDB ID，无法进行映射检查，将执行标准流程。", task_category=task_cat)
+            if not tmdb_id_for_map or not item_type_for_map:
+                ui_logger.info(f"   - 媒体项缺少 TMDB ID 或类型信息，无法进行映射检查，将执行标准流程。", task_category=task_cat)
             else:
                 ui_logger.info(f"   - 本地角色映射表不存在，将执行标准流程。", task_category=task_cat)
 
