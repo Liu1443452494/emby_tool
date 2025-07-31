@@ -260,6 +260,7 @@ class EpisodeRefresherLogic:
         filename = f"season-{season_number}-episode-{episode_number}.jpg"
         return os.path.join(cache_dir, filename)
 
+
     def _save_screenshot_to_local(self, image_bytes: bytes, series_tmdb_id: str, season_number: int, episode_number: int, series_name: str, task_category: str) -> bool:
         """将截图二进制数据保存到本地缓存，并智能处理文件夹重命名。"""
         new_filepath = self._get_local_screenshot_path(series_tmdb_id, season_number, episode_number, series_name)
@@ -267,18 +268,22 @@ class EpisodeRefresherLogic:
             return False
         
         new_dir = os.path.dirname(new_filepath)
+        # --- 核心修改：增加对旧目录的查找和重命名逻辑 ---
         old_dir = self._find_screenshot_cache_dir_by_tmdbid(series_tmdb_id)
         final_dir = new_dir
         
         try:
+            # 如果找到了旧目录，并且名称和新目录不一致，则重命名
             if old_dir:
                 if old_dir != new_dir:
                     ui_logger.info(f"     - [本地缓存] 检测到剧集标题变更，正在重命名缓存文件夹: '{os.path.basename(old_dir)}' -> '{os.path.basename(new_dir)}'", task_category=task_category)
                     os.rename(old_dir, new_dir)
                 final_dir = new_dir
             else:
+                # 如果没找到旧目录，才创建新目录
                 os.makedirs(new_dir, exist_ok=True)
             
+            # 确保最终文件路径是基于正确的目录
             final_filepath = os.path.join(final_dir, os.path.basename(new_filepath))
             with open(final_filepath, 'wb') as f:
                 f.write(image_bytes)
@@ -1888,7 +1893,6 @@ class EpisodeRefresherLogic:
         ui_logger.info(f"【{task_cat}】🎉 任务全部完成！", task_category=task_cat)
 
 
-    # backend/episode_refresher_logic.py (函数替换)
 
     def restore_screenshots_from_github_task(
         self,
@@ -1920,8 +1924,10 @@ class EpisodeRefresherLogic:
 
             emby_centric_plan = {}
             for tmdb_id, episodes in remote_db["series"].items():
-                if tmdb_id in id_map:
-                    for emby_series_id in id_map[tmdb_id]:
+                # --- 核心修改：手动为纯数字的 tmdb_id 加上 'tv-' 前缀 ---
+                map_key = f"tv-{tmdb_id}"
+                if map_key in id_map:
+                    for emby_series_id in id_map[map_key]:
                         emby_centric_plan[emby_series_id] = episodes
             
             if not emby_centric_plan:

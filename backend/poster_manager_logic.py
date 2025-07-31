@@ -101,15 +101,14 @@ class PosterManagerLogic:
         
         initial_pending_list = []
         tmdb_id_map = {}
-
+        # --- 核心修改 1: 新增一个集合用于去重 ---
+        processed_files = set()
 
         with ThreadPoolExecutor(max_workers=10) as executor:
-            # --- 核心修改 1/2: _get_tmdb_id 现在返回复合键 ---
             future_to_id = {executor.submit(self._get_tmdb_id, item_id): item_id for item_id in media_ids}
             for future in future_to_id:
                 item_id = future_to_id[future]
                 try:
-                    # tmdb_key 现在是 'movie-12345' 或 'tv-12345'
                     tmdb_key = future.result()
                     if tmdb_key:
                         tmdb_id_map[item_id] = tmdb_key
@@ -122,7 +121,6 @@ class PosterManagerLogic:
                 ui_logger.warning(f"⚠️ 跳过 Emby ID: {item_id}，因为它没有关联的 TMDB ID。", task_category=task_cat)
                 continue
 
-            # item_cache_dir 现在是 /path/to/cache/movie-12345
             item_cache_dir = os.path.join(self.pm_config.local_cache_path, tmdb_key)
             if not os.path.isdir(item_cache_dir):
                 continue
@@ -132,16 +130,19 @@ class PosterManagerLogic:
                 if not filename: continue
                 
                 filepath = os.path.join(item_cache_dir, filename)
-                if os.path.isfile(filepath):
+                
+                # --- 核心修改 2: 在添加前进行检查 ---
+                if os.path.isfile(filepath) and filepath not in processed_files:
                     try:
                         file_size = os.path.getsize(filepath)
-                        # --- 核心修改 2/2: 将复合键存入 tmdb_id 字段 ---
                         initial_pending_list.append({
                             "local_path": filepath,
                             "tmdb_id": tmdb_key,
                             "image_type": content_type,
                             "size": file_size
                         })
+                        # 将已处理的文件路径添加到集合中
+                        processed_files.add(filepath)
                     except OSError as e:
                         ui_logger.error(f"❌ 无法获取文件大小: {filepath}。错误: {e}", task_category=task_cat)
         
