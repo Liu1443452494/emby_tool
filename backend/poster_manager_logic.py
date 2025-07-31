@@ -86,6 +86,7 @@ class PosterManagerLogic:
             return None
 
 
+
     def _scan_local_cache(self, media_ids: List[str], content_types: List[str], task_cat: str) -> List[Dict]:
         """扫描本地缓存目录，生成初始待办列表"""
         ui_logger.info(f"➡️ [阶段1.2] 开始扫描本地缓存目录: {self.pm_config.local_cache_path}", task_category=task_cat)
@@ -101,8 +102,9 @@ class PosterManagerLogic:
         
         initial_pending_list = []
         tmdb_id_map = {}
-        # --- 核心修改 1: 新增一个集合用于去重 ---
         processed_files = set()
+        # --- 新增 1: 用于统计去重数量的计数器 ---
+        duplicate_count = 0
 
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_id = {executor.submit(self._get_tmdb_id, item_id): item_id for item_id in media_ids}
@@ -131,22 +133,29 @@ class PosterManagerLogic:
                 
                 filepath = os.path.join(item_cache_dir, filename)
                 
-                # --- 核心修改 2: 在添加前进行检查 ---
-                if os.path.isfile(filepath) and filepath not in processed_files:
-                    try:
-                        file_size = os.path.getsize(filepath)
-                        initial_pending_list.append({
-                            "local_path": filepath,
-                            "tmdb_id": tmdb_key,
-                            "image_type": content_type,
-                            "size": file_size
-                        })
-                        # 将已处理的文件路径添加到集合中
-                        processed_files.add(filepath)
-                    except OSError as e:
-                        ui_logger.error(f"❌ 无法获取文件大小: {filepath}。错误: {e}", task_category=task_cat)
+                if os.path.isfile(filepath):
+                    if filepath not in processed_files:
+                        try:
+                            file_size = os.path.getsize(filepath)
+                            initial_pending_list.append({
+                                "local_path": filepath,
+                                "tmdb_id": tmdb_key,
+                                "image_type": content_type,
+                                "size": file_size
+                            })
+                            processed_files.add(filepath)
+                        except OSError as e:
+                            ui_logger.error(f"❌ 无法获取文件大小: {filepath}。错误: {e}", task_category=task_cat)
+                    else:
+                        # --- 新增 2: 打印去重日志 ---
+                        duplicate_count += 1
+                        ui_logger.debug(f"   - [去重] 文件 '{os.path.basename(filepath)}' (来自 Emby ID: {item_id}) 已被处理过，跳过。", task_category=task_cat)
         
-        ui_logger.info(f"✅ [阶段1.2] 本地扫描完成，共找到 {len(initial_pending_list)} 个待处理文件。", task_category=task_cat)
+        log_message = f"✅ [阶段1.2] 本地扫描完成，共找到 {len(initial_pending_list)} 个待处理文件。"
+        if duplicate_count > 0:
+            log_message += f" (已自动去重 {duplicate_count} 个重复项)"
+        ui_logger.info(log_message, task_category=task_cat)
+        
         return initial_pending_list
 
     def _get_repo_index(self, repo_config: Dict) -> Optional[Dict]:
