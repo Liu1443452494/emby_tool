@@ -51,6 +51,9 @@ class PosterManagerLogic:
         """从 Emby 获取媒体项的详细信息"""
         import requests
         try:
+            # --- 核心修改：确保 Type 字段总是被请求 ---
+            if "Type" not in fields:
+                fields += ",Type"
             url = f"{self.config.server_config.server}/Users/{self.config.server_config.user_id}/Items/{item_id}"
             params = {"api_key": self.config.server_config.api_key, "Fields": fields}
             proxies = self.proxy_manager.get_proxies(url)
@@ -62,19 +65,26 @@ class PosterManagerLogic:
             raise e
 
     def _get_tmdb_id(self, item_id: str) -> Optional[str]:
-        """从 Emby 获取媒体项的 TMDB ID"""
+        """从 Emby 获取媒体项的 TMDB ID，并返回带类型前缀的复合键 (e.g., 'movie-12345')"""
         try:
-            url = f"{self.config.server_config.server}/Users/{self.config.server_config.user_id}/Items/{item_id}"
-            params = {"api_key": self.config.server_config.api_key, "Fields": "ProviderIds"}
-            proxies = self.proxy_manager.get_proxies(url)
-            response = self.session.get(url, params=params, timeout=15, proxies=proxies)
-            response.raise_for_status()
-            provider_ids = response.json().get("ProviderIds", {})
+            # --- 核心修改：调用我们已修改的详情函数，同时获取 ProviderIds 和 Type ---
+            details = self._get_emby_item_details(item_id, "ProviderIds,Type")
+            
+            provider_ids = details.get("ProviderIds", {})
             provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
-            return provider_ids_lower.get("tmdb")
+            tmdb_id = provider_ids_lower.get("tmdb")
+            item_type = details.get("Type") # "Movie" or "Series"
+
+            if tmdb_id and item_type:
+                prefix = 'tv' if item_type == 'Series' else 'movie'
+                return f"{prefix}-{tmdb_id}"
+            # --- 修改结束 ---
+            
+            return None
         except Exception as e:
             logging.error(f"【海报备份】获取媒体项 {item_id} 的 TMDB ID 失败: {e}")
             return None
+
 
     def _scan_local_cache(self, media_ids: List[str], content_types: List[str], task_cat: str) -> List[Dict]:
         """扫描本地缓存目录，生成初始待办列表"""
@@ -94,23 +104,26 @@ class PosterManagerLogic:
 
 
         with ThreadPoolExecutor(max_workers=10) as executor:
+            # --- 核心修改 1/2: _get_tmdb_id 现在返回复合键 ---
             future_to_id = {executor.submit(self._get_tmdb_id, item_id): item_id for item_id in media_ids}
             for future in future_to_id:
                 item_id = future_to_id[future]
                 try:
-                    tmdb_id = future.result()
-                    if tmdb_id:
-                        tmdb_id_map[item_id] = tmdb_id
+                    # tmdb_key 现在是 'movie-12345' 或 'tv-12345'
+                    tmdb_key = future.result()
+                    if tmdb_key:
+                        tmdb_id_map[item_id] = tmdb_key
                 except Exception as e:
                     logging.error(f"【海报备份】获取 TMDB ID 时出错 (Emby ID: {item_id}): {e}")
 
         for item_id in media_ids:
-            tmdb_id = tmdb_id_map.get(item_id)
-            if not tmdb_id:
+            tmdb_key = tmdb_id_map.get(item_id)
+            if not tmdb_key:
                 ui_logger.warning(f"⚠️ 跳过 Emby ID: {item_id}，因为它没有关联的 TMDB ID。", task_category=task_cat)
                 continue
 
-            item_cache_dir = os.path.join(self.pm_config.local_cache_path, tmdb_id)
+            # item_cache_dir 现在是 /path/to/cache/movie-12345
+            item_cache_dir = os.path.join(self.pm_config.local_cache_path, tmdb_key)
             if not os.path.isdir(item_cache_dir):
                 continue
 
@@ -122,9 +135,10 @@ class PosterManagerLogic:
                 if os.path.isfile(filepath):
                     try:
                         file_size = os.path.getsize(filepath)
+                        # --- 核心修改 2/2: 将复合键存入 tmdb_id 字段 ---
                         initial_pending_list.append({
                             "local_path": filepath,
-                            "tmdb_id": tmdb_id,
+                            "tmdb_id": tmdb_key,
                             "image_type": content_type,
                             "size": file_size
                         })
@@ -683,23 +697,28 @@ class PosterManagerLogic:
             with open(id_map_file, 'r', encoding='utf-8') as f:
                 id_map = json.load(f)
 
+            # --- 核心修改：整个匹配逻辑重构 ---
             # 阶段二：根据远程备份，构建初始的 Emby 媒体检查列表
             ui_logger.info("➡️ [阶段2/5] 正在根据远程备份构建初始检查列表...", task_category=task_cat)
-            target_tmdb_ids = {
-                key.split('-')[0] for key, value in remote_map.items()
+            
+            # 1. 从远程备份中提取所有带类型前缀的 TMDB Key
+            target_tmdb_keys = {
+                key.split('-')[0] + '-' + key.split('-')[1] for key in remote_map.keys()
                 if any(f'-{ct}' in key for ct in content_types)
             }
-            
+
+            # 2. 使用这些复合键直接在 id_map 中查找对应的 Emby ID
             initial_emby_ids_to_check = set()
-            for tmdb_id in target_tmdb_ids:
-                if tmdb_id in id_map:
-                    initial_emby_ids_to_check.update(id_map[tmdb_id])
+            for tmdb_key in target_tmdb_keys:
+                if tmdb_key in id_map:
+                    initial_emby_ids_to_check.update(id_map[tmdb_key])
             
             if not initial_emby_ids_to_check:
                 ui_logger.info("✅ 远程备份中的所有媒体在您的 Emby 库中均未找到，任务完成。", task_category=task_cat)
                 return
 
-            ui_logger.info(f"   - 远程数据库包含 {len(target_tmdb_ids)} 个有备份的TMDB ID，对应到本地 Emby 库中的 {len(initial_emby_ids_to_check)} 个媒体实例。", task_category=task_cat)
+            ui_logger.info(f"   - 远程数据库包含 {len(target_tmdb_keys)} 个有备份的TMDB-ID-类型组合，对应到本地 Emby 库中的 {len(initial_emby_ids_to_check)} 个媒体实例。", task_category=task_cat)
+            # --- 修改结束 ---
 
             # 阶段三：根据用户指定的范围，过滤出最终要处理的媒体
             ui_logger.info("➡️ [阶段3/5] 正在根据用户指定的范围进行过滤...", task_category=task_cat)
@@ -721,7 +740,8 @@ class PosterManagerLogic:
             task_manager.update_task_progress(task_id, 0, total_items_to_check)
 
             with ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "Name,ImageTags,ProviderIds"): item_id for item_id in final_item_ids_to_process}
+                # --- 核心修改：请求 Type 字段 ---
+                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "Name,ImageTags,ProviderIds,Type"): item_id for item_id in final_item_ids_to_process}
                 for i, future in enumerate(as_completed(future_to_id)):
                     if cancellation_event.is_set():
                         ui_logger.warning("⚠️ 任务在构建计划阶段被取消。", task_category=task_cat)
@@ -732,16 +752,23 @@ class PosterManagerLogic:
                         details = future.result()
                         item_name = details.get("Name", f"ID {item_id}")
                         image_tags = details.get("ImageTags", {})
+                        
+                        # --- 核心修改：构建复合键 ---
                         provider_ids = details.get("ProviderIds", {})
                         provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
-                        tmdb_id = provider_ids_lower.get("tmdb")
-
-                        if not tmdb_id:
-                            ui_logger.debug(f"   - [跳过] 媒体【{item_name}】(Emby Item ID: {item_id}) 缺少 TMDB ID。", task_category=task_cat)
+                        tmdb_id_num = provider_ids_lower.get("tmdb")
+                        item_type = details.get("Type")
+                        
+                        if not tmdb_id_num or not item_type:
+                            ui_logger.debug(f"   - [跳过] 媒体【{item_name}】(Emby Item ID: {item_id}) 缺少 TMDB ID 或类型信息。", task_category=task_cat)
                             continue
+                        
+                        prefix = 'tv' if item_type == 'Series' else 'movie'
+                        tmdb_key = f"{prefix}-{tmdb_id_num}"
+                        # --- 修改结束 ---
 
                         for image_type in content_types:
-                            remote_key = f"{tmdb_id}-{image_type}"
+                            remote_key = f"{tmdb_key}-{image_type}"
                             if remote_key not in remote_map:
                                 continue
 
@@ -756,7 +783,8 @@ class PosterManagerLogic:
                                     ui_logger.info(f"   - [跳过] 媒体【{item_name}】(Emby Item ID: {item_id}) 已存在 {image_type} 图片。", task_category=task_cat)
                             
                             if needs_restore:
-                                restore_plan.append({"item_id": item_id, "item_name": item_name, "image_type": image_type, "tmdb_id": tmdb_id})
+                                # --- 核心修改：传递复合键 ---
+                                restore_plan.append({"item_id": item_id, "item_name": item_name, "image_type": image_type, "tmdb_id": tmdb_key})
                     except Exception as e:
                         ui_logger.error(f"   - ❌ 获取媒体 (Emby Item ID: {item_id}) 详情失败: {e}", task_category=task_cat)
                     finally:
@@ -777,11 +805,12 @@ class PosterManagerLogic:
                 item_id = plan_item["item_id"]
                 item_name = plan_item["item_name"]
                 image_type = plan_item["image_type"]
-                tmdb_id = plan_item["tmdb_id"]
+                tmdb_key = plan_item["tmdb_id"]
                 
                 ui_logger.info(f"  -> 正在为【{item_name}】(Emby Item ID: {item_id}) 恢复 {image_type}...", task_category=task_cat)
                 try:
-                    self._restore_single_image_from_plan(item_id, image_type, tmdb_id, remote_map, task_cat)
+                    # --- 核心修改：传递复合键 ---
+                    self._restore_single_image_from_plan(item_id, image_type, tmdb_key, remote_map, task_cat)
                     ui_logger.info(f"     - ✅ 成功恢复【{item_name}】(Emby Item ID: {item_id}) 的 {image_type} 图片。", task_category=task_cat)
                 except Exception as e:
                     ui_logger.error(f"     - ❌ 恢复【{item_name}】(Emby Item ID: {item_id}) 的 {image_type} 图片失败: {e}", task_category=task_cat)
@@ -795,24 +824,25 @@ class PosterManagerLogic:
             raise e
 
 
-    # backend/poster_manager_logic.py (函数替换)
+    
 
-    def _restore_single_image_from_plan(self, item_id: str, image_type: str, tmdb_id: str, remote_map: Dict, task_cat: str):
+    def _restore_single_image_from_plan(self, item_id: str, image_type: str, tmdb_key: str, remote_map: Dict, task_cat: str):
         """根据计划，恢复单张指定类型的图片"""
         import requests
         
-        key = f"{tmdb_id}-{image_type}"
+        # --- 核心修改：使用复合键 tmdb_key ---
+        key = f"{tmdb_key}-{image_type}"
         image_info = remote_map.get(key)
 
         if not image_info:
-            # --- 核心修改：修正日志打印中的变量位置 ---
-            ui_logger.debug(f"     - 跳过: 在远程备份中未找到 TMDB ID {tmdb_id} 的 {image_type} 图片。", task_category=task_cat)
+            ui_logger.debug(f"     - 跳过: 在远程备份中未找到 TMDB Key {tmdb_key} 的 {image_type} 图片。", task_category=task_cat)
             return
 
         image_url = image_info.get("url")
         if not image_url:
-            ui_logger.warning(f"     - ⚠️ 警告: 远程备份中 TMDB ID {tmdb_id} 的 {image_type} 图片记录缺少下载URL。", task_category=task_cat)
+            ui_logger.warning(f"     - ⚠️ 警告: 远程备份中 TMDB Key {tmdb_key} 的 {image_type} 图片记录缺少下载URL。", task_category=task_cat)
             return
+        # --- 修改结束 ---
 
         try:
             cooldown = self.pm_config.image_download_cooldown_seconds
@@ -862,6 +892,8 @@ class PosterManagerLogic:
             raise e
 
 
+    # backend/poster_manager_logic.py (函数替换)
+
     def start_restore_task(
         self,
         scope: ScheduledTasksTargetScope,
@@ -875,7 +907,6 @@ class PosterManagerLogic:
         """
         if self.pm_config.restore_mode == 'from_remote':
             from concurrent.futures import as_completed
-            # --- 核心修改：补上缺失的 task_manager 参数 ---
             self.start_restore_from_remote_task(scope, content_types, cancellation_event, task_id, task_manager)
             return
     
@@ -905,7 +936,8 @@ class PosterManagerLogic:
             item_details_map = {}
             from concurrent.futures import as_completed
             with ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "Name,ImageTags,ProviderIds"): item_id for item_id in media_ids}
+                # --- 核心修改：请求 Type 字段 ---
+                future_to_id = {executor.submit(self._get_emby_item_details, item_id, "Name,ImageTags,ProviderIds,Type"): item_id for item_id in media_ids}
                 for future in as_completed(future_to_id):
                     item_id = future_to_id[future]
                     try:
@@ -925,16 +957,23 @@ class PosterManagerLogic:
 
                 item_name = details.get("Name", f"ID {item_id}")
                 image_tags = details.get("ImageTags", {})
+                
+                # --- 核心修改：构建复合键 ---
                 provider_ids_lower = {k.lower(): v for k, v in details.get("ProviderIds", {}).items()}
-                tmdb_id = provider_ids_lower.get("tmdb")
+                tmdb_id_num = provider_ids_lower.get("tmdb")
+                item_type = details.get("Type")
 
-                if not tmdb_id:
-                    ui_logger.debug(f"   - [跳过] 媒体【{item_name}】缺少 TMDB ID。", task_category=task_cat)
+                if not tmdb_id_num or not item_type:
+                    ui_logger.debug(f"   - [跳过] 媒体【{item_name}】缺少 TMDB ID 或类型信息。", task_category=task_cat)
                     task_manager.update_task_progress(task_id, i + 1, total_items_to_check)
                     continue
+                
+                prefix = 'tv' if item_type == 'Series' else 'movie'
+                tmdb_key = f"{prefix}-{tmdb_id_num}"
+                # --- 修改结束 ---
 
                 for image_type in content_types:
-                    remote_key = f"{tmdb_id}-{image_type}"
+                    remote_key = f"{tmdb_key}-{image_type}"
                     if remote_key not in remote_map:
                         skipped_for_no_backup += 1
                         continue
@@ -950,7 +989,8 @@ class PosterManagerLogic:
                             ui_logger.info(f"   - [跳过] 媒体【{item_name}】已存在 {image_type} 图片。", task_category=task_cat)
                     
                     if needs_restore:
-                        restore_plan.append({"item_id": item_id, "item_name": item_name, "image_type": image_type, "tmdb_id": tmdb_id})
+                        # --- 核心修改：传递复合键 ---
+                        restore_plan.append({"item_id": item_id, "item_name": item_name, "image_type": image_type, "tmdb_id": tmdb_key})
                 
                 task_manager.update_task_progress(task_id, i + 1, total_items_to_check)
 
@@ -972,11 +1012,12 @@ class PosterManagerLogic:
                 item_id = plan_item["item_id"]
                 item_name = plan_item["item_name"]
                 image_type = plan_item["image_type"]
-                tmdb_id = plan_item["tmdb_id"]
+                tmdb_key = plan_item["tmdb_id"]
                 
                 ui_logger.info(f"  -> 正在为【{item_name}】恢复 {image_type}...", task_category=task_cat)
                 try:
-                    self._restore_single_image_from_plan(item_id, image_type, tmdb_id, remote_map, task_cat)
+                    # --- 核心修改：传递复合键 ---
+                    self._restore_single_image_from_plan(item_id, image_type, tmdb_key, remote_map, task_cat)
                     ui_logger.info(f"     - ✅ 成功恢复【{item_name}】的 {image_type} 图片。", task_category=task_cat)
                 except Exception as e:
                     ui_logger.error(f"     - ❌ 恢复【{item_name}】的 {image_type} 图片失败: {e}", task_category=task_cat)
@@ -989,8 +1030,6 @@ class PosterManagerLogic:
             ui_logger.error(f"❌ 恢复任务执行失败: {e}", task_category=task_cat, exc_info=True)
             raise e
         
-
-    # backend/poster_manager_logic.py (新增代码块)
 
     def start_restore_from_local_task(
         self,
@@ -1287,20 +1326,28 @@ class PosterManagerLogic:
         except Exception as e:
             ui_logger.error(f"❌ [调试] 处理 Emby 图片元数据时发生未知错误: {e}", task_category=task_cat, exc_info=True)
             return {}
+        
+    # backend/poster_manager_logic.py (函数替换)
+
     def get_single_item_details(self, item_id: str) -> Dict:
         """获取单个媒体项在 Emby 和 GitHub 两侧的图片详情"""
 
-        emby_details = self._get_emby_item_details(item_id, "Name,ProductionYear,ProviderIds")
+        # --- 核心修改：请求 Type 字段 ---
+        emby_details = self._get_emby_item_details(item_id, "Name,ProductionYear,ProviderIds,Type")
         emby_images = self._get_emby_image_details(item_id)
         
-
         github_images = {}
         provider_ids_lower = {k.lower(): v for k, v in emby_details.get("ProviderIds", {}).items()}
-        tmdb_id = provider_ids_lower.get("tmdb")
-        if tmdb_id:
+        tmdb_id_num = provider_ids_lower.get("tmdb")
+        item_type = emby_details.get("Type")
+
+        if tmdb_id_num and item_type:
+            prefix = 'tv' if item_type == 'Series' else 'movie'
+            tmdb_key = f"{prefix}-{tmdb_id_num}"
+            
             remote_map = self._get_aggregated_remote_index(f"单体查询({emby_details.get('Name')})")
             for img_type in ["poster", "logo", "fanart"]:
-                key = f"{tmdb_id}-{img_type}"
+                key = f"{tmdb_key}-{img_type}"
                 if key in remote_map:
                     gh_info = remote_map[key]
                     size_bytes = gh_info.get("size", 0)
@@ -1309,6 +1356,7 @@ class PosterManagerLogic:
                         "resolution": "未知分辨率",
                         "size": f"{size_bytes / 1024 / 1024:.2f} MB" if size_bytes > 1024 * 1024 else f"{size_bytes / 1024:.1f} KB"
                     }
+        # --- 修改结束 ---
 
         return {
             "emby": emby_images,
@@ -1317,9 +1365,12 @@ class PosterManagerLogic:
 
 
 
+    # backend/poster_manager_logic.py (函数替换)
+
     def backup_single_image(self, item_id: str, image_type: str):
         """单体备份：从Emby下载图片，存入本地缓存，再上传到GitHub"""
-        item_details = self._get_emby_item_details(item_id, "Name,ProviderIds")
+        # --- 核心修改：请求 Type 字段 ---
+        item_details = self._get_emby_item_details(item_id, "Name,ProviderIds,Type")
         item_name = item_details.get("Name", f"ID {item_id}")
         image_type_map = {"poster": "海报", "logo": "Logo", "fanart": "背景图"}
         image_type_cn = image_type_map.get(image_type, image_type)
@@ -1327,9 +1378,16 @@ class PosterManagerLogic:
         task_cat = f"单体备份-{item_name}"
         ui_logger.info(f"➡️ 开始为【{item_name}】执行单体备份 ({image_type_cn})...", task_category=task_cat)
         
+        # --- 核心修改：构建复合键 ---
         provider_ids_lower = {k.lower(): v for k, v in item_details.get("ProviderIds", {}).items()}
-        tmdb_id = provider_ids_lower.get("tmdb")
-        if not tmdb_id: raise ValueError("媒体项缺少 TMDB ID。")
+        tmdb_id_num = provider_ids_lower.get("tmdb")
+        emby_item_type = item_details.get("Type")
+        if not tmdb_id_num or not emby_item_type: 
+            raise ValueError("媒体项缺少 TMDB ID 或类型信息。")
+        
+        prefix = 'tv' if emby_item_type == 'Series' else 'movie'
+        tmdb_key = f"{prefix}-{tmdb_id_num}"
+        # --- 修改结束 ---
         
         emby_key = {"poster": "Primary", "logo": "Logo", "fanart": "Backdrop"}.get(image_type)
         emby_image_url = f"{self.config.server_config.server}/Items/{item_id}/Images/{emby_key}"
@@ -1339,7 +1397,8 @@ class PosterManagerLogic:
         image_data = response.content
 
         filename = {"poster": "poster.jpg", "logo": "clearlogo.png", "fanart": "fanart.jpg"}.get(image_type)
-        local_dir = os.path.join(self.pm_config.local_cache_path, tmdb_id)
+        # --- 核心修改：使用复合键构建本地路径 ---
+        local_dir = os.path.join(self.pm_config.local_cache_path, tmdb_key)
         os.makedirs(local_dir, exist_ok=True)
         local_path = os.path.join(local_dir, filename)
         with open(local_path, 'wb') as f:
@@ -1348,10 +1407,11 @@ class PosterManagerLogic:
 
         item_info = {
             "local_path": local_path,
-            "tmdb_id": tmdb_id,
+            "tmdb_id": tmdb_key,
             "image_type": image_type,
             "size": len(image_data)
         }
+        # --- 修改结束 ---
         remote_map = self._get_aggregated_remote_index(task_cat)
         
         overwrite_remote = True 
@@ -1367,16 +1427,20 @@ class PosterManagerLogic:
 
 
 
+    # backend/poster_manager_logic.py (函数替换)
+
     def delete_single_image(self, item_id: str, image_type: str):
         """单体删除：从GitHub删除图片和索引条目"""
         task_cat = f"单体删除({item_id}-{image_type})"
         ui_logger.info(f"➡️ 开始执行单体删除...", task_category=task_cat)
 
-        tmdb_id = self._get_tmdb_id(item_id)
-        if not tmdb_id: raise ValueError("媒体项缺少 TMDB ID。")
+        # --- 核心修改：使用 _get_tmdb_id 获取复合键 ---
+        tmdb_key = self._get_tmdb_id(item_id)
+        if not tmdb_key: raise ValueError("媒体项缺少 TMDB ID。")
 
         remote_map = self._get_aggregated_remote_index(task_cat)
-        key = f"{tmdb_id}-{image_type}"
+        key = f"{tmdb_key}-{image_type}"
+        # --- 修改结束 ---
         image_info = remote_map.get(key)
         if not image_info: raise ValueError("在远程备份中未找到该图片。")
 
@@ -1394,17 +1458,20 @@ class PosterManagerLogic:
         owner, repo_name = match.groups()
         
         filename = {"poster": "poster.jpg", "logo": "clearlogo.png", "fanart": "fanart.jpg"}.get(image_type)
-        github_path = f"images/{tmdb_id}/{filename}"
+        # --- 核心修改：使用复合键构建 GitHub 路径 ---
+        github_path = f"images/{tmdb_key}/{filename}"
         api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/{github_path}"
         delete_payload = {"message": f"refactor: Delete {github_path}", "sha": sha, "branch": branch}
         self._execute_github_write_request("DELETE", api_url, pat, delete_payload)
         ui_logger.info(f"  - ✅ 已成功从 GitHub 删除文件: {github_path}", task_category=task_cat)
 
         index = self._get_repo_index(repo_config.model_dump())
-        if str(tmdb_id) in index['images'] and image_type in index['images'][str(tmdb_id)]:
-            del index['images'][str(tmdb_id)][image_type]
-            if not index['images'][str(tmdb_id)]:
-                del index['images'][str(tmdb_id)]
+        # --- 核心修改：使用复合键操作索引 ---
+        if tmdb_key in index['images'] and image_type in index['images'][tmdb_key]:
+            del index['images'][tmdb_key][image_type]
+            if not index['images'][tmdb_key]:
+                del index['images'][tmdb_key]
+        # --- 修改结束 ---
         
         index['last_updated'] = datetime.now().isoformat()
         index_api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/database.json"
@@ -1438,16 +1505,15 @@ class PosterManagerLogic:
         ui_logger.info(f"➡️ 开始为【{item_name}】恢复【{image_type_cn}】...", task_category=task_cat)
 
         try:
-            provider_ids = item_details.get("ProviderIds", {})
-            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
-            tmdb_id = provider_ids_lower.get("tmdb")
-            if not tmdb_id:
+            # --- 核心修改：使用 _get_tmdb_id 获取复合键 ---
+            tmdb_key = self._get_tmdb_id(item_id)
+            if not tmdb_key:
                 raise ValueError("媒体项缺少 TMDB ID，无法进行恢复。")
 
             remote_map = self._get_aggregated_remote_index(task_cat)
             
-            
-            self._restore_single_image_from_plan(item_id, image_type, tmdb_id, remote_map, task_cat)
+            self._restore_single_image_from_plan(item_id, image_type, tmdb_key, remote_map, task_cat)
+            # --- 修改结束 ---
             
             ui_logger.info(f"🎉 为【{item_name}】恢复【{image_type_cn}】的任务已完成。", task_category=task_cat)
         
