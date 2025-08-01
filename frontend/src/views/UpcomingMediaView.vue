@@ -534,7 +534,11 @@ const currentLoading = computed(() => {
 });
 
 const currentType = computed(() => {
-  return activeTab.value === 'subscriptions' ? 'subscription' : 'default';
+  // --- 修改 ---
+  if (activeTab.value === 'subscriptions') return 'subscription';
+  if (activeTab.value === 'permanent') return 'permanent';
+  return 'default';
+  // --- 修改结束 ---
 });
 
 // --- 核心修正：将 parseCron 函数定义移到最前面 ---

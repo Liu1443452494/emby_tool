@@ -36,6 +36,7 @@
               </el-icon>
             </div>
             <div 
+              v-if="props.type !== 'permanent'"
               class="action-button ignore-button"
               @click.stop="$emit('ignore', item)"
               title="不感兴趣"
@@ -43,6 +44,7 @@
               <el-icon><View /></el-icon>
             </div>
             <div 
+              v-if="props.type !== 'permanent'"
               class="action-button subscribe-button" 
               :class="{ 'subscribed': isSubscribed(item) }"
               @click.stop="toggleSubscription(item)"

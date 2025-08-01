@@ -383,7 +383,7 @@ class UpcomingLogic:
         
 
     def update_ignore_status(self, tmdb_id: int) -> bool:
-        """将指定项目标记为不感兴趣"""
+        """将指定项目标记为不感兴趣，并联动取消其永久收藏状态。"""
         task_cat = "即将上映-忽略"
         try:
             with FileLock(UPCOMING_DB_FILE + ".lock", timeout=10):
@@ -395,12 +395,23 @@ class UpcomingLogic:
                     return False
                 
                 item = db_content['data'][tmdb_id_str]
+                
+                # --- 核心修改：联动逻辑 ---
+                was_permanent = item.get('is_permanent', False)
                 item['is_ignored'] = True
+                item['is_permanent'] = False # 无论之前是什么状态，都强制设为 false
+                # --- 修改结束 ---
                 
                 with open(UPCOMING_DB_FILE, 'w', encoding='utf-8') as f:
                     json.dump(db_content, f, ensure_ascii=False, indent=4)
             
-            ui_logger.info(f"✅ 已将《{item['title']}》标记为不感兴趣，它将不再显示。", task_category=task_cat)
+            # --- 核心修改：增强日志 ---
+            log_message = f"✅ 已将《{item['title']}》标记为不感兴趣，它将不再显示。"
+            if was_permanent:
+                log_message += " 同时，该项目的“永久收藏”状态已被自动取消。"
+            ui_logger.info(log_message, task_category=task_cat)
+            # --- 修改结束 ---
+            
             return True
         except Timeout:
             ui_logger.error("❌ 操作失败：获取文件锁超时，另一进程可能正在操作数据库。", task_category=task_cat)
