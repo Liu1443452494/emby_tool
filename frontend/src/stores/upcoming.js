@@ -324,6 +324,29 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     }
   }
 
+  async function ignoreItem(item) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/upcoming/ignore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tmdb_id: item.tmdb_id }),
+      });
+      if (!response.ok) throw new Error(`标记“不感兴趣”失败`);
+      
+      // 乐观 UI 更新
+      const index = allData.value.findIndex(i => i.tmdb_id === item.tmdb_id);
+      if (index > -1) {
+        allData.value.splice(index, 1);
+      }
+      
+      showMessage('success', `《${item.title}》将不再显示。`);
+      return true;
+    } catch (error) {
+      showMessage('error', error.message);
+      return false;
+    }
+  }
+
   return {
     config,
     filterOptions,
@@ -348,5 +371,6 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     resetFilters,
     triggerNotification,
     triggerPruning,
+    ignoreItem,
   };
 });

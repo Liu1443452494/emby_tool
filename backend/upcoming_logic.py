@@ -112,7 +112,7 @@ class UpcomingLogic:
                 release_date = item.get('released') or item.get('first_aired')
                 if release_date:
                     release_date_str = datetime.fromisoformat(release_date.replace('Z', '+00:00')).strftime('%Y-%m-%d')
-                    verified_items.append({'tmdb_id': tmdb_id, 'media_type': media_type, 'release_date': release_date_str})
+                    verified_items.append({'tmdb_id': tmdb_id, 'media_type': media_type, 'release_date': release_date_str, 'is_ignored': False})
                     processed_ids.add(tmdb_id)
             else:
                 logging.debug(f"  - [丢弃] {title}: 低优先级 (国家: {country}, 语言: {language})")
@@ -163,7 +163,6 @@ class UpcomingLogic:
             filtered_items = self._apply_3d_filtering(raw_items, filters)
 
             ui_logger.info(f"➡️ [步骤 3/3] 开始从 TMDB 获取 {len(filtered_items)} 个项目的详细中文信息 (将跳过已有缓存)...", task_category=task_cat)
-            # --- 核心修改：引入计数器 ---
             new_items_count = 0
             skipped_items_count = 0
             
@@ -177,9 +176,7 @@ class UpcomingLogic:
                 
                 try:
                     endpoint = f"{item['media_type']}/{item['tmdb_id']}"
-                    # --- 核心修改：增加 'credits' 到 append_to_response ---
                     params = {'language': 'zh-CN', 'append_to_response': 'images,credits'}
-                    # --- 修改结束 ---
                     details = self.tmdb_logic._tmdb_request(endpoint, params)
                     
                     if not details.get('poster_path'):
@@ -195,10 +192,8 @@ class UpcomingLogic:
                     ]
                     origin_country = details.get('origin_country', [])
                     popularity = details.get('popularity', 0)
-                    # --- 新增：提取主要演员 ---
                     cast = details.get('credits', {}).get('cast', [])
-                    actors = [actor['name'] for actor in cast[:6]] # 提取前6位主要演员
-                    # --- 新增结束 ---
+                    actors = [actor['name'] for actor in cast[:6]]
 
                     db_content['data'][tmdb_id_str] = {
                         "tmdb_id": details['id'],
@@ -212,10 +207,9 @@ class UpcomingLogic:
                         "genres": genres,
                         "origin_country": origin_country,
                         "popularity": popularity,
-                        # --- 新增：保存演员列表 ---
                         "actors": actors,
-                        "is_permanent": False
-                        # --- 新增结束 ---
+                        "is_permanent": False,
+                        "is_ignored": False
                     }
                     new_items_count += 1
                     logging.debug(f"  - [新增] 成功获取 TMDB ID: {tmdb_id_str} 的数据。")
@@ -223,20 +217,16 @@ class UpcomingLogic:
                 except Exception as e:
                     logging.error(f"获取 TMDB 详情失败 (ID: {item['tmdb_id']}): {e}")
             
-            # --- 核心修改：构建最终的汇总日志 ---
             summary_log = f"✅ [步骤 3/3] 完成。新增了 {new_items_count} 条高质量结果到数据库。"
             if skipped_items_count > 0:
                 summary_log += f" 跳过了 {skipped_items_count} 条 (因TMDB数据不完整)。"
             ui_logger.info(summary_log, task_category=task_cat)
-            # --- 修改结束 ---
 
-            # 自动化订阅逻辑
             rules = self.config.auto_subscribe_rules
             if rules.enabled:
                 ui_logger.info("➡️ [步骤 4/4] 开始执行自动化订阅...", task_category=task_cat)
                 auto_subscribed_count = 0
                 
-                # 规范化规则，去除空字符串和前后空格
                 rule_actors = {actor.strip().lower() for actor in rules.actors if actor.strip()}
                 rule_countries = {country.strip().lower() for country in rules.countries if country.strip()}
 
@@ -248,7 +238,6 @@ class UpcomingLogic:
                         if item.get('is_subscribed'):
                             continue
 
-                        # --- 新增：日期前置检查 ---
                         try:
                             release_date_str = item.get('release_date')
                             if not release_date_str:
@@ -263,12 +252,9 @@ class UpcomingLogic:
                         except (ValueError, TypeError):
                             logging.debug(f"   - [跳过-自动订阅]《{item.get('title', '未知')}》因日期格式无效 ({item.get('release_date')}) 而被忽略。")
                             continue
-                        # --- 新增结束 ---
 
-                        # 规则一：演员匹配
                         if rule_actors:
                             item_actors_lower = {actor.lower() for actor in item.get('actors', [])}
-                            # 使用集合交集操作查找匹配项
                             matched_actors = rule_actors.intersection(item_actors_lower)
                             if matched_actors:
                                 item['is_subscribed'] = True
@@ -277,7 +263,6 @@ class UpcomingLogic:
                                 ui_logger.info(f"   - ✅ 自动订阅《{item['title']}》，原因：匹配到演员关键词 '{next(iter(matched_actors))}'。", task_category=task_cat)
                                 continue
 
-                        # 规则二：国家与热门度综合匹配
                         if rule_countries and rules.min_popularity > 0:
                             item_countries_lower = {country.lower() for country in item.get('origin_country', [])}
                             if item_countries_lower.intersection(rule_countries):
@@ -291,31 +276,50 @@ class UpcomingLogic:
                         ui_logger.info(f"🎉 [步骤 4/4] 自动化订阅完成，共新增 {auto_subscribed_count} 个订阅。", task_category=task_cat)
                     else:
                         ui_logger.info("   - [步骤 4/4] 自动化订阅检查完成，没有发现符合条件的新项目。", task_category=task_cat)
-            # --- 新增结束 ---
             
             db_content['timestamp'] = datetime.now(timezone.utc).isoformat()
             self._write_db(db_content)
             ui_logger.info(f"🎉 数据库更新完毕！Trakt 日历缓存时间戳已刷新。", task_category=task_cat)
 
+        # --- 核心修改：应用两步过滤 ---
+        # 步骤 1: 预过滤，移除不感兴趣的项目
+        pre_filtered_data = [
+            item for item in db_content['data'].values()
+            if not item.get('is_ignored', False)
+        ]
+        
+        # 步骤 2: 在预过滤结果上应用现有的保留逻辑
         today_str = datetime.now().strftime('%Y-%m-%d')
         final_list = [
-            item for item in db_content['data'].values() 
+            item for item in pre_filtered_data
             if item.get('is_permanent', False) or (item.get('release_date') and item['release_date'] >= today_str)
         ]
+        # --- 修改结束 ---
+        
         return sorted(final_list, key=lambda x: (x['release_date'], -x.get('popularity', 0)))
 
+
     def get_all_data(self) -> List[Dict]:
-        """获取数据库中所有未过期的项目"""
-        # --- 新增 ---
+        """获取数据库中所有对前端可见的项目"""
         task_cat = "即将上映-获取"
         ui_logger.info("➡️ [核心入口] get_all_data 被调用 (仅读取本地数据库)。", task_category=task_cat)
-        # --- 新增结束 ---
         db_content = self._read_db()
+        
+        # --- 核心修改：应用两步过滤 ---
+        # 步骤 1: 预过滤，移除不感兴趣的项目
+        pre_filtered_data = [
+            item for item in db_content['data'].values()
+            if not item.get('is_ignored', False)
+        ]
+        
+        # 步骤 2: 在预过滤结果上应用现有的保留逻辑
         today_str = datetime.now().strftime('%Y-%m-%d')
         final_list = [
-            item for item in db_content['data'].values() 
+            item for item in pre_filtered_data
             if item.get('is_permanent', False) or (item.get('release_date') and item['release_date'] >= today_str)
         ]
+        # --- 修改结束 ---
+        
         return sorted(final_list, key=lambda x: (x['release_date'], -x.get('popularity', 0)))
 
 
@@ -372,6 +376,34 @@ class UpcomingLogic:
             return True
         except Timeout:
             ui_logger.error("❌ 操作失败：获取文件锁超时。", task_category=task_cat)
+            return False
+        except Exception as e:
+            ui_logger.error(f"❌ 操作失败: {e}", task_category=task_cat)
+            return False
+        
+
+    def update_ignore_status(self, tmdb_id: int) -> bool:
+        """将指定项目标记为不感兴趣"""
+        task_cat = "即将上映-忽略"
+        try:
+            with FileLock(UPCOMING_DB_FILE + ".lock", timeout=10):
+                db_content = self._read_db()
+                tmdb_id_str = str(tmdb_id)
+                
+                if tmdb_id_str not in db_content['data']:
+                    ui_logger.error(f"❌ 操作失败：数据库中未找到 TMDB ID 为 {tmdb_id} 的项目。", task_category=task_cat)
+                    return False
+                
+                item = db_content['data'][tmdb_id_str]
+                item['is_ignored'] = True
+                
+                with open(UPCOMING_DB_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(db_content, f, ensure_ascii=False, indent=4)
+            
+            ui_logger.info(f"✅ 已将《{item['title']}》标记为不感兴趣，它将不再显示。", task_category=task_cat)
+            return True
+        except Timeout:
+            ui_logger.error("❌ 操作失败：获取文件锁超时，另一进程可能正在操作数据库。", task_category=task_cat)
             return False
         except Exception as e:
             ui_logger.error(f"❌ 操作失败: {e}", task_category=task_cat)
@@ -628,7 +660,8 @@ class UpcomingLogic:
                 "origin_country": origin_country,
                 "popularity": popularity,
                 "actors": actors,
-                "is_permanent": True # 核心：直接设为 True
+                "is_permanent": True,
+                "is_ignored": False 
             }
 
             # 4. 写入数据库

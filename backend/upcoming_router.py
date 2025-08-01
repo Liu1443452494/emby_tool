@@ -110,6 +110,19 @@ def toggle_permanent_status(payload: Dict[str, Any]):
         return {"success": True}
     raise HTTPException(status_code=500, detail="更新永久收藏状态失败")
 
+@router.post("/ignore")
+def ignore_item(payload: Dict[str, int]):
+    """将一个项目标记为不感兴趣"""
+    tmdb_id = payload.get("tmdb_id")
+    if not tmdb_id:
+        raise HTTPException(status_code=400, detail="缺少 tmdb_id")
+    
+    config = app_config.load_app_config()
+    logic = UpcomingLogic(config)
+    if logic.update_ignore_status(tmdb_id):
+        return {"success": True}
+    raise HTTPException(status_code=500, detail="标记为不感兴趣失败")
+
 @router.post("/search-tmdb")
 def search_tmdb_for_permanent(payload: Dict[str, str]):
     """在TMDB中搜索以供手动添加"""

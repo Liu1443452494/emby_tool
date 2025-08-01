@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ResultsGrid.vue (新文件) -->
+
 <template>
   <div
     class="results-container energy-ring-loading-container"
@@ -34,6 +34,13 @@
                 <StarFilled v-if="item.is_permanent" />
                 <Star v-else />
               </el-icon>
+            </div>
+            <div 
+              class="action-button ignore-button"
+              @click.stop="$emit('ignore', item)"
+              title="不感兴趣"
+            >
+              <el-icon><View /></el-icon>
             </div>
             <div 
               class="action-button subscribe-button" 
@@ -90,10 +97,10 @@ import { defineProps, defineEmits } from 'vue';
 import { useUpcomingStore } from '@/stores/upcoming';
 import { API_BASE_URL, TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES } from '@/config/apiConfig';
 import { COUNTRY_MAP } from '@/config/filterConstants';
-import { Picture, Star, StarFilled } from '@element-plus/icons-vue';
+import { Picture, Star, StarFilled, View } from '@element-plus/icons-vue';
 
 const props = defineProps(['items', 'loading', 'type']);
-const emit = defineEmits(['subscribe', 'unsubscribe', 'permanent-toggle']);
+const emit = defineEmits(['subscribe', 'unsubscribe', 'permanent-toggle', 'ignore']);
 
 const store = useUpcomingStore();
 const getCountryNames = (codes) => {
@@ -247,6 +254,14 @@ const toggleSubscription = (item) => {
 .permanent-button.is-permanent {
   color: #f7ba2a;
   background-color: rgba(247, 186, 42, 0.2);
+}
+
+.ignore-button {
+  font-size: 20px;
+  color: #909399;
+}
+.ignore-button:hover {
+  color: #c8c9cc;
 }
 
 .subscribe-button .heart-icon {

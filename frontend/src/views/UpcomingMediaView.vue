@@ -97,6 +97,7 @@
           @subscribe="handleSubscribe"
           @unsubscribe="handleUnsubscribe"
           @permanent-toggle="handlePermanentToggle"
+          @ignore="handleIgnore"
         />
         <!-- --- 新增：加载状态显示 --- -->
         <div 
@@ -595,6 +596,10 @@ const handleUnsubscribe = (item) => {
 
 const handlePermanentToggle = (item) => {
   store.togglePermanence(item, !item.is_permanent);
+};
+
+const handleIgnore = (item) => {
+  store.ignoreItem(item);
 };
 
 const handleTriggerNotification = async () => {
