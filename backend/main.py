@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Dict, Optional, Literal, Tuple
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Query, Path
 from fastapi.responses import Response
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -568,6 +568,15 @@ def update_upcoming_scheduler():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task_cat = "系统启动"
+    # --- 核心修改 1: 初始化日志系统，但不包括 WebSocket 处理器 ---
+    # 这是为了让日志系统在应用启动的最早期就能工作
+    from log_manager import setup_logging, WebSocketLogHandler
+    setup_logging(add_websocket_handler=False)
+    
+    # --- 核心修改 2: 在主线程（lifespan内）创建并添加 WebSocket 处理器 ---
+    # 此时 get_running_loop() 一定能成功
+    websocket_handler = WebSocketLogHandler()
+    logging.getLogger().addHandler(websocket_handler)
     ui_logger.info("应用启动...", task_category=task_cat)
     required_tools = ['ffmpeg', 'ffprobe']
     for tool in required_tools:
@@ -1039,15 +1048,32 @@ def force_refresh_douban_data_api():
     return {"status": "success", "message": "强制刷新任务已启动，请在“运行任务”页面查看进度。", "task_id": task_id}
 LOG_FILE = os.path.join('/app/data', "app.log")
 
-# backend/main.py (函数替换)
 
 @app.get("/api/logs")
-def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1), level: str = Query("INFO"), category: Optional[str] = Query(None)):
-    if not os.path.exists(LOG_FILE):
-        return {"total": 0, "logs": []}
+def get_logs_api(
+    page: int = Query(1, ge=1), 
+    page_size: int = Query(1000, ge=1), 
+    level: str = Query("INFO"), 
+    category: Optional[str] = Query(None),
+    date: Optional[str] = Query(None, description="查询指定日期的日志，格式 YYYY-MM-DD")
+):
+    LOGS_DIR = "/app/data/logs"
     
+    # --- 核心修改 1: 根据日期参数确定要读取的日志文件 ---
+    log_file_path = ""
+    if date:
+        # 查询历史日志
+        log_file_path = os.path.join(LOGS_DIR, f"app.log.{date}")
+    else:
+        # 查询当天日志
+        log_file_path = os.path.join(LOGS_DIR, "app.log")
+
+    if not os.path.exists(log_file_path):
+        # 如果文件不存在，直接返回空结果，避免后续错误
+        return {"total": 0, "logs": [], "totalPages": 0, "currentPage": page}
+
     try:
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
+        with open(log_file_path, "r", encoding="utf-8") as f:
             all_lines = f.readlines()
         
         log_pattern = re.compile(
@@ -1065,7 +1091,6 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1),
             if match:
                 if current_log_entry:
                     parsed_logs.append(current_log_entry)
-                
                 current_log_entry = match.groupdict()
             elif current_log_entry:
                 current_log_entry['message'] += '\n' + line.rstrip()
@@ -1073,9 +1098,8 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1),
         if current_log_entry:
             parsed_logs.append(current_log_entry)
 
+        # --- 核心修改 2: 过滤逻辑保持不变，但作用于单个日志文件 ---
         filtered_logs = []
-        
-        # 级别过滤 (保持不变)
         if level != "ALL":
             level_to_match = level.upper()
             for log in parsed_logs:
@@ -1084,63 +1108,158 @@ def get_logs_api(page: int = Query(1, ge=1), page_size: int = Query(1000, ge=1),
         else:
             filtered_logs = parsed_logs
         
-        # --- 新增：按类别过滤 ---
         if category:
-            # 从已经按级别过滤过的日志中再次过滤
             final_filtered_logs = [log for log in filtered_logs if log.get('category', '').strip() == category]
         else:
             final_filtered_logs = filtered_logs
-        # --- 新增结束 ---
         
         total_logs = len(final_filtered_logs)
-        start_index = total_logs - ((page - 1) * page_size) - 1
-        end_index = start_index - page_size
+        total_pages = (total_logs + page_size - 1) // page_size
         
-        paginated_logs = []
-        for i in range(start_index, end_index, -1):
-            if i < 0:
-                break
-            paginated_logs.append(final_filtered_logs[i])
+        # --- 核心修改 3: 分页逻辑保持不变，但现在是倒序分页 ---
+        # 最新的日志在最前面
+        start_index = (page - 1) * page_size
+        end_index = start_index + page_size
+        
+        # 从反转后的列表（最新的在前）中切片
+        paginated_logs = final_filtered_logs[::-1][start_index:end_index]
             
-        return {"total": total_logs, "logs": paginated_logs}
+        return {"total": total_logs, "logs": paginated_logs, "totalPages": total_pages, "currentPage": page}
     except Exception as e:
-        logging.error(f"读取日志文件失败: {e}")
+        logging.error(f"❌ 读取日志文件 '{log_file_path}' 失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"读取日志文件失败: {e}")
     
-# backend/main.py (新增代码块)
+
+
+@app.get("/api/logs/dates")
+def get_log_dates_api():
+    """扫描日志目录并返回所有可用的日志日期列表"""
+    LOGS_DIR = "/app/data/logs"
+    dates = []
+    try:
+        if not os.path.exists(LOGS_DIR):
+            logging.warning(f"⚠️ 日志目录 '{LOGS_DIR}' 不存在，无法获取历史日期。")
+            return []
+
+        # 检查当天的日志是否存在
+        if os.path.exists(os.path.join(LOGS_DIR, "app.log")):
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            dates.append(today_str)
+
+        # 扫描历史日志文件
+        for filename in os.listdir(LOGS_DIR):
+            if filename.startswith("app.log."):
+                # 文件名格式为 app.log.YYYY-MM-DD
+                date_part = filename.split('.')[-1]
+                try:
+                    # 验证日期格式是否正确
+                    datetime.strptime(date_part, '%Y-%m-%d')
+                    dates.append(date_part)
+                except ValueError:
+                    # 忽略格式不正确的文件
+                    continue
+        
+        # 按日期降序排序，最新的日期在最前面
+        dates.sort(reverse=True)
+        return dates
+    except Exception as e:
+        logging.error(f"❌ 扫描日志日期失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"扫描日志日期失败: {e}")
+
 
 @app.get("/api/logs/categories")
 def get_log_categories_api():
-    """扫描日志文件并返回所有唯一的任务类别"""
-    if not os.path.exists(LOG_FILE):
-        return []
+    """扫描日志目录并返回所有唯一的任务类别"""
+    LOGS_DIR = "/app/data/logs"
+    categories = set()
     
     try:
-        categories = set()
+        if not os.path.exists(LOGS_DIR):
+            logging.warning(f"⚠️ 日志目录 '{LOGS_DIR}' 不存在，无法获取任务类别。")
+            return []
+
         log_pattern = re.compile(r"-\s+(.+?)\s+→")
 
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                match = log_pattern.search(line)
-                if match:
-                    # strip() 用于去除可能存在的前后空格
-                    categories.add(match.group(1).strip())
+        # --- 核心修改：遍历日志目录下的所有 app.log* 文件 ---
+        for filename in os.listdir(LOGS_DIR):
+            if filename.startswith("app.log"):
+                file_path = os.path.join(LOGS_DIR, filename)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            match = log_pattern.search(line)
+                            if match:
+                                # strip() 用于去除可能存在的前后空格
+                                categories.add(match.group(1).strip())
+                except Exception as file_error:
+                    logging.error(f"❌ 读取日志文件 '{file_path}' 时出错: {file_error}")
+                    # 单个文件读取失败不应中断整个流程
+                    continue
         
         # 返回排序后的列表以保证前端显示顺序稳定
         return sorted(list(categories))
     except Exception as e:
-        logging.error(f"扫描日志类别失败: {e}")
+        logging.error(f"❌ 扫描日志类别失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"扫描日志类别失败: {e}")
     
+
+# backend/main.py (函数替换)
+
 @app.delete("/api/logs")
 def clear_logs_api():
+    LOGS_DIR = "/app/data/logs"
+    
     try:
-        with open(LOG_FILE, "w", encoding="utf-8") as f:
-            f.write("")
-        logging.info("日志文件已被用户清空。")
-        return {"success": True, "message": "日志已清空"}
+        root_logger = logging.getLogger()
+        
+        # --- 核心修改 1: 只关闭和移除文件处理器 ---
+        # 遍历处理器列表的一个副本，因为我们会在循环中修改原列表
+        handlers_to_remove = []
+        for handler in root_logger.handlers:
+            # 通过检查 handler 的类型来精确识别文件处理器
+            if isinstance(handler, logging.handlers.TimedRotatingFileHandler):
+                handlers_to_remove.append(handler)
+
+        for handler in handlers_to_remove:
+            handler.close()
+            root_logger.removeHandler(handler)
+        
+        # --- 文件删除逻辑保持不变 ---
+        if not os.path.exists(LOGS_DIR):
+            # 即使目录不存在，也应该重新添加文件处理器
+            pass
+        else:
+            cleared_count = 0
+            for filename in os.listdir(LOGS_DIR):
+                if filename.startswith("app.log"):
+                    file_path = os.path.join(LOGS_DIR, filename)
+                    try:
+                        os.remove(file_path)
+                        cleared_count += 1
+                    except OSError as e:
+                        logging.error(f"❌ 删除日志文件 '{file_path}' 失败: {e}", exc_info=True)
+            logging.info(f"✅ 日志已清空，共删除 {cleared_count} 个日志文件。")
+
+        # --- 核心修改 2: 只重新添加文件处理器 ---
+        # 创建一个新的文件处理器并添加到根 logger
+        log_file_path = os.path.join(LOGS_DIR, "app.log")
+        file_handler = logging.handlers.TimedRotatingFileHandler(
+            log_file_path, 
+            when='D', 
+            interval=1, 
+            backupCount=14, 
+            encoding='utf-8'
+        )
+        # 需要从 log_manager 导入 CustomLogFormatter
+        from log_manager import CustomLogFormatter
+        file_handler.setFormatter(CustomLogFormatter())
+        root_logger.addHandler(file_handler)
+
+        ui_logger.info("日志文件已清空并重建。", task_category="日志管理")
+        return {"success": True, "message": "所有日志文件已清空"}
+    
     except Exception as e:
-        logging.error(f"清空日志文件失败: {e}")
+        ui_logger.error(f"❌ 清空日志文件时发生未知错误: {e}", task_category="日志管理", exc_info=True)
         raise HTTPException(status_code=500, detail=f"清空日志失败: {e}")
     
 @app.get("/api/media/libraries")

@@ -71,13 +71,19 @@ class LogBroadcaster:
 
 broadcaster = LogBroadcaster()
 
-# --- WebSocketLogHandler 保持不变 ---
+
+
 class WebSocketLogHandler(Handler):
     def __init__(self):
         super().__init__()
+        # --- 核心修改：回到在初始化时获取事件循环 ---
+        # 我们将确保这个类的实例总是在主线程中创建
         try:
             self.loop = asyncio.get_running_loop()
         except RuntimeError:
+            # 如果在没有事件循环的线程中被错误地初始化，
+            # 先获取主线程的事件循环策略，再获取循环实例。
+            # 这是为了兼容某些特殊启动场景。
             self.loop = asyncio.get_event_loop()
 
     def emit(self, record: LogRecord):
@@ -90,34 +96,52 @@ class WebSocketLogHandler(Handler):
             "category": getattr(record, 'task_category', '系统日志'),
             "message": record.getMessage()
         }
+        
+        # self.loop 此时一定存在且正确
         if self.loop.is_running():
             self.loop.call_soon_threadsafe(asyncio.create_task, broadcaster.broadcast(log_data))
 
-# --- setup_logging 保持不变，因为它已经使用了新的 Formatter ---
-def setup_logging():
-    DATA_DIR = "/app/data"
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-    LOG_FILE = os.path.join(DATA_DIR, "app.log")
+
+
+
+def setup_logging(add_websocket_handler: bool = True):
+    LOGS_DIR = "/app/data/logs"
+    if not os.path.exists(LOGS_DIR):
+        os.makedirs(LOGS_DIR)
+    LOG_FILE = os.path.join(LOGS_DIR, "app.log")
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG) 
 
-    if root_logger.hasHandlers():
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
+    # --- 核心修改：在重新配置前，安全关闭并移除所有处理器 ---
+    # 这对于 clear_logs 后的重新初始化至关重要
+    handlers = root_logger.handlers[:]
+    for handler in handlers:
+        handler.close()
+        root_logger.removeHandler(handler)
     
     log_format = CustomLogFormatter()
     
-    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    file_handler = logging.handlers.TimedRotatingFileHandler(
+        LOG_FILE, 
+        when='D', 
+        interval=1, 
+        backupCount=14, 
+        encoding='utf-8'
+    )
     file_handler.setFormatter(log_format)
     root_logger.addHandler(file_handler)
 
-    websocket_handler = WebSocketLogHandler()
-    root_logger.addHandler(websocket_handler)
+    # --- 核心修改：根据参数决定是否添加 WebSocket 处理器 ---
+    # 这允许我们在主线程之外调用 setup_logging 而不引发事件循环错误
+    if add_websocket_handler:
+        websocket_handler = WebSocketLogHandler()
+        root_logger.addHandler(websocket_handler)
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(log_format)
     root_logger.addHandler(console_handler)
     
-    logging.info("日志系统已成功初始化。", extra={'task_category': '系统启动'})
+    # 仅在首次添加 WebSocket 处理器时记录此日志
+    if add_websocket_handler:
+        ui_logger.info("✅ 日志系统已成功初始化 (每日滚动，保留14天)。", task_category='系统启动')
