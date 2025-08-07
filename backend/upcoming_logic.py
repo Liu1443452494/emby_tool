@@ -14,9 +14,8 @@ from trakt_manager import TraktManager
 from tmdb_logic import TmdbLogic
 from notification_manager import notification_manager, escape_markdown
 
-# --- 修改：移除订阅文件常量，修改缓存文件常量 ---
+
 UPCOMING_DB_FILE = os.path.join('/app/data', 'upcoming_database.json')
-# --- 修改结束 ---
 CACHE_DURATION_HOURS = 12
 
 class UpcomingLogic:
@@ -143,6 +142,17 @@ class UpcomingLogic:
             else:
                 ui_logger.warning(f"⚠️ Trakt 日历缓存已失效 ({reason})，开始从 Trakt 刷新...", task_category=task_cat)
 
+            # --- 新增：在刷新开始前，重置所有现有条目的 is_new 状态 ---
+            ui_logger.info("   - [重置状态] 正在将所有旧条目的“新”标记清除...", task_category=task_cat)
+            reset_count = 0
+            for tmdb_id, item_data in db_content.get('data', {}).items():
+                if item_data.get('is_new', False):
+                    item_data['is_new'] = False
+                    reset_count += 1
+            if reset_count > 0:
+                ui_logger.info(f"   - [重置状态] 完成，共清除了 {reset_count} 个旧的“新”标记。", task_category=task_cat)
+            # --- 新增结束 ---
+
             ui_logger.info(f"➡️ [步骤 1/3] 开始从 Trakt 获取未来 {filters['fetch_days']} 天的日历数据...", task_category=task_cat)
             start_date = datetime.now().strftime('%Y-%m-%d')
             raw_items = []
@@ -209,7 +219,8 @@ class UpcomingLogic:
                         "popularity": popularity,
                         "actors": actors,
                         "is_permanent": False,
-                        "is_ignored": False
+                        "is_ignored": False,
+                        "is_new": True, # --- 新增：为新条目添加标记 ---
                     }
                     new_items_count += 1
                     logging.debug(f"  - [新增] 成功获取 TMDB ID: {tmdb_id_str} 的数据。")
@@ -281,7 +292,7 @@ class UpcomingLogic:
             self._write_db(db_content)
             ui_logger.info(f"🎉 数据库更新完毕！Trakt 日历缓存时间戳已刷新。", task_category=task_cat)
 
-        # --- 核心修改：应用两步过滤 ---
+        # --- 核心修改：应用两步过滤，并确保 is_new 字段存在 ---
         # 步骤 1: 预过滤，移除不感兴趣的项目
         pre_filtered_data = [
             item for item in db_content['data'].values()
@@ -290,10 +301,14 @@ class UpcomingLogic:
         
         # 步骤 2: 在预过滤结果上应用现有的保留逻辑
         today_str = datetime.now().strftime('%Y-%m-%d')
-        final_list = [
-            item for item in pre_filtered_data
-            if item.get('is_permanent', False) or (item.get('release_date') and item['release_date'] >= today_str)
-        ]
+        final_list = []
+        for item in pre_filtered_data:
+            # 兼容性处理：确保每个返回的 item 都有 is_new 字段
+            if 'is_new' not in item:
+                item['is_new'] = False
+            
+            if item.get('is_permanent', False) or (item.get('release_date') and item['release_date'] >= today_str):
+                final_list.append(item)
         # --- 修改结束 ---
         
         return sorted(final_list, key=lambda x: (x['release_date'], -x.get('popularity', 0)))
@@ -672,7 +687,8 @@ class UpcomingLogic:
                 "popularity": popularity,
                 "actors": actors,
                 "is_permanent": True,
-                "is_ignored": False 
+                "is_ignored": False ,
+                "is_new": False
             }
 
             # 4. 写入数据库

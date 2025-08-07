@@ -22,6 +22,7 @@
           
           <div class="badge top-left">{{ item.media_type === 'movie' ? '电影' : '剧集' }}</div>
           <div class="badge top-right">{{ item.release_date }}</div>
+          <div v-if="item.is_new" class="badge bottom-left">新</div>
 
           <div class="card-actions">
             <div 
@@ -203,6 +204,14 @@ const toggleSubscription = (item) => {
 .badge.top-right {
   top: 0px;
   right: 4px;
+}
+.badge.bottom-left {
+  bottom: 10px;
+  left: 10px;
+  background-color: rgba(103, 194, 58, 0.8);
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: 14px;
 }
 
 .poster-image {
