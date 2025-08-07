@@ -34,11 +34,6 @@ const router = createRouter({
       name: 'actor-gallery',
       component: () => import('../views/ActorGalleryView.vue')
     },
-     {
-      path: '/signin-center',
-      name: 'signin-center',
-      component: () => import('../views/SignInCenterView.vue')
-    },
     {
       path: '/douban-fixer',
       name: 'douban-fixer',

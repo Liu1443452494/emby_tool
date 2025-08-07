@@ -25,7 +25,6 @@ from episode_renamer_router import router as episode_renamer_router
 from poster_manager_router import router as poster_manager_router
 from actor_role_mapper_router import router as actor_role_mapper_router
 from actor_avatar_mapper_router import router as actor_avatar_mapper_router
-from signin_router import router as signin_router
 from chasing_center_router import router as chasing_center_router
 from upcoming_router import router as upcoming_router
 
@@ -599,22 +598,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             ui_logger.error(f"【调度任务】设置演员中文化自动应用任务失败，CRON表达式可能无效: {e}", task_category=task_cat)
 
-    ui_logger.info("【调度任务】开始设置签到模块任务...", task_category=task_cat)
-    from signin_manager import signin_manager
-    for module_id, module in signin_manager.modules.items():
-        if module.config.enabled and module.config.cron:
-            try:
-                scheduler.add_job(
-                    signin_manager.run_signin,
-                    CronTrigger.from_crontab(module.config.cron),
-                    id=f"signin_{module_id}",
-                    replace_existing=True,
-                    args=[module_id],
-                    kwargs={'cancellation_event': None, 'task_id': None, 'task_manager': None} # 兼容 task_manager 包装
-                )
-                ui_logger.info(f"  - 已成功设置定时任务 '{module.module_name}'，CRON表达式: '{module.config.cron}'", task_category=task_cat)
-            except Exception as e:
-                ui_logger.error(f"  - 设置定时任务 '{module.module_name}' 失败，CRON表达式可能无效: {e}", task_category=task_cat)
     
     ui_logger.info("【调度任务】开始设置通用定时任务...", task_category=task_cat)
     scheduled_conf = config.scheduled_tasks_config
@@ -670,7 +653,6 @@ app.include_router(episode_renamer_router, prefix="/api/episode-renamer")
 app.include_router(poster_manager_router, prefix="/api/poster-manager")
 app.include_router(actor_role_mapper_router, prefix="/api/actor-role-mapper")
 app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper")
-app.include_router(signin_router, prefix="/api/signin")
 app.include_router(chasing_center_router, prefix="/api/chasing-center")
 app.include_router(upcoming_router, prefix="/api/upcoming")
 
@@ -1512,33 +1494,6 @@ def save_scheduled_tasks_config_api(config: ScheduledTasksConfig):
         raise HTTPException(status_code=500, detail=f"保存设置时发生错误: {e}")
     
 
-def update_signin_scheduler():
-    """更新签到模块的定时任务"""
-    task_cat = "系统配置"
-    ui_logger.info("【调度任务】检测到签到配置变更，正在更新调度器...", task_category=task_cat)
-    from signin_manager import signin_manager
-    
-    # 先移除所有旧的签到任务
-    for job in scheduler.get_jobs():
-        if job.id.startswith("signin_"):
-            scheduler.remove_job(job.id)
-            ui_logger.info(f"  - 已移除旧的定时任务: {job.id}", task_category=task_cat)
-
-    # 重新添加所有启用的任务
-    for module_id, module in signin_manager.modules.items():
-        if module.config.enabled and module.config.cron:
-            try:
-                scheduler.add_job(
-                    signin_manager.run_signin,
-                    CronTrigger.from_crontab(module.config.cron),
-                    id=f"signin_{module_id}",
-                    replace_existing=True,
-                    args=[module_id],
-                    kwargs={'cancellation_event': None, 'task_id': None, 'task_manager': None}
-                )
-                ui_logger.info(f"  - 已更新/添加任务 '{module.module_name}' (CRON: {module.config.cron})", task_category=task_cat)
-            except Exception as e:
-                ui_logger.error(f"  - 更新任务 '{module.module_name}' 失败: {e}", task_category=task_cat)
     
 @app.post("/api/scheduled-tasks/{task_id}/trigger")
 def trigger_scheduled_task_once_api(task_id: str):

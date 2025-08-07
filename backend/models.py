@@ -301,23 +301,6 @@ class TraktConfig(BaseModel):
     client_id: str = Field(default="", description="Trakt.tv 应用的 Client ID")
 
 
-class HdhiveSigninConfig(BaseModel):
-    """影巢签到模块的配置"""
-    enabled: bool = Field(default=False, description="是否启用此模块")
-    cookie: str = Field(default="", description="站点Cookie")
-    cron: str = Field(default="0 8 * * *", description="签到周期CRON表达式")
-    random_delay: str = Field(default="1-300", description="随机延迟范围(秒),格式为 min-max")
-    max_retries: int = Field(default=3, description="最大重试次数")
-    retry_interval: int = Field(default=30, description="重试间隔(秒)")
-    history_days: int = Field(default=30, description="历史保留天数")
-    send_notification: bool = Field(default=True, description="任务完成后是否发送通知")
-
-class SigninModulesConfig(BaseModel):
-    """聚合所有签到模块的配置"""
-    hdhive: HdhiveSigninConfig = Field(default_factory=HdhiveSigninConfig)
-    # 未来可在此处添加其他签到模块的配置
-    # another_site: AnotherSiteConfig = Field(default_factory=AnotherSiteConfig)
-
 
 class ChasingCenterConfig(BaseModel):
     """自动化追更中心配置"""
@@ -375,7 +358,6 @@ class AppConfig(BaseModel):
     poster_manager_config: PosterManagerConfig = Field(default_factory=PosterManagerConfig)
     telegram_config: TelegramConfig = Field(default_factory=TelegramConfig)
     trakt_config: TraktConfig = Field(default_factory=TraktConfig)
-    signin_config: SigninModulesConfig = Field(default_factory=SigninModulesConfig)
     chasing_center_config: ChasingCenterConfig = Field(default_factory=ChasingCenterConfig)
     upcoming_config: UpcomingConfig = Field(default_factory=UpcomingConfig)
     actor_role_mapper_config: ActorRoleMapperConfig = Field(default_factory=ActorRoleMapperConfig)
