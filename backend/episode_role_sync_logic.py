@@ -123,6 +123,7 @@ class EpisodeRoleSyncLogic:
         if not character: return ""
         return re.sub(r'^(饰|饰演)\s*', '', character).strip()
 
+
     def run_sync_for_items(
         self, 
         item_ids: List[str], 
@@ -200,6 +201,9 @@ class EpisodeRoleSyncLogic:
                 ui_logger.info(f"   - 剧集《{item_name}》下没有找到任何分集，处理完毕。", task_category=task_category)
                 continue
 
+            # --- 新增：用于记录本剧集是否有任何分集被实际更新 ---
+            series_had_updates = False
+
             for episode in all_episodes:
                 if cancellation_event.is_set(): break
                 
@@ -226,7 +230,6 @@ class EpisodeRoleSyncLogic:
                     person_name = person.get('Name', '')
                     person_tmdb_id = person.get('ProviderIds', {}).get('Tmdb')
                     
-                    # 优先用 TMDB ID 匹配
                     if person_tmdb_id:
                         for actor_name_in_map, map_info in series_role_map.items():
                             if str(map_info.get('tmdb_id')) == str(person_tmdb_id):
@@ -234,7 +237,6 @@ class EpisodeRoleSyncLogic:
                                 source = "角色映射表(TMDB ID)"
                                 break
                     
-                    # 其次用演员名匹配
                     if not new_role and person_name in series_role_map:
                         new_role = series_role_map[person_name].get('role')
                         source = "角色映射表(演员名)"
@@ -259,9 +261,15 @@ class EpisodeRoleSyncLogic:
                 if has_changes:
                     if self._update_item_people(episode_id, episode_name, people, task_category):
                         updated_episode_count += 1
-                    time.sleep(0.1) # 短暂休眠，防止请求过快
+                        series_had_updates = True # --- 新增：标记此剧集有更新 ---
+                    time.sleep(0.1)
 
             if cancellation_event.is_set(): break
+
+            # --- 新增：在处理完一部剧集的所有分集后，进行总结 ---
+            if not series_had_updates:
+                ui_logger.info(f"   - [跳过] 剧集《{item_name}》的所有分集角色名均无需更新。", task_category=task_category)
+            # --- 新增结束 ---
 
         ui_logger.info(f"🎉 任务执行完毕！共扫描 {processed_series_count} 部电视剧，成功更新了 {updated_episode_count} 个分集的角色信息。", task_category=task_category)
         return {"updated_count": updated_episode_count}
