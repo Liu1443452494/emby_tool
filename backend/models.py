@@ -339,6 +339,13 @@ class ActorRoleMapperConfig(BaseModel):
     """演员角色映射器配置"""
     actor_limit: int = Field(default=50, description="每个媒体项处理的演员数量上限", ge=1, le=200)
 
+class EpisodeRoleSyncConfig(BaseModel):
+    """剧集角色同步到分集功能的配置"""
+    enabled: bool = Field(default=False, description="是否启用此功能的定时任务")
+    cron: str = Field(default="", description="定时执行的CRON表达式")
+    actor_limit: int = Field(default=50, description="每个分集处理的演员数量上限", ge=1, le=200)
+    fallback_to_actor_string: bool = Field(default=True, description="当所有匹配失败时，是否将分集英文角色名替换为'演员'")
+
 class AppConfig(BaseModel):
     """应用的主配置模型，聚合所有子配置"""
     server_config: ServerConfig = Field(default_factory=ServerConfig)
@@ -361,6 +368,7 @@ class AppConfig(BaseModel):
     chasing_center_config: ChasingCenterConfig = Field(default_factory=ChasingCenterConfig)
     upcoming_config: UpcomingConfig = Field(default_factory=UpcomingConfig)
     actor_role_mapper_config: ActorRoleMapperConfig = Field(default_factory=ActorRoleMapperConfig)
+    episode_role_sync_config: EpisodeRoleSyncConfig = Field(default_factory=EpisodeRoleSyncConfig)
 
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]

@@ -24,6 +24,7 @@ from models import EpisodeRenamerConfig
 from episode_renamer_router import router as episode_renamer_router
 from poster_manager_router import router as poster_manager_router
 from actor_role_mapper_router import router as actor_role_mapper_router
+from episode_role_sync_router import router as episode_role_sync_router
 from actor_avatar_mapper_router import router as actor_avatar_mapper_router
 from chasing_center_router import router as chasing_center_router
 from upcoming_router import router as upcoming_router
@@ -59,6 +60,7 @@ from douban_fixer_router import router as douban_fixer_router
 from webhook_logic import WebhookLogic
 from proxy_manager import ProxyManager
 from episode_renamer_logic import EpisodeRenamerLogic
+from episode_role_sync_logic import EpisodeRoleSyncLogic
 
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
@@ -339,6 +341,7 @@ def trigger_scheduled_task(task_id: str):
         "douban_poster_updater": "豆瓣海报更新",
         "episode_refresher": "剧集元数据刷新",
         "episode_renamer": "剧集文件重命名",
+        "episode_role_sync": "剧集角色同步到分集",
         # --- 新增行 ---
         "id_mapper": "TMDB-Emby ID 映射表"
     }
@@ -410,6 +413,16 @@ def trigger_scheduled_task(task_id: str):
             series_ids=item_ids,
             config=config,
             task_name=task_name
+        )
+    elif task_id == "episode_role_sync":
+        logic = EpisodeRoleSyncLogic(config)
+        task_name = f"定时任务-剧集角色同步({scope.mode})"
+        task_manager.register_task(
+            logic.run_sync_for_items,
+            task_name,
+            item_ids,
+            config.episode_role_sync_config,
+            task_category=task_name
         )
     else:
         ui_logger.warning(f"未知的任务ID: {task_id}", task_category=task_cat)
@@ -652,6 +665,7 @@ app.include_router(douban_fixer_router, prefix="/api/douban-fixer")
 app.include_router(episode_renamer_router, prefix="/api/episode-renamer")
 app.include_router(poster_manager_router, prefix="/api/poster-manager")
 app.include_router(actor_role_mapper_router, prefix="/api/actor-role-mapper")
+app.include_router(episode_role_sync_router, prefix="/api/episode-role-sync")
 app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper")
 app.include_router(chasing_center_router, prefix="/api/chasing-center")
 app.include_router(upcoming_router, prefix="/api/upcoming")

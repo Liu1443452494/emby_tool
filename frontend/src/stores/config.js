@@ -108,6 +108,12 @@ export const useConfigStore = defineStore('config', () => {
     },
     actor_role_mapper_config: {
       actor_limit: 50
+    },
+    episode_role_sync_config: {
+      enabled: false,
+      cron: '',
+      actor_limit: 50,
+      fallback_to_actor_string: true
     }
   })
   const isConnected = ref(false)
@@ -220,6 +226,15 @@ export const useConfigStore = defineStore('config', () => {
 
         if (!fullConfig.actor_role_mapper_config) {
           fullConfig.actor_role_mapper_config = { actor_limit: 50 };
+        }
+
+        if (!fullConfig.episode_role_sync_config) {
+          fullConfig.episode_role_sync_config = { 
+            enabled: false, 
+            cron: '', 
+            actor_limit: 50, 
+            fallback_to_actor_string: true 
+          };
         }
         
         appConfig.value = fullConfig
@@ -502,6 +517,23 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function saveEpisodeRoleSyncConfig(newConfig) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/episode-role-sync/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '未知错误');
+      
+      appConfig.value.episode_role_sync_config = newConfig;
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
   async function saveTraktConfig(newConfig) {
     try {
       const response = await fetch(`${API_BASE_URL}/api/config/trakt`, {
@@ -556,6 +588,7 @@ export const useConfigStore = defineStore('config', () => {
     testTelegramConfig,
     saveTraktConfig,
     testTraktConfig,
-    saveActorRoleMapperConfig
+    saveActorRoleMapperConfig,
+    saveEpisodeRoleSyncConfig
   }
 })

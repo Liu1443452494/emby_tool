@@ -734,6 +734,41 @@ services:
       </template>
     </el-dialog>
 <DeletionReviewDialog v-model:visible="isReviewDialogVisible" />
+<el-dialog
+      v-model="isEpisodeRoleSyncDialogVisible"
+      title="剧集角色同步到分集 - 独立配置"
+      width="600px"
+      :close-on-click-modal="false"
+    >
+      <div v-if="localEpisodeRoleSyncConfig" class="independent-task-config">
+        <el-alert 
+          title="功能说明" 
+          type="info" 
+          :closable="false" 
+          show-icon
+          style="margin-bottom: 20px;"
+        >
+          <p>
+            此功能会读取“演员角色映射”页面生成的 <code>actor_role_map.json</code> 文件，并将其中已确认的中文角色名，批量应用到对应剧集的所有分集中。
+          </p>
+        </el-alert>
+        <el-form :model="localEpisodeRoleSyncConfig" label-position="top">
+          <el-form-item label="每个分集处理的演员数量上限">
+            <el-input-number v-model="localEpisodeRoleSyncConfig.actor_limit" :min="1" :max="200" />
+            <div class="form-item-description">对每一个分集都应用此限制，仅处理该集的前 N 位演员。</div>
+          </el-form-item>
+          <el-form-item label="降级策略">
+            <el-switch v-model="localEpisodeRoleSyncConfig.fallback_to_actor_string" active-text="启用" />
+            <div class="form-item-description">
+              当一个分集演员在角色映射表和豆瓣数据中都找不到匹配时，如果启用此项，会将其角色名强制替换为“演员”；否则将保持英文原样。
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="isEpisodeRoleSyncDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 <!-- --- 新增结束 --- -->
   </div>
 </template>
@@ -760,6 +795,7 @@ const definedTasks = ref([
   { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
   { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true },
   { id: 'episode_renamer', name: '剧集文件重命名', hasSettings: true },
+  { id: 'episode_role_sync', name: '剧集角色同步到分集', hasSettings: true },
   { id: 'id_mapper', name: 'TMDB-Emby ID 映射表', hasSettings: false }
 ]);
 
@@ -768,6 +804,8 @@ const localTaskStates = reactive({});
 const localPosterConfig = ref(null);
 const localWebhookConfig = ref(null);
 const localRefresherConfig = ref(null);
+const localEpisodeRoleSyncConfig = ref(null);
+const isEpisodeRoleSyncDialogVisible = ref(false);
 const isBackuping = ref(false); 
 const isGithubBackuping = ref(false);
 const isSaving = ref(false);
@@ -839,6 +877,7 @@ function updateStateFromConfig() {
   localPosterConfig.value = _.cloneDeep(configStore.appConfig.douban_poster_updater_config);
   localWebhookConfig.value = _.cloneDeep(configStore.appConfig.webhook_config);
   localRefresherConfig.value = _.cloneDeep(configStore.appConfig.episode_refresher_config);
+  localEpisodeRoleSyncConfig.value = _.cloneDeep(configStore.appConfig.episode_role_sync_config);
   
   if (localRefresherConfig.value.github_config?.repo_url) {
     parseRepoUrl();
@@ -889,6 +928,7 @@ const handleSave = async () => {
   const result2 = await configStore.saveDoubanPosterUpdaterConfig(localPosterConfig.value);
   const result3 = await configStore.saveWebhookConfig(localWebhookConfig.value);
   const result4 = await configStore.saveEpisodeRefresherConfig(localRefresherConfig.value);
+  const result5 = await configStore.saveEpisodeRoleSyncConfig(localEpisodeRoleSyncConfig.value);
 
   if (result1.success && result2.success && result3.success && result4.success) {
     ElMessage.success('所有设置已成功保存！');
@@ -1011,6 +1051,8 @@ const openSettingsDialog = (taskId) => {
     isRefresherDialogVisible.value = true;
   } else if (taskId === 'episode_renamer') {
     isRenamerSettingsDialogVisible.value = true;
+  } else if (taskId === 'episode_role_sync') {
+    isEpisodeRoleSyncDialogVisible.value = true;
   }
 };
 
