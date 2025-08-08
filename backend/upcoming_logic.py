@@ -16,7 +16,7 @@ from notification_manager import notification_manager, escape_markdown
 
 
 UPCOMING_DB_FILE = os.path.join('/app/data', 'upcoming_database.json')
-CACHE_DURATION_HOURS = 12
+CACHE_DURATION_HOURS = 11
 
 class UpcomingLogic:
     def __init__(self, app_config: AppConfig):
