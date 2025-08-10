@@ -90,13 +90,23 @@ export const useLogStore = defineStore('log', () => {
     await fetchHistoricalLogs(1);
   }
 
-  // --- 新增：设置日期并重新获取日志 ---
-  async function setDateAndFetch(newDate) {
-    // newDate 可能是 YYYY-MM-DD 字符串，也可能是 null
-    selectedDate.value = newDate;
+ async function setDateAndFetch(newDate) {
+    const getTodayString = () => {
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const dd = String(today.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    };
+
+    if (!newDate || newDate === getTodayString()) {
+      selectedDate.value = null;
+    } else {
+      selectedDate.value = newDate;
+    }
+    
     await fetchHistoricalLogs(1);
   }
-  // --- 新增结束 ---
 
   async function setPageSizeAndFetch(newPageSize) {
     pageSize.value = newPageSize;

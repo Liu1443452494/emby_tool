@@ -39,7 +39,6 @@
           format="YYYY-MM-DD"
           value-format="YYYY-MM-DD"
           :clearable="true"
-          @change="handleDateChange"
           :disabled-date="disabledDate"
           style="width: 200px;"
         />
@@ -157,7 +156,13 @@ const selectedCategoryProxy = computed({
 
 const selectedDateProxy = computed({
   get: () => logStore.selectedDate,
-  set: () => {}
+  // --- 修改 ---
+  set: (val) => {
+    // 直接调用 store 的 action 来处理值的变化
+    // 这会触发 handleDateChange，因为 v-model 的更新和 @change 事件是关联的
+    logStore.setDateAndFetch(val);
+  }
+  // --- 修改结束 ---
 });
 
 const searchKeywordProxy = computed({
@@ -198,9 +203,7 @@ const handleCategoryChange = (newCategory) => {
   logStore.setCategoryAndFetch(newCategory);
 };
 
-const handleDateChange = (newDate) => {
-  logStore.setDateAndFetch(newDate);
-};
+
 
 const handlePageSizeChange = (newPageSize) => {
   logStore.setPageSizeAndFetch(newPageSize);

@@ -1057,16 +1057,16 @@ def get_logs_api(
     category: Optional[str] = Query(None),
     date: Optional[str] = Query(None, description="查询指定日期的日志，格式 YYYY-MM-DD")
 ):
+   
     LOGS_DIR = "/app/data/logs"
     
-    # --- 核心修改 1: 根据日期参数确定要读取的日志文件 ---
     log_file_path = ""
     if date:
-        # 查询历史日志
         log_file_path = os.path.join(LOGS_DIR, f"app.log.{date}")
     else:
-        # 查询当天日志
         log_file_path = os.path.join(LOGS_DIR, "app.log")
+
+    
 
     if not os.path.exists(log_file_path):
         # 如果文件不存在，直接返回空结果，避免后续错误
