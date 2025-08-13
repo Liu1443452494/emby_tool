@@ -1,7 +1,7 @@
 # backend/Dockerfile (最终修复版)
 
 # 使用官方的 Python 3.11 slim 镜像作为基础
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # 设置工作目录
 WORKDIR /app
