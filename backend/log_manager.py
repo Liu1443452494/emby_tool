@@ -113,6 +113,8 @@ def setup_logging(add_websocket_handler: bool = True):
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG) 
 
+    # --- 核心修改：在重新配置前，安全关闭并移除所有处理器 ---
+    # 这对于 clear_logs 后的重新初始化至关重要
     handlers = root_logger.handlers[:]
     for handler in handlers:
         handler.close()
@@ -130,6 +132,8 @@ def setup_logging(add_websocket_handler: bool = True):
     file_handler.setFormatter(log_format)
     root_logger.addHandler(file_handler)
 
+    # --- 核心修改：根据参数决定是否添加 WebSocket 处理器 ---
+    # 这允许我们在主线程之外调用 setup_logging 而不引发事件循环错误
     if add_websocket_handler:
         websocket_handler = WebSocketLogHandler()
         root_logger.addHandler(websocket_handler)
@@ -138,18 +142,6 @@ def setup_logging(add_websocket_handler: bool = True):
     console_handler.setFormatter(log_format)
     root_logger.addHandler(console_handler)
     
-    # --- 核心修改：精细化控制第三方库的日志级别 ---
-    # 将最底层的 httpcore 设置为 WARNING，以屏蔽大量 DEBUG 日志
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    
-    # 保持 httpx 为 INFO，以便看到有用的请求摘要日志
-    logging.getLogger("httpx").setLevel(logging.INFO)
-    
-    # 调整 uvicorn 的日志级别以获得更简洁的输出
-    logging.getLogger("uvicorn").setLevel(logging.INFO)
-    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn.access").setLevel(logging.INFO) # Access日志可以保留INFO
-    # --- 修改结束 ---
-    
+    # 仅在首次添加 WebSocket 处理器时记录此日志
     if add_websocket_handler:
         ui_logger.info("✅ 日志系统已成功初始化 (每日滚动，保留14天)。", task_category='系统启动')

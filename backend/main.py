@@ -1,7 +1,6 @@
 import sys
 import os
 import requests
-import httpx
 import logging
 import asyncio
 import threading
@@ -726,41 +725,22 @@ def test_trakt_api(config: TraktConfig):
 
 @app.get("/api/image-proxy")
 async def image_proxy(url: str):
-    """
-    通用的外部图片代理，用于解决前端混合内容问题。
-    此实现遵循用户定义的代理规则。
-    """
-    task_cat = "图片代理-通用"
     try:
-        config = app_config.load_app_config()
-        proxy_manager = ProxyManager(config)
-        # --- 核心修正：使用 mounts 参数 ---
-        mounts = proxy_manager.get_proxies_for_httpx(url)
-
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+            'Referer': 'https://movie.douban.com/'
         }
-        if 'doubanio.com' in url:
-            headers['Referer'] = 'https://movie.douban.com/'
-
-        async with httpx.AsyncClient(mounts=mounts or {}, follow_redirects=True) as client:
-            req = await client.get(url, headers=headers, timeout=20)
-        # --- 修正结束 ---
-            req.raise_for_status()
-
-        content_type = req.headers.get('Content-Type', 'image/jpeg')
-        if not content_type.startswith('image/'):
-            ui_logger.warning(f"⚠️ 代理请求返回的 Content-Type 不是图片: {content_type}。URL: {url}", task_category=task_cat)
-            raise HTTPException(status_code=400, detail="代理目标返回的不是有效的图片内容。")
-
-        return Response(content=req.content, media_type=content_type)
+        response = requests.get(url, headers=headers, stream=True, timeout=20)
+        response.raise_for_status()
         
-    except httpx.RequestError as e:
-        ui_logger.error(f"❌ 请求外部图片失败: {e}", task_category=task_cat, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"请求外部图片URL失败: {e}")
-    except Exception as e:
-        ui_logger.error(f"❌ 代理图片时发生未知错误: {e}", task_category=task_cat, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        content_type = response.headers.get('Content-Type', 'image/jpeg')
+        if not content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="URL did not point to a valid image.")
+
+        return Response(content=response.content, media_type=content_type)
+    except requests.RequestException as e:
+        logging.error(f"【图片代理】请求外部图片失败: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch image from external URL: {e}")
 
 @app.websocket("/ws/logs")
 async def websocket_logs_endpoint(websocket: WebSocket):
@@ -780,15 +760,19 @@ async def websocket_tasks_endpoint(websocket: WebSocket):
         task_manager.broadcaster.disconnect(websocket)
         logging.info("任务 WebSocket 客户端断开连接。")
 
+# backend/main.py (函数替换 - 修正代理调用)
+
 @app.get("/api/emby-image-proxy")
 async def emby_image_proxy(path: str):
-    task_cat = "图片代理-Emby"
+    task_cat = "Emby图片代理"
+    ui_logger.debug(f"➡️ [调试] 代理接口收到请求，原始 path 参数: {path}", task_category=task_cat)
     try:
         config = app_config.load_app_config()
         server_conf = config.server_config
         if not server_conf.server:
             raise HTTPException(status_code=400, detail="Emby服务器未配置。")
 
+        # 智能判断并追加 api_key
         if 'api_key=' not in path.lower():
             separator = '&' if '?' in path else '?'
             path_with_auth = f"{path}{separator}api_key={server_conf.api_key}"
@@ -797,14 +781,23 @@ async def emby_image_proxy(path: str):
 
         full_url = f"{server_conf.server}/{path_with_auth}"
         
+        # --- 核心修复：实例化并使用 ProxyManager ---
         proxy_manager = ProxyManager(config)
-        # --- 核心修正：使用 mounts 参数 ---
-        mounts = proxy_manager.get_proxies_for_httpx(full_url)
+        proxies = proxy_manager.get_proxies(full_url)
+        # --- 修复结束 ---
 
-        async with httpx.AsyncClient(mounts=mounts or {}, follow_redirects=True) as client:
-            req = await client.get(full_url, timeout=20)
-        # --- 修正结束 ---
+        ui_logger.debug(f"   - [调试] 准备请求的最终 URL: {full_url}", task_category=task_cat)
+        if proxies:
+            ui_logger.debug(f"   - [调试] 将通过代理: {proxies.get('http')}", task_category=task_cat)
+        else:
+            ui_logger.debug(f"   - [调试] 将直接连接，不使用代理。", task_category=task_cat)
+
+        # --- 核心修复：在请求时传入 proxies 参数 ---
+        req = requests.get(full_url, stream=True, timeout=20, proxies=proxies)
+        # --- 修复结束 ---
         
+        ui_logger.debug(f"   - [调试] Emby 服务器返回状态码: {req.status_code}", task_category=task_cat)
+
         req.raise_for_status()
         
         content_type = req.headers.get('Content-Type', 'image/jpeg')
@@ -814,11 +807,11 @@ async def emby_image_proxy(path: str):
 
         return Response(content=req.content, media_type=content_type)
         
-    except httpx.RequestError as e:
-        ui_logger.error(f"❌ 请求 Emby 图片时发生网络异常: {e}", task_category=task_cat, exc_info=True)
+    except requests.exceptions.RequestException as e:
+        ui_logger.error(f"❌ [调试] 请求 Emby 图片时发生网络异常: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=502, detail=f"请求 Emby 服务器失败: {e}")
     except Exception as e:
-        ui_logger.error(f"❌ 代理 Emby 图片时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+        ui_logger.error(f"❌ [调试] 代理 Emby 图片时发生未知错误: {e}", task_category=task_cat, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")

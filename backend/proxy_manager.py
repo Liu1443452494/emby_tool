@@ -1,8 +1,8 @@
-# backend/proxy_manager.py (完整文件覆盖 - 最小化改动版)
+# backend/proxy_manager.py (新文件)
 
 import logging
-from typing import Dict, Optional
-import httpx
+from typing import Dict
+
 from models import AppConfig
 
 class ProxyManager:
@@ -77,21 +77,3 @@ class ProxyManager:
         else:
             logging.debug(f"【动态代理-{config.mode}】为请求禁用代理: {target_url}")
             return {}
-
-    def get_proxies_for_httpx(self, target_url: str) -> Optional[Dict[str, httpx.AsyncHTTPTransport]]:
-        """
-        获取适用于 httpx 客户端的代理配置。
-        此方法返回 mounts 参数所需的对象格式，以实现最佳兼容性。
-        """
-      
-
-        requests_proxies = self.get_proxies(target_url)
-        
-        if requests_proxies:
-            proxy_url = requests_proxies.get('https') or requests_proxies.get('http')
-            if proxy_url:
-                # 使用 httpx.AsyncHTTPTransport 来配置代理，这是最稳妥的方式
-                transport = httpx.AsyncHTTPTransport(proxy=httpx.Proxy(url=proxy_url))
-                return {'all://': transport}
-        
-        return None
