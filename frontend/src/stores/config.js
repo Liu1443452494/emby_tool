@@ -60,6 +60,11 @@ export const useConfigStore = defineStore('config', () => {
       force_overwrite_screenshots: false,
       screenshot_cooldown: 2.0,
       use_smart_screenshot: true,
+      screenshot_compression_enabled: true,
+      screenshot_compression_mode: 'quality',
+      screenshot_compression_quality: 85,
+      screenshot_compression_target_kb: 300,
+      screenshot_compression_threshold_kb: 200,
       backup_overwrite_local: false,
       github_config: {
         repo_url: '',
@@ -168,38 +173,18 @@ export const useConfigStore = defineStore('config', () => {
         }
         
         if (!fullConfig.episode_refresher_config) {
-          fullConfig.episode_refresher_config = { 
-            refresh_mode: 'emby', 
-            overwrite_metadata: true, 
-            skip_if_complete: true,
-            screenshot_enabled: false,
-            screenshot_cache_mode: 'local',
-            screenshot_percentage: 10,
-            screenshot_fallback_seconds: 150,
-            crop_widescreen_to_16_9: true,
-            force_overwrite_screenshots: false,
-            screenshot_cooldown: 2.0,
-            use_smart_screenshot: true,
-            backup_overwrite_local: false,
-            github_config: {
-              repo_url: '',
-              branch: 'main',
-              personal_access_token: '',
-              allow_fallback: true,
-              overwrite_remote: false,
-              download_cooldown: 0.5,
-              upload_cooldown: 1.0,
-            }
-          };
+          fullConfig.episode_refresher_config = { ...appConfig.value.episode_refresher_config };
         } else {
           const defaultConfig = appConfig.value.episode_refresher_config;
+          // 确保所有压缩相关的键都存在
           for (const key in defaultConfig) {
             if (typeof fullConfig.episode_refresher_config[key] === 'undefined') {
               fullConfig.episode_refresher_config[key] = defaultConfig[key];
             }
           }
+          // 确保 github_config 对象及其内部键都存在
           if (typeof fullConfig.episode_refresher_config.github_config === 'undefined') {
-            fullConfig.episode_refresher_config.github_config = defaultConfig.github_config;
+            fullConfig.episode_refresher_config.github_config = { ...defaultConfig.github_config };
           } else {
             for (const key in defaultConfig.github_config) {
               if (typeof fullConfig.episode_refresher_config.github_config[key] === 'undefined') {

@@ -1,4 +1,4 @@
-<!-- ❗ 注意：以下是 frontend/src/views/ScheduledTasksView.vue 的完整文件代码，请直接覆盖整个文件内容。 -->
+
 <template>
   <div class="scheduled-tasks-page">
     <div class="page-header">
@@ -389,6 +389,39 @@
                   </div>
                 </el-form-item>
               </div>
+              <el-divider content-position="left">截图压缩</el-divider>
+                <el-form-item label="启用压缩">
+                  <el-switch v-model="localRefresherConfig.screenshot_compression_enabled" :disabled="!localRefresherConfig.screenshot_enabled" />
+                  <div class="form-item-description">
+                    对生成的截图进行压缩，以减小文件体积。
+                  </div>
+                </el-form-item>
+                <el-form-item label="压缩阈值">
+                  <el-input-number v-model="localRefresherConfig.screenshot_compression_threshold_kb" :min="0" :step="50" :disabled="!localRefresherConfig.screenshot_enabled || !localRefresherConfig.screenshot_compression_enabled" />
+                  <span class="unit-label">KB</span>
+                  <div class="form-item-description">
+                    当截图文件大小超过此值时，才执行压缩。设为 0 则总是压缩。
+                  </div>
+                </el-form-item>
+                <el-form-item label="压缩模式">
+                  <el-radio-group v-model="localRefresherConfig.screenshot_compression_mode" :disabled="!localRefresherConfig.screenshot_enabled || !localRefresherConfig.screenshot_compression_enabled">
+                    <el-radio value="quality">质量优先</el-radio>
+                    <el-radio value="size">大小优先</el-radio>
+                  </el-radio-group>
+                </el-form-item>
+                <el-form-item v-if="localRefresherConfig.screenshot_compression_mode === 'quality'" label="图片质量">
+                  <el-slider v-model="localRefresherConfig.screenshot_compression_quality" :min="1" :max="95" show-input :disabled="!localRefresherConfig.screenshot_enabled || !localRefresherConfig.screenshot_compression_enabled" />
+                  <div class="form-item-description">
+                    设置 JPEG 压缩质量，推荐值 80-90。数值越高，画质越好，文件越大。
+                  </div>
+                </el-form-item>
+                <el-form-item v-if="localRefresherConfig.screenshot_compression_mode === 'size'" label="目标大小">
+                  <el-input-number v-model="localRefresherConfig.screenshot_compression_target_kb" :min="10" :step="50" :disabled="!localRefresherConfig.screenshot_enabled || !localRefresherConfig.screenshot_compression_enabled" />
+                  <span class="unit-label">KB</span>
+                  <div class="form-item-description warning-text">
+                    <b><el-icon><WarningFilled /></el-icon> (CPU 消耗高)</b> 此模式会通过多次尝试来逼近目标大小，将显著增加 CPU 占用，请谨慎使用。
+                  </div>
+                </el-form-item>
             </el-form>
           </el-tab-pane>
 
@@ -779,7 +812,7 @@ import { useConfigStore } from '@/stores/config';
 import { useMediaStore } from '@/stores/media';
 import { useEpisodeRenamerStore } from '@/stores/episodeRenamer';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Setting, ArrowDown, Finished, Upload, QuestionFilled, Aim, Delete, Download } from '@element-plus/icons-vue';
+import { Setting, ArrowDown, Finished, Upload, QuestionFilled, Aim, Delete, Download, WarningFilled } from '@element-plus/icons-vue';
 import DeletionReviewDialog from '@/components/DeletionReviewDialog.vue'; 
 import cronstrue from 'cronstrue/i18n';
 import _ from 'lodash';
@@ -1677,5 +1710,15 @@ const handlePreciseUpdate = async () => {
   border: 1px solid var(--el-border-color-light);
   border-radius: 4px;
   overflow: hidden;
+}.unit-label {
+  margin-left: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+.warning-text {
+  color: var(--el-color-warning);
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 </style>

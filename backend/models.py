@@ -205,6 +205,12 @@ class EpisodeRefresherConfig(BaseModel):
         description="是否启用智能截图(分析1秒内多帧选择最清晰的一张)，会增加CPU消耗"
     )
 
+    screenshot_compression_enabled: bool = Field(default=True, description="是否启用截图后压缩")
+    screenshot_compression_mode: Literal['quality', 'size'] = Field(default='quality', description="压缩模式: 'quality'-质量优先, 'size'-大小优先")
+    screenshot_compression_quality: int = Field(default=85, description="质量模式下的图片质量 (1-95)", ge=1, le=95)
+    screenshot_compression_target_kb: int = Field(default=300, description="大小模式下的目标文件大小 (KB)", ge=10)
+    screenshot_compression_threshold_kb: int = Field(default=200, description="文件大小超过此值(KB)才执行压缩", ge=0)
+
     backup_overwrite_local: bool = Field(
         default=False,
         description="从Emby备份截图到本地时，是否覆盖本地已有的同名文件"

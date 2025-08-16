@@ -585,7 +585,6 @@ class EpisodeRefresherLogic:
         # 降级到实时截图
         return self._trigger_realtime_screenshot(series_tmdb_id, episode_id, episode_details, config, task_category, log_prefix)
 
-        # --- 新增：实时截图的独立触发函数 ---
     def _trigger_realtime_screenshot(self, series_tmdb_id: str, episode_id: str, episode_details: Dict, config: EpisodeRefresherConfig, task_category: str, log_prefix: str) -> Tuple[bool, str]:
         if config.screenshot_cache_mode == 'remote' and not config.github_config.allow_fallback:
             ui_logger.info(f"{log_prefix} [跳过] 所有缓存均未命中，且用户禁止降级为实时截图，截图流程中止。", task_category=task_category)
@@ -615,6 +614,26 @@ class EpisodeRefresherLogic:
         image_bytes = self._capture_screenshot(video_url, seek_time, config, task_category)
         
         if image_bytes:
+            # --- 新增/修改：图片压缩逻辑 ---
+            if config.screenshot_compression_enabled:
+                original_size_kb = len(image_bytes) / 1024
+                ui_logger.info(f"     - [压缩] 检查是否需要压缩，当前大小: {original_size_kb:.2f} KB, 压缩阈值: {config.screenshot_compression_threshold_kb} KB", task_category=task_category)
+
+                if original_size_kb > config.screenshot_compression_threshold_kb:
+                    if config.screenshot_compression_mode == 'quality':
+                        ui_logger.info(f"     - [压缩] 启动质量优先模式 (Quality: {config.screenshot_compression_quality})...", task_category=task_category)
+                        image_bytes = self._compress_image_by_quality(image_bytes, config.screenshot_compression_quality, task_category)
+                    elif config.screenshot_compression_mode == 'size':
+                        ui_logger.info(f"     - [压缩] 启动大小优先模式 (Target: < {config.screenshot_compression_target_kb} KB)...", task_category=task_category)
+                        image_bytes = self._compress_image_to_size(image_bytes, config.screenshot_compression_target_kb, task_category)
+                    
+                    compressed_size_kb = len(image_bytes) / 1024
+                    savings_percentage = (1 - compressed_size_kb / original_size_kb) * 100
+                    ui_logger.info(f"     - [压缩] ✅ 压缩完成。最终大小: {compressed_size_kb:.2f} KB (节省 {savings_percentage:.1f}%)", task_category=task_category)
+                else:
+                    ui_logger.info(f"     - [压缩] ➡️ [跳过] 截图大小未达到压缩阈值，无需压缩。", task_category=task_category)
+            # --- 新增/修改结束 ---
+
             if self._upload_image_bytes(episode_id, image_bytes, 'image/jpeg', task_category):
                 ui_logger.info(f"{log_prefix} [成功🎉] 截图生成并上传成功！", task_category=task_category)
                 
@@ -631,6 +650,49 @@ class EpisodeRefresherLogic:
         
         ui_logger.error(f"{log_prefix} [失败❌] 实时截图失败。", task_category=task_category)
         return False, "none"
+    
+    def _compress_image_by_quality(self, image_bytes: bytes, quality: int, task_category: str) -> bytes:
+        """使用Pillow按指定质量压缩图片"""
+        try:
+            buffer_in = BytesIO(image_bytes)
+            img = Image.open(buffer_in)
+            
+            buffer_out = BytesIO()
+            img.save(buffer_out, format='JPEG', quality=quality, optimize=True, progressive=True)
+            
+            return buffer_out.getvalue()
+        except Exception as e:
+            ui_logger.error(f"     - [压缩-质量模式] 压缩图片时发生错误: {e}", task_category=task_category)
+            return image_bytes # 压缩失败则返回原图
+
+    def _compress_image_to_size(self, image_bytes: bytes, target_kb: int, task_category: str) -> bytes:
+        """使用Pillow通过二分法将图片压缩到目标大小以下"""
+        try:
+            target_bytes = target_kb * 1024
+            min_q, max_q = 10, 95
+            best_image_bytes = image_bytes
+            
+            # 如果原图已经小于目标大小，直接返回
+            if len(image_bytes) <= target_bytes:
+                return image_bytes
+
+            for i in range(8): # 最多迭代8次，防止死循环
+                current_q = (min_q + max_q) // 2
+                if current_q == min_q: # 防止区间不再缩小
+                    break
+                
+                compressed_bytes = self._compress_image_by_quality(image_bytes, current_q, task_category)
+                
+                if len(compressed_bytes) <= target_bytes:
+                    best_image_bytes = compressed_bytes
+                    min_q = current_q # 尝试更高质量
+                else:
+                    max_q = current_q # 必须降低质量
+            
+            return best_image_bytes
+        except Exception as e:
+            ui_logger.error(f"     - [压缩-大小模式] 压缩图片时发生错误: {e}", task_category=task_category)
+            return image_bytes # 压缩失败则返回原图
 
     def _set_image_source_tag(self, item_id: str, source: str, task_category: str):
         try:
