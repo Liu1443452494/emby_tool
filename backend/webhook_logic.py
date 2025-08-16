@@ -178,7 +178,8 @@ class WebhookLogic:
 
     def process_new_media_task(self, item_id: str, cancellation_event: threading.Event, series_id: str):
         # --- 新增：从 main 导入全局标记集合 ---
-        from main import main_task_completed_series, episode_sync_queue_lock, id_map_update_lock, id_map_update_request_time
+        from main import main_task_completed_series, episode_sync_queue_lock, id_map_update_lock
+        import main as main_module
         # --- 新增结束 ---
         from tmdb_logic import TmdbLogic
         from chasing_center_logic import ChasingCenterLogic
@@ -383,12 +384,8 @@ class WebhookLogic:
 
         try:
             with id_map_update_lock:
-                # 直接修改全局变量
-                globals()['id_map_update_request_time'] = time.time()
+                setattr(main_module, 'id_map_update_request_time', time.time())
             ui_logger.info(f"🔔【ID映射调度器】已成功发送ID映射表更新请求，静默期计时器已重置。", task_category=task_cat)
-        except NameError:
-            # 这是一个备用方案，理论上不应该发生，因为我们是从main.py导入的
-            logging.error("【Webhook任务】无法找到全局变量 id_map_update_request_time，跳过更新请求。")
         except Exception as e:
-            ui_logger.error(f"【Webhook任务】发送ID映射表更新请求时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+            ui_logger.error(f"❌【Webhook任务】发送ID映射表更新请求时发生未知错误: {e}", task_category=task_cat, exc_info=True)
         
