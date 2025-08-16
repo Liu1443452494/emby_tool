@@ -631,16 +631,19 @@ class EpisodeRefresherLogic:
                         ui_logger.info(f"     - [压缩] 启动{mode_text} (Target: < {config.screenshot_compression_target_kb} KB)...", task_category=task_category)
                         compressed_image_bytes = self._compress_image_to_size(image_bytes, config.screenshot_compression_target_kb, task_category)
                     
-                    if compressed_image_bytes and len(compressed_image_bytes) < len(image_bytes):
+                    if compressed_image_bytes and compressed_image_bytes is not image_bytes:
                         compressed_size_kb = len(compressed_image_bytes) / 1024
-                        savings_percentage = (1 - compressed_size_kb / original_size_kb) * 100
-                        ui_logger.info(f"     - [压缩-{mode_text}] ✅ 压缩成功。大小: {original_size_kb:.1f} KB → {compressed_size_kb:.1f} KB (节省 {savings_percentage:.1f}%)", task_category=task_category)
-                        image_bytes = compressed_image_bytes
+                        if compressed_size_kb < original_size_kb:
+                            savings_percentage = (1 - compressed_size_kb / original_size_kb) * 100
+                            ui_logger.info(f"     - [压缩-{mode_text}] ✅ 压缩成功。大小: {original_size_kb:.1f} KB → {compressed_size_kb:.1f} KB (节省 {savings_percentage:.1f}%)", task_category=task_category)
+                            image_bytes = compressed_image_bytes
+                        else:
+                            ui_logger.warning(f"     - [压缩-{mode_text}] ⚠️ 压缩后体积未减小 ({original_size_kb:.1f} KB → {compressed_size_kb:.1f} KB)，不予采纳，将使用原图。", task_category=task_category)
                     else:
-                        ui_logger.warning(f"     - [压缩-{mode_text}] ⚠️ 压缩后文件体积未减小或压缩失败，将使用原图。", task_category=task_category)
+                        ui_logger.error(f"     - [压缩-{mode_text}] ❌ 压缩过程发生内部错误，将使用原图。", task_category=task_category)
                 else:
                     ui_logger.info(f"     - [压缩] ➡️ [跳过] 截图大小未达到压缩阈值，无需压缩。", task_category=task_category)
-            # --- 新增/修改结束 ---
+            
 
             if self._upload_image_bytes(episode_id, image_bytes, 'image/jpeg', task_category):
                 ui_logger.info(f"{log_prefix} [成功🎉] 截图生成并上传成功！", task_category=task_category)
