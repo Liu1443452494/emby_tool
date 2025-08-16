@@ -756,7 +756,9 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"   - ❌ [同步] 更新本地文件时发生错误: {e}", task_category=task_cat, exc_info=True)
 
 
-    def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str) -> int:
+    
+
+    def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str, remote_db: Optional[Dict]) -> int:
         updated_count = 0
         try:
             series_name_for_log = emby_episodes[0].get("SeriesName", f"剧集 {series_tmdb_id}")
@@ -764,7 +766,7 @@ class EpisodeRefresherLogic:
             tmdb_season_details = self.tmdb_logic.get_season_details(int(series_tmdb_id), season_number)
 
             if not tmdb_season_details or not tmdb_season_details.get("episodes"):
-                ui_logger.warning(f"     - 未能从TMDB获取到 S{season_number:02d} 的有效分集列表。", task_category=task_category)
+                ui_logger.warning(f"     - ⚠️ 未能从TMDB获取到 S{season_number:02d} 的有效分集列表。", task_category=task_category)
                 return 0
             
             tmdb_episodes_map = {ep.get("episode_number"): ep for ep in tmdb_season_details["episodes"]}
@@ -878,14 +880,32 @@ class EpisodeRefresherLogic:
                         should_sync_local_file = True
                         if current_image_source == "screenshot":
                             self._clear_image_source_tag(emby_episode["Id"], task_category)
-                            ui_logger.info(f"{log_prefix} [记录] 正在将作废截图信息写入待删除日志...", task_category=task_category)
-                            self._log_screenshot_for_deletion(
-                                series_tmdb_id=series_tmdb_id,
-                                series_name=emby_episode.get("SeriesName", "未知剧集"),
-                                emby_series_id=emby_episode.get("SeriesId"),
-                                season_number=season_number,
-                                episode_number=episode_num
-                            )
+                            
+                            # --- 新增/修改：写入待删除日志前的检查逻辑 ---
+                            should_log_for_deletion = False
+                            if remote_db is None:
+                                ui_logger.warning(f"{log_prefix} [远程清理-决策] ⚠️ 获取远程索引失败，将强制写入待删除日志（宁可错杀，不漏过）。", task_category=task_category)
+                                should_log_for_deletion = True
+                            else:
+                                ui_logger.info(f"{log_prefix} [远程清理-决策] 正在检查远程索引，确认是否需要加入清理计划...", task_category=task_category)
+                                episode_key = f"{season_number}-{episode_num}"
+                                if remote_db.get("series", {}).get(str(series_tmdb_id), {}).get(episode_key):
+                                    ui_logger.info(f"{log_prefix} [远程清理-决策] ✅ 确认命中！该截图存在于远程索引中，将加入清理计划。", task_category=task_category)
+                                    should_log_for_deletion = True
+                                else:
+                                    ui_logger.info(f"{log_prefix} [远程清理-决策] ➡️ [跳过] 该截图从未备份至远程图床，无需加入清理计划。", task_category=task_category)
+                            
+                            if should_log_for_deletion:
+                                ui_logger.info(f"{log_prefix} [记录] 正在将作废截图信息写入待删除日志...", task_category=task_category)
+                                self._log_screenshot_for_deletion(
+                                    series_tmdb_id=series_tmdb_id,
+                                    series_name=emby_episode.get("SeriesName", "未知剧集"),
+                                    emby_series_id=emby_episode.get("SeriesId"),
+                                    season_number=season_number,
+                                    episode_number=episode_num
+                                )
+                            # --- 新增/修改结束 ---
+                                
                             if config.screenshot_cache_mode != 'none':
                                 self._delete_local_screenshot(series_tmdb_id, season_number, episode_num, task_category)
                 
@@ -917,6 +937,8 @@ class EpisodeRefresherLogic:
             ui_logger.error(f"     - [失败❌] 处理 S{season_number:02d} 时发生严重错误: {e}", task_category=task_category, exc_info=True)
         
         return updated_count
+
+    
 
     def run_refresh_for_episodes(self, episode_ids: Iterable[str], config: EpisodeRefresherConfig, cancellation_event: threading.Event, task_id: Optional[str] = None, task_manager: Optional[TaskManager] = None, task_category: str = "剧集刷新"):
         
@@ -1000,6 +1022,15 @@ class EpisodeRefresherLogic:
         refreshed_count = 0
         
         if config.refresh_mode == 'toolbox':
+            # --- 新增/修改：单次任务只获取一次远程数据库 ---
+            remote_db = None
+            if config.screenshot_cache_mode == 'remote':
+                ui_logger.info("【远程图床】模式已启用，正在为本次任务获取一次远程索引文件...", task_category=task_category)
+                remote_db, _ = self._get_remote_db(config)
+                if remote_db is None:
+                    ui_logger.warning("【远程图床】⚠️ 获取远程索引文件失败。与远程图床相关的清理功能将不可用，但刷新任务会继续。", task_category=task_category)
+            # --- 新增/修改结束 ---
+
             grouped_seasons = defaultdict(lambda: defaultdict(list))
             for ep in episodes_to_process:
                 if ep.get("SeriesId") and ep.get("ParentIndexNumber") is not None:
@@ -1027,7 +1058,9 @@ class EpisodeRefresherLogic:
                 
                 for season_number, emby_episodes in seasons.items():
                     if cancellation_event.is_set(): break
-                    refreshed_count += self._refresh_season_by_toolbox(series_tmdb_id, season_number, emby_episodes, config, task_category)
+                    # --- 新增/修改：将 remote_db 传递下去 ---
+                    refreshed_count += self._refresh_season_by_toolbox(series_tmdb_id, season_number, emby_episodes, config, task_category, remote_db)
+                    # --- 新增/修改结束 ---
                     processed_ep_count += len(emby_episodes)
                     if task_manager and task_id:
                         task_manager.update_task_progress(task_id, processed_ep_count, total_ep_to_process)
