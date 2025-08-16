@@ -617,19 +617,27 @@ class EpisodeRefresherLogic:
             # --- 新增/修改：图片压缩逻辑 ---
             if config.screenshot_compression_enabled:
                 original_size_kb = len(image_bytes) / 1024
-                ui_logger.info(f"     - [压缩] 检查是否需要压缩，当前大小: {original_size_kb:.2f} KB, 压缩阈值: {config.screenshot_compression_threshold_kb} KB", task_category=task_category)
+                ui_logger.info(f"     - [压缩] 检查是否需要压缩，当前大小: {original_size_kb:.1f} KB, 压缩阈值: {config.screenshot_compression_threshold_kb} KB", task_category=task_category)
 
                 if original_size_kb > config.screenshot_compression_threshold_kb:
+                    compressed_image_bytes = None
+                    mode_text = ""
                     if config.screenshot_compression_mode == 'quality':
-                        ui_logger.info(f"     - [压缩] 启动质量优先模式 (Quality: {config.screenshot_compression_quality})...", task_category=task_category)
-                        image_bytes = self._compress_image_by_quality(image_bytes, config.screenshot_compression_quality, task_category)
+                        mode_text = "质量优先模式"
+                        ui_logger.info(f"     - [压缩] 启动{mode_text} (Quality: {config.screenshot_compression_quality})...", task_category=task_category)
+                        compressed_image_bytes = self._compress_image_by_quality(image_bytes, config.screenshot_compression_quality, task_category)
                     elif config.screenshot_compression_mode == 'size':
-                        ui_logger.info(f"     - [压缩] 启动大小优先模式 (Target: < {config.screenshot_compression_target_kb} KB)...", task_category=task_category)
-                        image_bytes = self._compress_image_to_size(image_bytes, config.screenshot_compression_target_kb, task_category)
+                        mode_text = "大小优先模式"
+                        ui_logger.info(f"     - [压缩] 启动{mode_text} (Target: < {config.screenshot_compression_target_kb} KB)...", task_category=task_category)
+                        compressed_image_bytes = self._compress_image_to_size(image_bytes, config.screenshot_compression_target_kb, task_category)
                     
-                    compressed_size_kb = len(image_bytes) / 1024
-                    savings_percentage = (1 - compressed_size_kb / original_size_kb) * 100
-                    ui_logger.info(f"     - [压缩] ✅ 压缩完成。最终大小: {compressed_size_kb:.2f} KB (节省 {savings_percentage:.1f}%)", task_category=task_category)
+                    if compressed_image_bytes and len(compressed_image_bytes) < len(image_bytes):
+                        compressed_size_kb = len(compressed_image_bytes) / 1024
+                        savings_percentage = (1 - compressed_size_kb / original_size_kb) * 100
+                        ui_logger.info(f"     - [压缩-{mode_text}] ✅ 压缩成功。大小: {original_size_kb:.1f} KB → {compressed_size_kb:.1f} KB (节省 {savings_percentage:.1f}%)", task_category=task_category)
+                        image_bytes = compressed_image_bytes
+                    else:
+                        ui_logger.warning(f"     - [压缩-{mode_text}] ⚠️ 压缩后文件体积未减小或压缩失败，将使用原图。", task_category=task_category)
                 else:
                     ui_logger.info(f"     - [压缩] ➡️ [跳过] 截图大小未达到压缩阈值，无需压缩。", task_category=task_category)
             # --- 新增/修改结束 ---
@@ -669,26 +677,44 @@ class EpisodeRefresherLogic:
         """使用Pillow通过二分法将图片压缩到目标大小以下"""
         try:
             target_bytes = target_kb * 1024
-            min_q, max_q = 10, 95
-            best_image_bytes = image_bytes
             
-            # 如果原图已经小于目标大小，直接返回
-            if len(image_bytes) <= target_bytes:
+            # 如果原图已经小于目标大小的95%，直接返回，避免不必要的压缩
+            if len(image_bytes) <= target_bytes * 0.95:
                 return image_bytes
 
-            for i in range(8): # 最多迭代8次，防止死循环
-                current_q = (min_q + max_q) // 2
-                if current_q == min_q: # 防止区间不再缩小
-                    break
-                
-                compressed_bytes = self._compress_image_by_quality(image_bytes, current_q, task_category)
-                
-                if len(compressed_bytes) <= target_bytes:
-                    best_image_bytes = compressed_bytes
-                    min_q = current_q # 尝试更高质量
-                else:
-                    max_q = current_q # 必须降低质量
+            min_q, max_q = 10, 95
+            best_image_bytes = image_bytes
+            final_q = 95 # 默认为最高质量
             
+            # 如果原图大于目标，但不是大很多，先用一个较高的质量尝试一次
+            if len(image_bytes) > target_bytes:
+                best_image_bytes = self._compress_image_by_quality(image_bytes, 88, task_category)
+                final_q = 88
+
+            # 如果一次尝试后仍然不满足，启动二分法
+            if len(best_image_bytes) > target_bytes:
+                # 重置 best_image_bytes 为原图，因为上一次尝试可能质量过低
+                best_image_bytes = image_bytes 
+                
+                iterations = 0
+                for i in range(8): # 最多迭代8次
+                    iterations = i + 1
+                    current_q = (min_q + max_q) // 2
+                    if current_q <= min_q: # 防止区间不再缩小
+                        break
+                    
+                    compressed_bytes = self._compress_image_by_quality(image_bytes, current_q, task_category)
+                    ui_logger.debug(f"     - [压缩-大小模式] ➡️ [迭代 {iterations}/8] 尝试质量: {current_q}, 生成大小: {len(compressed_bytes)/1024:.1f} KB...", task_category=task_category)
+
+                    if len(compressed_bytes) <= target_bytes:
+                        best_image_bytes = compressed_bytes
+                        final_q = current_q
+                        min_q = current_q # 成功，尝试更高质量以获得更好画质
+                    else:
+                        max_q = current_q # 失败，必须降低质量
+                
+                ui_logger.info(f"     - [压缩-大小模式] ✅ 迭代完成。共尝试 {iterations} 次，最终选择质量参数 {final_q}。", task_category=task_category)
+
             return best_image_bytes
         except Exception as e:
             ui_logger.error(f"     - [压缩-大小模式] 压缩图片时发生错误: {e}", task_category=task_category)
