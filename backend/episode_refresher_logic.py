@@ -555,6 +555,10 @@ class EpisodeRefresherLogic:
                 if image_url:
                     ui_logger.info(f"{log_prefix} [命中✅] 发现远程图床缓存，准备更新。", task_category=task_category)
                     if self._upload_image_from_url(episode_id, image_url, task_category):
+                        # --- 新增 ---
+                        ui_logger.info(f"{log_prefix} [标记] 成功从远程图床恢复图片，正在写入来源标记...", task_category=task_category)
+                        self._set_image_source_tag(episode_id, "screenshot", task_category)
+                        # --- 新增结束 ---
                         return True, "remote"
                     else:
                         ui_logger.warning(f"{log_prefix} [警告⚠️] 远程图床图片下载或上传失败，将继续降级检查。", task_category=task_category)
@@ -570,6 +574,8 @@ class EpisodeRefresherLogic:
             if cached_image_bytes:
                 ui_logger.info(f"{log_prefix} [命中✅] 发现本地文件缓存，准备更新。", task_category=task_category)
                 if self._upload_image_bytes(episode_id, cached_image_bytes, 'image/jpeg', task_category):
+                    ui_logger.info(f"{log_prefix} [标记] 成功从本地缓存恢复图片，正在写入来源标记...", task_category=task_category)
+                    self._set_image_source_tag(episode_id, "screenshot", task_category)
                     return True, "local"
                 else:
                      ui_logger.warning(f"{log_prefix} [警告⚠️] 本地缓存图片上传失败，将继续降级检查。", task_category=task_category)
