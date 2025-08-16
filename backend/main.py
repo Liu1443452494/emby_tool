@@ -69,6 +69,7 @@ scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 episode_sync_queue: Dict[str, Dict[str, Any]] = {}
 episode_sync_queue_lock = threading.Lock()
 episode_sync_scheduler_task = None
+main_task_completed_series: set[str] = set()
 
 def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
     """
@@ -173,32 +174,37 @@ async def episode_sync_scheduler():
             
             with episode_sync_queue_lock:
                 if not episode_sync_queue:
-                    # 队列为空，直接跳过本次循环，不打印日志以保持安静
                     continue
 
-                logging.info(f"【{task_cat}】开始检查队列，当前有 {len(episode_sync_queue)} 个剧集待处理...")
+                logging.info(f"【{task_cat}】🔍 开始检查队列，当前有 {len(episode_sync_queue)} 个剧集待处理...")
                 
-                # 找出所有静默时间超过阈值的剧集
-                silent_series_ids = []
+                ready_series_ids = []
                 for series_id, data in episode_sync_queue.items():
                     last_update_time = data['last_update']
                     series_name = data['series_name']
                     silence_duration = now - last_update_time
                     
-                    if silence_duration >= 90: # 静默期
-                        logging.info(f"   - ✅ 剧集《{series_name}》 (ID: {series_id}) 静默时长 {silence_duration:.1f} 秒，已达到90秒阈值，准备处理。")
-                        silent_series_ids.append(series_id)
-                    else:
+                    is_silent_enough = silence_duration >= 90
+                    is_main_task_done = series_id in main_task_completed_series
+
+                    if is_silent_enough and is_main_task_done:
+                        logging.info(f"   - ✅ 剧集《{series_name}》 (ID: {series_id}) 条件满足：静默 {silence_duration:.1f} 秒 (>=90s) 且主流程已完成。准备处理。")
+                        ready_series_ids.append(series_id)
+                    elif is_silent_enough and not is_main_task_done:
+                        logging.info(f"   - ⏱️ 剧集《{series_name}》 (ID: {series_id}) 已满足静默条件，但其主流程任务（如演员中文化）尚未完成，继续等待...")
+                    else: # not silent enough
                         remaining_time = 90 - silence_duration
                         logging.info(f"   - ⏱️ 剧集《{series_name}》 (ID: {series_id}) 静默时长 {silence_duration:.1f} 秒，等待剩余 {remaining_time:.1f} 秒...")
 
-                # 从主队列中安全地弹出这些剧集的数据
-                for series_id in silent_series_ids:
+                # 从主队列和完成标记中安全地弹出这些剧集的数据
+                for series_id in ready_series_ids:
                     series_to_process[series_id] = episode_sync_queue.pop(series_id)
+                    if series_id in main_task_completed_series:
+                        main_task_completed_series.remove(series_id)
 
             # 在锁外执行耗时任务
             if series_to_process:
-                ui_logger.info(f"➡️ {len(series_to_process)} 个剧集已满足静默条件，开始派发精准同步任务...", task_category=task_cat)
+                ui_logger.info(f"➡️ {len(series_to_process)} 个剧集已满足所有条件，开始派发精准同步任务...", task_category=task_cat)
                 config = app_config.load_app_config()
                 logic = EpisodeRoleSyncLogic(config)
 
@@ -207,7 +213,6 @@ async def episode_sync_scheduler():
                     episode_ids = list(data['episode_ids'])
                     task_name = f"精准分集角色同步 -《{series_name}》({len(episode_ids)}集)"
                     
-                    # 使用一个新的 task_runner 来调用新的 logic 方法
                     task_manager.register_task(
                         logic.run_sync_for_specific_episodes,
                         task_name,
@@ -221,7 +226,6 @@ async def episode_sync_scheduler():
             break
         except Exception as e:
             logging.error(f"【{task_cat}】运行时发生未知错误: {e}", exc_info=True)
-            # 发生错误后等待更长时间，避免快速循环刷屏
             await asyncio.sleep(120)
 
 
@@ -258,7 +262,7 @@ async def webhook_worker():
 def _webhook_task_runner(item_id: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
     current_config = app_config.load_app_config()
     logic = WebhookLogic(current_config)
-    logic.process_new_media_task(item_id, cancellation_event)
+    logic.process_new_media_task(item_id, cancellation_event, series_id=item_id)
 
 
 def trigger_douban_refresh():

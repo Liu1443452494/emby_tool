@@ -176,8 +176,10 @@ class WebhookLogic:
             return False
 
 
-
-    def process_new_media_task(self, item_id: str, cancellation_event: threading.Event):
+    def process_new_media_task(self, item_id: str, cancellation_event: threading.Event, series_id: str):
+        # --- 新增：从 main 导入全局标记集合 ---
+        from main import main_task_completed_series, episode_sync_queue_lock
+        # --- 新增结束 ---
         from tmdb_logic import TmdbLogic
         from chasing_center_logic import ChasingCenterLogic
         from actor_role_mapper_logic import ActorRoleMapperLogic, ACTOR_ROLE_MAP_FILE
@@ -201,6 +203,12 @@ class WebhookLogic:
         if self.processed_flag_key.lower() in provider_ids_lower:
             processed_time = provider_ids_lower[self.processed_flag_key.lower()]
             ui_logger.info(f"检测到媒体【{item_name}】已于 {processed_time} 被处理过，本次任务跳过。", task_category=task_cat)
+            # --- 新增：即使跳过，也要确保设置完成标记，以防万一 ---
+            with episode_sync_queue_lock:
+                if series_id not in main_task_completed_series:
+                    main_task_completed_series.add(series_id)
+                    ui_logger.info(f"   - [补丁] 为已处理过的剧集《{item_name}》补加主流程完成标记，以触发可能积压的分集同步任务。", task_category=task_cat)
+            # --- 新增结束 ---
             return
 
         ui_logger.info(f"媒体【{item_name}】是首次处理，继续执行自动化流程。", task_category=task_cat)
@@ -287,14 +295,12 @@ class WebhookLogic:
         actor_localization_skipped = False
         ui_logger.info(f"【步骤 5/8 | 角色映射检查】开始...", task_category=task_cat)
         
-        # --- 核心修改：重新获取最新的 ProviderIds 和 Type，确保信息完整 ---
         item_details_for_map_check = self._get_emby_item_details(item_id, "ProviderIds,Type")
         provider_ids_lower_for_map = {k.lower(): v for k, v in item_details_for_map_check.get("ProviderIds", {}).items()}
         tmdb_id_for_map = provider_ids_lower_for_map.get("tmdb")
         item_type_for_map = item_details_for_map_check.get("Type")
 
         if tmdb_id_for_map and item_type_for_map and os.path.exists(ACTOR_ROLE_MAP_FILE):
-            # --- 核心修改：构建正确的 map_key ---
             type_prefix = 'tv' if item_type_for_map == 'Series' else 'movie'
             map_key = f"{type_prefix}-{tmdb_id_for_map}"
             
@@ -303,7 +309,6 @@ class WebhookLogic:
                 with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
                     actor_role_map = json.load(f)
                 
-                # --- 核心修改：使用 map_key 进行判断 ---
                 if map_key in actor_role_map:
                     ui_logger.info(f"   - ✅ 命中！在映射表中找到了《{item_name}》的角色数据。", task_category=task_cat)
                     actor_localization_skipped = True
@@ -353,7 +358,6 @@ class WebhookLogic:
                     ui_logger.error(f"【演员角色映射】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
             else:
                 ui_logger.warning("【演员角色映射】因演员中文化步骤失败，本步骤已跳过。", task_category=task_cat)
-        # --- 新增逻辑结束 ---
         if cancellation_event.is_set(): return
 
         ui_logger.info(f"【步骤 8/8 | 豆瓣海报更新】开始...", task_category=task_cat)
@@ -364,8 +368,16 @@ class WebhookLogic:
             ui_logger.error(f"【豆瓣海报更新】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
         if cancellation_event.is_set(): return
         
+        # --- 核心修改：在所有流程结束后，设置完成标记 ---
+        with episode_sync_queue_lock:
+            if series_id not in main_task_completed_series:
+                main_task_completed_series.add(series_id)
+                ui_logger.info(f"   - 🔔 [状态同步] 已为剧集《{item_name}》设置主流程完成标记，分集同步任务现可调度。", task_category=task_cat)
+        # --- 修改结束 ---
+
         ui_logger.info(f"【步骤 9/9 | 写入标记】所有自动化步骤执行完毕，开始写入完成标记...", task_category=task_cat)
         if self._set_processed_flag(item_id):
             ui_logger.info(f"🎉 媒体【{item_name}】的首次自动化处理流程已全部执行完毕并成功标记。", task_category=task_cat)
         else:
             ui_logger.warning(f"媒体【{item_name}】的自动化流程已执行，但写入完成标记失败。下次可能会重复执行。", task_category=task_cat)
+        
