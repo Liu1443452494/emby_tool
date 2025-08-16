@@ -273,3 +273,143 @@ class EpisodeRoleSyncLogic:
 
         ui_logger.info(f"🎉 任务执行完毕！共扫描 {processed_series_count} 部电视剧，成功更新了 {updated_episode_count} 个分集的角色信息。", task_category=task_category)
         return {"updated_count": updated_episode_count}
+    
+    def run_sync_for_specific_episodes(
+        self,
+        series_id: str,
+        episode_ids: List[str],
+        config: EpisodeRoleSyncConfig,
+        cancellation_event: threading.Event,
+        task_id: str,
+        task_manager: TaskManager,
+        task_category: str
+    ):
+        """
+        一个精准同步方法，只处理传入的特定分集列表。
+        """
+        ui_logger.info(f"➡️ 任务启动：开始为剧集 (ID: {series_id}) 的 {len(episode_ids)} 个指定分集同步角色...", task_category=task_category)
+        
+        role_map_data, douban_map, sources_ok = self._load_data_sources(task_category)
+        if not sources_ok:
+            ui_logger.error("❌ 关键数据源加载失败，任务中止。", task_category=task_category)
+            return
+
+        total_episodes = len(episode_ids)
+        task_manager.update_task_progress(task_id, 0, total_episodes)
+        
+        series_details = self._get_item_details(series_id, "ProviderIds,Name")
+        if not series_details:
+            ui_logger.error(f"❌ 无法获取剧集 (ID: {series_id}) 的详情，任务中止。", task_category=task_category)
+            return
+        
+        series_name = series_details.get("Name", f"ID {series_id}")
+        ui_logger.info(f"🔍 正在为剧集《{series_name}》准备角色数据...", task_category=task_category)
+
+        provider_ids = series_details.get("ProviderIds", {})
+        provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+        tmdb_id = provider_ids_lower.get("tmdb")
+        douban_id = provider_ids_lower.get("douban")
+
+        if not tmdb_id:
+            ui_logger.error(f"   - ❌ 剧集《{series_name}》缺少 TMDB ID，无法在角色映射表中查找，任务中止。", task_category=task_category)
+            return
+        
+        map_key = f"tv-{tmdb_id}"
+        series_role_map_data = role_map_data.get(map_key)
+        if not series_role_map_data:
+            ui_logger.warning(f"   - ⚠️ 在角色映射表中未找到《{series_name}》(Key: {map_key}) 的记录，将仅依赖豆瓣数据和降级策略。", task_category=task_category)
+            series_role_map = {}
+        else:
+            series_role_map = series_role_map_data.get("map", {})
+            ui_logger.info(f"   - ✅ 在映射表中成功匹配到《{series_name}》，包含 {len(series_role_map)} 位演员的映射。", task_category=task_category)
+
+        douban_item_data = douban_map.get(douban_id) if douban_id else None
+        douban_actor_map = {}
+        if douban_item_data:
+            for actor in douban_item_data.get('actors', []):
+                if actor.get('name'): douban_actor_map[actor['name'].lower()] = self._clean_douban_character(actor.get('character', ''))
+                if actor.get('latin_name'): douban_actor_map[actor['latin_name'].lower()] = self._clean_douban_character(actor.get('character', ''))
+        
+        updated_episode_count = 0
+        
+        # 获取所有待处理分集的详细信息
+        all_episodes_details = []
+        ui_logger.info(f"   - 正在批量获取 {total_episodes} 个分集的详细信息...", task_category=task_category)
+        for episode_id in episode_ids:
+            if cancellation_event.is_set(): break
+            details = self._get_item_details(episode_id, "People,ProviderIds,Name")
+            if details:
+                all_episodes_details.append(details)
+            else:
+                ui_logger.warning(f"   - [跳过] 无法获取分集 (ID: {episode_id}) 的详情。", task_category=task_category)
+        
+        if cancellation_event.is_set():
+            ui_logger.warning("⚠️ 任务被用户取消。", task_category=task_category)
+            return
+
+        ui_logger.info(f"   - ✅ 信息获取完毕，开始逐一处理...", task_category=task_category)
+        
+        for index, episode in enumerate(all_episodes_details):
+            if cancellation_event.is_set(): break
+            
+            task_manager.update_task_progress(task_id, index + 1, total_episodes)
+            
+            episode_id = episode['Id']
+            episode_name = episode.get('Name', f"Episode {episode_id}")
+            people = episode.get('People', [])
+            if not people:
+                ui_logger.info(f"     - [跳过] 分集《{episode_name}》无演职员信息。", task_category=task_category)
+                continue
+
+            has_changes = False
+            actors_to_process = people[:config.actor_limit]
+            if len(people) > config.actor_limit:
+                ui_logger.info(f"     - [演员裁切] 分集《{episode_name}》演员总数: {len(people)}，根据设置将处理前 {config.actor_limit} 位。", task_category=task_category)
+
+            for person in actors_to_process:
+                if self._contains_chinese(person.get('Role', '')):
+                    continue
+
+                original_role = person.get('Role', '')
+                new_role = None
+                source = ""
+
+                person_name = person.get('Name', '')
+                person_tmdb_id = person.get('ProviderIds', {}).get('Tmdb')
+                
+                if person_tmdb_id:
+                    for actor_name_in_map, map_info in series_role_map.items():
+                        if str(map_info.get('tmdb_id')) == str(person_tmdb_id):
+                            new_role = map_info.get('role')
+                            source = "角色映射表(TMDB ID)"
+                            break
+                
+                if not new_role and person_name in series_role_map:
+                    new_role = series_role_map[person_name].get('role')
+                    source = "角色映射表(演员名)"
+
+                if not new_role and douban_actor_map:
+                    matched_douban_role = douban_actor_map.get(person_name.lower())
+                    if matched_douban_role and self._contains_chinese(matched_douban_role):
+                        new_role = matched_douban_role
+                        source = "豆瓣数据"
+                
+                if not new_role and config.fallback_to_actor_string:
+                    new_role = "演员"
+                    source = "降级策略"
+
+                if new_role and new_role != original_role:
+                    ui_logger.info(f"     - [更新] 分集《{episode_name}》: {person_name}: '{original_role}' -> '{new_role}' (来自: {source})", task_category=task_category)
+                    person['Role'] = new_role
+                    has_changes = True
+
+            if has_changes:
+                if self._update_item_people(episode_id, episode_name, people, task_category):
+                    updated_episode_count += 1
+                time.sleep(0.1)
+
+        if cancellation_event.is_set():
+            ui_logger.warning("⚠️ 任务被用户取消。", task_category=task_category)
+        
+        ui_logger.info(f"🎉 任务执行完毕！共处理 {len(all_episodes_details)} 个分集，成功更新了 {updated_episode_count} 个。", task_category=task_category)
+        return {"updated_count": updated_episode_count}

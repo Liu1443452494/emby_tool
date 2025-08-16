@@ -66,6 +66,10 @@ from episode_role_sync_logic import EpisodeRoleSyncLogic
 setup_logging()
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
+episode_sync_queue: Dict[str, Dict[str, Any]] = {}
+episode_sync_queue_lock = threading.Lock()
+episode_sync_scheduler_task = None
+
 def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
     """
     扫描全库，生成 TMDB ID 到 Emby Item ID 的映射文件。
@@ -151,6 +155,76 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
     except IOError as e:
         ui_logger.error(f"❌ 写入映射表文件失败: {e}", task_category=task_cat)
         raise e
+    
+
+async def episode_sync_scheduler():
+    """
+    独立的后台调度器，用于处理分集角色同步的延迟触发任务。
+    """
+    task_cat = "分集同步调度器"
+    logging.info(f"【{task_cat}】已启动，将每 60 秒检查一次待处理队列...")
+    
+    while True:
+        try:
+            await asyncio.sleep(60) # 调度器检查周期
+            
+            now = time.time()
+            series_to_process = {}
+            
+            with episode_sync_queue_lock:
+                if not episode_sync_queue:
+                    # 队列为空，直接跳过本次循环，不打印日志以保持安静
+                    continue
+
+                logging.info(f"【{task_cat}】开始检查队列，当前有 {len(episode_sync_queue)} 个剧集待处理...")
+                
+                # 找出所有静默时间超过阈值的剧集
+                silent_series_ids = []
+                for series_id, data in episode_sync_queue.items():
+                    last_update_time = data['last_update']
+                    series_name = data['series_name']
+                    silence_duration = now - last_update_time
+                    
+                    if silence_duration >= 90: # 静默期
+                        logging.info(f"   - ✅ 剧集《{series_name}》 (ID: {series_id}) 静默时长 {silence_duration:.1f} 秒，已达到90秒阈值，准备处理。")
+                        silent_series_ids.append(series_id)
+                    else:
+                        remaining_time = 90 - silence_duration
+                        logging.info(f"   - ⏱️ 剧集《{series_name}》 (ID: {series_id}) 静默时长 {silence_duration:.1f} 秒，等待剩余 {remaining_time:.1f} 秒...")
+
+                # 从主队列中安全地弹出这些剧集的数据
+                for series_id in silent_series_ids:
+                    series_to_process[series_id] = episode_sync_queue.pop(series_id)
+
+            # 在锁外执行耗时任务
+            if series_to_process:
+                ui_logger.info(f"➡️ {len(series_to_process)} 个剧集已满足静默条件，开始派发精准同步任务...", task_category=task_cat)
+                config = app_config.load_app_config()
+                logic = EpisodeRoleSyncLogic(config)
+
+                for series_id, data in series_to_process.items():
+                    series_name = data['series_name']
+                    episode_ids = list(data['episode_ids'])
+                    task_name = f"精准分集角色同步 -《{series_name}》({len(episode_ids)}集)"
+                    
+                    # 使用一个新的 task_runner 来调用新的 logic 方法
+                    task_manager.register_task(
+                        logic.run_sync_for_specific_episodes,
+                        task_name,
+                        series_id=series_id,
+                        episode_ids=episode_ids,
+                        config=config.episode_role_sync_config,
+                        task_category=task_name
+                    )
+        except asyncio.CancelledError:
+            logging.info(f"【{task_cat}】收到关闭信号，正在退出...")
+            break
+        except Exception as e:
+            logging.error(f"【{task_cat}】运行时发生未知错误: {e}", exc_info=True)
+            # 发生错误后等待更长时间，避免快速循环刷屏
+            await asyncio.sleep(120)
+
+
 webhook_queue = asyncio.Queue()
 webhook_processing_set = set()
 
@@ -568,6 +642,7 @@ def update_upcoming_scheduler():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global episode_sync_scheduler_task # 声明我们要修改全局变量
     task_cat = "系统启动"
     # --- 核心修改 1: 初始化日志系统，但不包括 WebSocket 处理器 ---
     # 这是为了让日志系统在应用启动的最早期就能工作
@@ -585,6 +660,9 @@ async def lifespan(app: FastAPI):
             ui_logger.warning(f"【启动检查】未找到 '{tool}' 命令，视频截图功能将不可用。请确保已在 Docker 环境或主机上安装 ffmpeg。", task_category=task_cat)
     task_manager_consumer = asyncio.create_task(task_manager.broadcast_consumer())
     webhook_worker_task = asyncio.create_task(webhook_worker())
+    # --- 新增 ---
+    episode_sync_scheduler_task = asyncio.create_task(episode_sync_scheduler())
+    # --- 新增结束 ---
 
     config = app_config.load_app_config()
     
@@ -657,7 +735,11 @@ async def lifespan(app: FastAPI):
 
     webhook_worker_task.cancel()
     task_manager_consumer.cancel()
-    await asyncio.gather(webhook_worker_task, task_manager_consumer, return_exceptions=True)
+    # --- 新增 ---
+    if episode_sync_scheduler_task:
+        episode_sync_scheduler_task.cancel()
+    await asyncio.gather(webhook_worker_task, task_manager_consumer, episode_sync_scheduler_task, return_exceptions=True)
+    # --- 修改结束 ---
     logging.info("所有后台任务已成功取消。")
 
 app = FastAPI(lifespan=lifespan)
@@ -1930,15 +2012,16 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     except Exception as e:
         logging.error(f"【Webhook调试】打印 Payload 时发生错误: {e}")
 
-    logging.info(f"【Webhook】收到来自 Emby 的通知，事件: {payload.Event}")
+    task_cat = "Webhook"
+    ui_logger.info(f"➡️ 收到来自 Emby 的通知，事件: {payload.Event}", task_category=task_cat)
     
     config = app_config.load_app_config()
     if not config.webhook_config.enabled:
-        logging.info("【Webhook】Webhook 功能未启用，跳过处理。")
+        ui_logger.info("【跳过】Webhook 功能未启用，忽略本次通知。", task_category=task_cat)
         return {"status": "skipped", "message": "Webhook processing is disabled."}
 
     if not payload.Item:
-        logging.info("【Webhook】收到的通知中不包含有效的 Item 信息，可能是测试通知或无关事件，已成功接收并跳过。")
+        ui_logger.info("【跳过】收到的通知中不包含有效的 Item 信息，可能是测试通知或无关事件。", task_category=task_cat)
         return {"status": "success_test_skipped", "message": "Test notification received successfully."}
 
     target_item_id = None
@@ -1948,11 +2031,11 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
     if payload.Event in ["item.add", "library.new"]:
         if target_item_type in ["Movie", "Series"]:
             target_item_id = payload.Item.Id
-            logging.info(f"【Webhook】检测到新 [电影/剧集] 入库: 【{target_item_name}】 (ID: {target_item_id})")
+            ui_logger.info(f"  - [主流程] 检测到新 [电影/剧集] 入库: 【{target_item_name}】 (ID: {target_item_id})", task_category=task_cat)
         
         elif target_item_type == "Episode":
             episode_id = payload.Item.Id
-            logging.info(f"【Webhook】检测到新 [剧集分集] 入库: 【{target_item_name}】 (ID: {episode_id})，正在查找其所属剧集...")
+            ui_logger.info(f"  - [分集流程] 检测到新 [剧集分集] 入库: 【{target_item_name}】 (ID: {episode_id})", task_category=task_cat)
             
             try:
                 server_conf = config.server_config
@@ -1962,26 +2045,48 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
                 response.raise_for_status()
                 episode_details = response.json()
                 
-                target_item_id = episode_details.get("SeriesId")
-                if target_item_id:
-                    target_item_name = episode_details.get("SeriesName", f"Series {target_item_id}")
-                    logging.info(f"【Webhook】成功找到所属剧集: 【{target_item_name}】 (ID: {target_item_id})")
+                series_id = episode_details.get("SeriesId")
+                series_name = episode_details.get("SeriesName")
+
+                if series_id and series_name:
+                    ui_logger.info(f"  - [分集流程] 成功找到所属剧集: 【{series_name}】 (ID: {series_id})", task_category=task_cat)
+                    
+                    # --- 核心新增：事件收集逻辑 ---
+                    with episode_sync_queue_lock:
+                        if series_id not in episode_sync_queue:
+                            episode_sync_queue[series_id] = {
+                                "episode_ids": set(),
+                                "series_name": series_name,
+                                "last_update": 0
+                            }
+                            ui_logger.info(f"    - [收集器] 首次记录剧集《{series_name}》，已创建新的同步队列。", task_category=task_cat)
+                        
+                        episode_sync_queue[series_id]["episode_ids"].add(episode_id)
+                        episode_sync_queue[series_id]["last_update"] = time.time()
+                        
+                        queue_size = len(episode_sync_queue[series_id]["episode_ids"])
+                        ui_logger.info(f"    - [收集器] 已将分集 {episode_id} 添加到队列。剧集《{series_name}》当前待同步分集数: {queue_size}。静默倒计时已重置。", task_category=task_cat)
+                    # --- 核心新增结束 ---
+
+                    # 主流程依然只处理剧集ID
+                    target_item_id = series_id
+                    target_item_name = series_name
                 else:
-                    logging.warning(f"【Webhook】无法从剧集【{target_item_name}】中找到所属剧集的ID，跳过处理。")
+                    ui_logger.warning(f"  - ⚠️ [分集流程] 无法从分集【{target_item_name}】中找到所属剧集的ID，跳过处理。", task_category=task_cat)
 
             except requests.RequestException as e:
-                logging.error(f"【Webhook】查询剧集详情失败: {e}，跳过处理。")
+                ui_logger.error(f"  - ❌ [分集流程] 查询剧集详情失败: {e}，跳过处理。", task_category=task_cat)
         
     if target_item_id:
         if target_item_id in webhook_processing_set:
-            logging.info(f"【Webhook】任务【{target_item_name}】(ID: {target_item_id}) 已存在于处理队列中，本次通知跳过。")
+            ui_logger.info(f"  - [主流程-跳过] 任务【{target_item_name}】(ID: {target_item_id}) 已在主处理队列中，本次通知的主流程部分跳过。", task_category=task_cat)
             return {"status": "skipped_in_queue", "message": "Task is already in the processing queue."}
         
         await webhook_queue.put((target_item_id, target_item_name))
         webhook_processing_set.add(target_item_id)
-        logging.info(f"【Webhook】已将任务【{target_item_name}】(ID: {target_item_id}) 添加到处理队列。当前队列长度: {webhook_queue.qsize()}")
+        ui_logger.info(f"  - [主流程-入队] 已将任务【{target_item_name}】(ID: {target_item_id}) 添加到主处理队列。当前队列长度: {webhook_queue.qsize()}", task_category=task_cat)
         
         return {"status": "success_queued", "message": f"Task for item {target_item_id} has been queued."}
     
-    logging.info(f"【Webhook】事件 '{payload.Event}' 或类型 '{target_item_type}' 无需处理，已跳过。")
+    ui_logger.info(f"【跳过】事件 '{payload.Event}' 或类型 '{target_item_type}' 无需处理。", task_category=task_cat)
     return {"status": "skipped", "message": "Event not applicable"}
