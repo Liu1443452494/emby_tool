@@ -69,6 +69,9 @@ scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 episode_sync_queue: Dict[str, Dict[str, Any]] = {}
 episode_sync_queue_lock = threading.Lock()
 episode_sync_scheduler_task = None
+id_map_update_request_time: Optional[float] = None
+id_map_update_lock = threading.Lock()
+id_map_update_scheduler_task = None
 main_task_completed_series: set[str] = set()
 
 def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
@@ -157,6 +160,50 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
         ui_logger.error(f"❌ 写入映射表文件失败: {e}", task_category=task_cat)
         raise e
     
+async def id_map_update_scheduler():
+    """
+    独立的后台调度器，用于处理 ID 映射表更新的延迟触发任务。
+    """
+    task_cat = "ID映射调度器"
+    logging.info(f"【{task_cat}】已启动，将每 60 秒检查一次更新请求...")
+    
+    while True:
+        try:
+            await asyncio.sleep(60) # 调度器检查周期
+            
+            global id_map_update_request_time
+            if id_map_update_request_time is None:
+                continue
+
+            now = time.time()
+            silence_duration = now - id_map_update_request_time
+            
+            # 检查是否有ID映射任务正在运行
+            is_task_running = any("ID 映射表" in task['name'] for task in task_manager.get_all_tasks())
+            if is_task_running:
+                logging.info(f"【{task_cat}】⏱️ 检测到已有ID映射表生成任务正在运行，本次调度跳过，等待其完成后再重新计时。")
+                continue
+
+            if silence_duration >= 300: # 300秒 (5分钟) 静默期
+                ui_logger.info(f"➡️【{task_cat}】检测到 Webhook 请求已静默 {silence_duration:.1f} 秒 (>=300s)，开始执行 ID 映射表全量更新...", task_category=task_cat)
+                
+                # 触发任务
+                task_manager.register_task(generate_id_map_task, "Webhook触发-ID映射表更新")
+                
+                # 重置计时器
+                with id_map_update_lock:
+                    id_map_update_request_time = None
+                logging.info(f"【{task_cat}】✅ 任务已派发，更新请求计时器已重置。")
+            else:
+                remaining_time = 300 - silence_duration
+                logging.info(f"【{task_cat}】⏱️ 收到更新请求，当前已静默 {silence_duration:.1f} 秒，等待剩余 {remaining_time:.1f} 秒...")
+
+        except asyncio.CancelledError:
+            logging.info(f"【{task_cat}】收到关闭信号，正在退出...")
+            break
+        except Exception as e:
+            logging.error(f"【{task_cat}】运行时发生未知错误: {e}", exc_info=True)
+            await asyncio.sleep(120) # 发生错误时等待更长时间
 
 async def episode_sync_scheduler():
     """
@@ -644,9 +691,11 @@ def update_upcoming_scheduler():
         ui_logger.info(f"  - 已禁用并移除过期项目清理任务。", task_category=task_cat)
     # --- 新增结束 ---
 
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global episode_sync_scheduler_task # 声明我们要修改全局变量
+    global episode_sync_scheduler_task, id_map_update_scheduler_task # 声明我们要修改全局变量
     task_cat = "系统启动"
     # --- 核心修改 1: 初始化日志系统，但不包括 WebSocket 处理器 ---
     # 这是为了让日志系统在应用启动的最早期就能工作
@@ -666,6 +715,8 @@ async def lifespan(app: FastAPI):
     webhook_worker_task = asyncio.create_task(webhook_worker())
     # --- 新增 ---
     episode_sync_scheduler_task = asyncio.create_task(episode_sync_scheduler())
+    # --- 新增：启动ID映射表更新调度器 ---
+    id_map_update_scheduler_task = asyncio.create_task(id_map_update_scheduler())
     # --- 新增结束 ---
 
     config = app_config.load_app_config()
@@ -742,7 +793,10 @@ async def lifespan(app: FastAPI):
     # --- 新增 ---
     if episode_sync_scheduler_task:
         episode_sync_scheduler_task.cancel()
-    await asyncio.gather(webhook_worker_task, task_manager_consumer, episode_sync_scheduler_task, return_exceptions=True)
+    # --- 新增：取消ID映射表更新调度器 ---
+    if id_map_update_scheduler_task:
+        id_map_update_scheduler_task.cancel()
+    await asyncio.gather(webhook_worker_task, task_manager_consumer, episode_sync_scheduler_task, id_map_update_scheduler_task, return_exceptions=True)
     # --- 修改结束 ---
     logging.info("所有后台任务已成功取消。")
 
