@@ -369,12 +369,11 @@ class WebhookLogic:
             ui_logger.error(f"【豆瓣海报更新】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
         if cancellation_event.is_set(): return
         
-        # --- 核心修改：在所有流程结束后，设置完成标记 ---
-        with episode_sync_queue_lock:
-            if series_id not in main_task_completed_series:
-                main_task_completed_series.add(series_id)
-                ui_logger.info(f"   - 🔔 [状态同步] 已为剧集《{item_name}》设置主流程完成标记，分集同步任务现可调度。", task_category=task_cat)
-        # --- 修改结束 ---
+        if item_type == "Series":
+            with episode_sync_queue_lock:
+                if series_id not in main_task_completed_series:
+                    main_task_completed_series.add(series_id)
+                    ui_logger.info(f"   - 🔔 [状态同步] 已为剧集《{item_name}》设置主流程完成标记，分集同步任务现可调度。", task_category=task_cat)
 
         ui_logger.info(f"【步骤 9/9 | 写入标记】所有自动化步骤执行完毕，开始写入完成标记...", task_category=task_cat)
         if self._set_processed_flag(item_id):
