@@ -467,6 +467,7 @@ def trigger_scheduled_task(task_id: str):
         "douban_poster_updater": "豆瓣海报更新",
         "episode_refresher": "剧集元数据刷新",
         "episode_renamer": "剧集文件重命名",
+        "movie_renamer": "电影文件重命名",
         "episode_role_sync": "剧集角色同步到分集",
         # --- 新增行 ---
         "id_mapper": "TMDB-Emby ID 映射表"
@@ -487,6 +488,9 @@ def trigger_scheduled_task(task_id: str):
     target_collection_type = None
     if task_id == "episode_refresher" or task_id == "episode_renamer":
         target_collection_type = "tvshows"
+
+    elif task_id == "movie_renamer":
+        target_collection_type = "movies"
         
     item_ids = selector.get_item_ids(scope, target_collection_type=target_collection_type)
 
@@ -548,6 +552,16 @@ def trigger_scheduled_task(task_id: str):
             task_name,
             item_ids,
             config.episode_role_sync_config,
+            task_category=task_name
+        )
+    elif task_id == "movie_renamer":
+        from movie_renamer_logic import MovieRenamerLogic
+        logic = MovieRenamerLogic(config)
+        task_name = f"定时任务-电影文件重命名({scope.mode})"
+        task_manager.register_task(
+            logic.run_rename_task_for_items,
+            task_name,
+            item_ids=item_ids,
             task_category=task_name
         )
     else:

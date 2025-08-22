@@ -583,7 +583,7 @@
     <!-- 剧集重命名设置与撤销工具对话框 -->
     <el-dialog
       v-model="isRenamerSettingsDialogVisible"
-      title="剧集文件重命名 - 设置"
+      title="文件重命名 - 通用设置"
       width="700px"
     >
       <div class="independent-task-config">
@@ -828,6 +828,7 @@ const definedTasks = ref([
   { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
   { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true },
   { id: 'episode_renamer', name: '剧集文件重命名', hasSettings: true },
+  { id: 'movie_renamer', name: '电影文件重命名', hasSettings: true },
   { id: 'episode_role_sync', name: '剧集角色同步到分集', hasSettings: true },
   { id: 'id_mapper', name: 'TMDB-Emby ID 映射表', hasSettings: false }
 ]);
@@ -1082,7 +1083,7 @@ const openSettingsDialog = (taskId) => {
     isPosterDialogVisible.value = true;
   } else if (taskId === 'episode_refresher') {
     isRefresherDialogVisible.value = true;
-  } else if (taskId === 'episode_renamer') {
+  } else if (taskId === 'episode_renamer' || taskId === 'movie_renamer') { // 复用条件
     isRenamerSettingsDialogVisible.value = true;
   } else if (taskId === 'episode_role_sync') {
     isEpisodeRoleSyncDialogVisible.value = true;
