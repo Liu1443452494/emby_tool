@@ -184,6 +184,9 @@ class WebhookLogic:
         from tmdb_logic import TmdbLogic
         from chasing_center_logic import ChasingCenterLogic
         from actor_role_mapper_logic import ActorRoleMapperLogic, ACTOR_ROLE_MAP_FILE
+        # --- 新增：导入电影重命名逻辑 ---
+        from movie_renamer_logic import MovieRenamerLogic
+        # --- 新增结束 ---
 
         item_details_pre = self._get_emby_item_details(item_id)
         item_name_pre = item_details_pre.get("Name", f"Item {item_id}") if item_details_pre else f"Item {item_id}"
@@ -191,7 +194,7 @@ class WebhookLogic:
 
         ui_logger.info(f"【Webhook任务】已启动，开始处理新入库媒体: {item_name_pre} (ID: {item_id})", task_category=task_cat)
         
-        ui_logger.info(f"【步骤 0/8 | 检查标记】正在检查媒体项是否已被处理过...", task_category=task_cat)
+        ui_logger.info(f"【步骤 0/9 | 检查标记】正在检查媒体项是否已被处理过...", task_category=task_cat)
         item_details = self._get_emby_item_details(item_id)
         if not item_details:
             ui_logger.error(f"无法获取媒体 {item_id} 的详细信息，任务中止。", task_category=task_cat)
@@ -216,12 +219,12 @@ class WebhookLogic:
 
         wait_time = self.webhook_config.initial_wait_time
 
-        ui_logger.info(f"【步骤 1/8 | 初始等待】等待 {wait_time} 秒，以便 Emby 自动刮削... (可配置)", task_category=task_cat)
+        ui_logger.info(f"【步骤 1/9 | 初始等待】等待 {wait_time} 秒，以便 Emby 自动刮削... (可配置)", task_category=task_cat)
 
         time.sleep(wait_time)
         if cancellation_event.is_set(): return
 
-        ui_logger.info(f"【步骤 2/8 | 获取豆瓣ID】开始...", task_category=task_cat)
+        ui_logger.info(f"【步骤 2/9 | 获取豆瓣ID】开始...", task_category=task_cat)
         item_details = self._get_emby_item_details(item_id)
         if not item_details:
             ui_logger.error(f"等待后无法再次获取媒体【{item_name}】的详细信息，任务中止。", task_category=task_cat)
@@ -252,7 +255,7 @@ class WebhookLogic:
         if cancellation_event.is_set(): return
 
         if item_type == "Series" and self.config.chasing_center_config.enabled:
-            ui_logger.info(f"【步骤 3/8 | 追更判断】检测到新入库剧集，开始判断是否加入追更列表...", task_category=task_cat)
+            ui_logger.info(f"【步骤 3/9 | 追更判断】检测到新入库剧集，开始判断是否加入追更列表...", task_category=task_cat)
             try:
                 provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
                 tmdb_id = provider_ids_lower.get("tmdb")
@@ -274,7 +277,7 @@ class WebhookLogic:
             except Exception as e:
                 ui_logger.error(f"❌ 在判断追更状态时发生错误: {e}", task_category=task_cat)
 
-        ui_logger.info(f"【步骤 4/8 | 同步豆瓣数据】开始...", task_category=task_cat)
+        ui_logger.info(f"【步骤 4/9 | 同步豆瓣数据】开始...", task_category=task_cat)
         
         ui_logger.info(f"【智能等待】正在快速检查豆瓣ID {douban_id} 是否已存在于主缓存中...", task_category=task_cat)
         if self._check_cache_exists(douban_id):
@@ -294,7 +297,7 @@ class WebhookLogic:
         if cancellation_event.is_set(): return
 
         actor_localization_skipped = False
-        ui_logger.info(f"【步骤 5/8 | 角色映射检查】开始...", task_category=task_cat)
+        ui_logger.info(f"【步骤 5/9 | 角色映射检查】开始...", task_category=task_cat)
         
         item_details_for_map_check = self._get_emby_item_details(item_id, "ProviderIds,Type")
         provider_ids_lower_for_map = {k.lower(): v for k, v in item_details_for_map_check.get("ProviderIds", {}).items()}
@@ -314,8 +317,8 @@ class WebhookLogic:
                     ui_logger.info(f"   - ✅ 命中！在映射表中找到了《{item_name}》的角色数据。", task_category=task_cat)
                     actor_localization_skipped = True
                     
-                    ui_logger.info(f"【步骤 6/8 | 演员中文化】➡️ [跳过] 因找到现有映射，跳过中文化步骤。", task_category=task_cat)
-                    ui_logger.info(f"【步骤 7/8 | 角色映射生成】➡️ [跳过] 因找到现有映射，跳过映射生成步骤。", task_category=task_cat)
+                    ui_logger.info(f"【步骤 6/9 | 演员中文化】➡️ [跳过] 因找到现有映射，跳过中文化步骤。", task_category=task_cat)
+                    ui_logger.info(f"【步骤 7/9 | 角色映射生成】➡️ [跳过] 因找到现有映射，跳过映射生成步骤。", task_category=task_cat)
                     
                     ui_logger.info(f"   - 🔄 [角色恢复] 开始将已存在的中文角色名应用到新入库的媒体项...", task_category=task_cat)
                     role_mapper_logic = ActorRoleMapperLogic(self.config)
@@ -340,7 +343,7 @@ class WebhookLogic:
                 ui_logger.info(f"   - 本地角色映射表不存在，将执行标准流程。", task_category=task_cat)
 
         if not actor_localization_skipped:
-            ui_logger.info(f"【步骤 6/8 | 演员中文化】开始...", task_category=task_cat)
+            ui_logger.info(f"【步骤 6/9 | 演员中文化】开始...", task_category=task_cat)
             actor_localization_success = False
             try:
                 localizer_logic = ActorLocalizerLogic(self.config)
@@ -350,7 +353,7 @@ class WebhookLogic:
                 ui_logger.error(f"【演员中文化】步骤执行失败，但将继续后续任务。错误: {e}", task_category=task_cat, exc_info=True)
             if cancellation_event.is_set(): return
 
-            ui_logger.info(f"【步骤 7/8 | 演员角色映射】开始...", task_category=task_cat)
+            ui_logger.info(f"【步骤 7/9 | 演员角色映射】开始...", task_category=task_cat)
             if actor_localization_success:
                 try:
                     role_mapper_logic = ActorRoleMapperLogic(self.config)
@@ -361,7 +364,7 @@ class WebhookLogic:
                 ui_logger.warning("【演员角色映射】因演员中文化步骤失败，本步骤已跳过。", task_category=task_cat)
         if cancellation_event.is_set(): return
 
-        ui_logger.info(f"【步骤 8/8 | 豆瓣海报更新】开始...", task_category=task_cat)
+        ui_logger.info(f"【步骤 8/9 | 豆瓣海报更新】开始...", task_category=task_cat)
         try:
             poster_logic = DoubanPosterUpdaterLogic(self.config)
             poster_logic.run_poster_update_for_items([item_id], self.config.douban_poster_updater_config, cancellation_event, None, None)
@@ -369,13 +372,29 @@ class WebhookLogic:
             ui_logger.error(f"【豆瓣海报更新】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
         if cancellation_event.is_set(): return
         
+        # --- 新增：电影文件重命名逻辑 ---
+        if item_type == "Movie":
+            ui_logger.info(f"【步骤 9/9 | 电影文件重命名】开始...", task_category=task_cat)
+            try:
+                movie_renamer_logic = MovieRenamerLogic(self.config)
+                # 重新获取一次最新的媒体信息，确保 Path 和 MediaSources 是准确的
+                final_movie_details = self._get_emby_item_details(item_id, fields="Name,Path,MediaSources")
+                if final_movie_details:
+                    movie_renamer_logic.process_single_movie(final_movie_details, task_cat)
+                else:
+                    ui_logger.error(f"【电影文件重命名】在最后阶段无法获取电影详情，跳过重命名。", task_category=task_cat)
+            except Exception as e:
+                # 即使重命名失败，也只记录错误，不影响后续流程
+                ui_logger.error(f"【电影文件重命名】步骤执行时发生未知错误，但将继续完成 Webhook 流程。错误: {e}", task_category=task_cat, exc_info=True)
+        # --- 新增结束 ---
+
         if item_type == "Series":
             with episode_sync_queue_lock:
                 if series_id not in main_task_completed_series:
                     main_task_completed_series.add(series_id)
                     ui_logger.info(f"   - 🔔 [状态同步] 已为剧集《{item_name}》设置主流程完成标记，分集同步任务现可调度。", task_category=task_cat)
 
-        ui_logger.info(f"【步骤 9/9 | 写入标记】所有自动化步骤执行完毕，开始写入完成标记...", task_category=task_cat)
+        ui_logger.info(f"【最终步骤 | 写入标记】所有自动化步骤执行完毕，开始写入完成标记...", task_category=task_cat)
         if self._set_processed_flag(item_id):
             ui_logger.info(f"🎉 媒体【{item_name}】的首次自动化处理流程已全部执行完毕并成功标记。", task_category=task_cat)
         else:
@@ -387,4 +406,3 @@ class WebhookLogic:
             ui_logger.info(f"🔔【ID映射调度器】已成功发送ID映射表更新请求，静默期计时器已重置。", task_category=task_cat)
         except Exception as e:
             ui_logger.error(f"❌【Webhook任务】发送ID映射表更新请求时发生未知错误: {e}", task_category=task_cat, exc_info=True)
-        
