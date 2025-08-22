@@ -142,8 +142,8 @@ class MovieRenamerLogic:
         # 检查大小标签
         if not size_match:
             ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: 缺失大小标签)", task_category=task_cat)
-        elif size_match.start() > 35:
-            ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: 大小标签位置靠后, 索引 {size_match.start()} > 35)", task_category=task_cat)
+        elif size_match.start() > 25:
+            ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: 大小标签位置靠后, 索引 {size_match.start()} > 25)", task_category=task_cat)
         else:
             # 大小标签合格，检查 ISO 标签
             if not is_iso:
@@ -153,8 +153,8 @@ class MovieRenamerLogic:
             iso_match = self.iso_regex.search(filename_body)
             if not iso_match:
                 ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: ISO 文件缺失 [ISO] 标签)", task_category=task_cat)
-            elif iso_match.start() > 35:
-                ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: [ISO] 标签位置靠后, 索引 {iso_match.start()} > 35)", task_category=task_cat)
+            elif iso_match.start() > 25:
+                ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: [ISO] 标签位置靠后, 索引 {iso_match.start()} > 25)", task_category=task_cat)
             else:
                 ui_logger.info(f"  - [预检查] ✅ 合格 (大小和 ISO 标签均位置规范)", task_category=task_cat)
                 return {"status": "skipped", "message": "命名已规范"}
