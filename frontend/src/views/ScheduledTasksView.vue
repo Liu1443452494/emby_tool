@@ -595,6 +595,7 @@
           style="margin-bottom: 20px;"
         >
           <p>
+            电影的文件重命名冷却时间配置和网盘剧集重命名共用
             为了让本工具能正确地找到并重命名您的 <code>.strm</code> 文件，您必须确保 <strong>Emby 容器</strong> 和 <strong>Emby-Toolkit 容器</strong> 的媒体目录挂载点完全一致。
           </p>
         </el-alert>
