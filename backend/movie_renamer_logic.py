@@ -12,7 +12,6 @@ from log_manager import ui_logger
 from models import AppConfig
 from task_manager import TaskManager
 
-# backend/movie_renamer_logic.py (类替换 - 修正版)
 
 class MovieRenamerLogic:
     def __init__(self, app_config: AppConfig):
@@ -56,21 +55,45 @@ class MovieRenamerLogic:
         
         return details_list
 
-    def _get_real_filename_from_mediasources(self, media_sources: List[Dict], task_cat: str) -> Optional[str]:
-        """从 MediaSources 中解析出网盘真实文件名"""
-        if not media_sources or not isinstance(media_sources, list) or len(media_sources) == 0:
-            return None
+    # --- 核心修改：重构此函数，增加 target_item_id 参数 ---
+    def _find_source_and_get_filename(self, media_sources: List[Dict], target_item_id: str, task_cat: str) -> Optional[Tuple[Dict, str]]:
+        """
+        从 MediaSources 数组中精确查找与 target_item_id 匹配的源，并返回该源对象和解析出的文件名。
+        """
+        ui_logger.info(f"  - [数据解析] 🔍 开始在 {len(media_sources)} 个媒体源中查找匹配 ID: {target_item_id} 的源...", task_category=task_cat)
         
-        strm_url = media_sources[0].get("Path")
-        if not strm_url:
+        if not media_sources or not isinstance(media_sources, list):
+            ui_logger.warning("    - ⚠️ 'MediaSources' 字段为空或格式不正确，无法查找。", task_category=task_cat)
             return None
 
-        try:
-            # 兼容 ?/ 和 / 作为分隔符的情况
-            return strm_url.split('?/')[-1].split('/')[-1]
-        except Exception as e:
-            ui_logger.warning(f"   - ⚠️ 无法从 URL '{strm_url}' 中解析出文件名: {e}", task_category=task_cat)
+        found_source = None
+        for i, source in enumerate(media_sources):
+            source_item_id = source.get("ItemId")
+            ui_logger.debug(f"    - 正在检查源 {i+1}/{len(media_sources)}: 其 ItemId 为 '{source_item_id}'", task_category=task_cat)
+            if str(source_item_id) == str(target_item_id):
+                found_source = source
+                ui_logger.info(f"    - ✅ 命中！在第 {i+1} 个位置找到了匹配的媒体源。", task_category=task_cat)
+                break
+        
+        if not found_source:
+            ui_logger.error(f"    - ❌ 严重错误: 遍历了所有媒体源，但未找到任何一个源的 ItemId 与目标 ID '{target_item_id}' 匹配！", task_category=task_cat)
             return None
+
+        strm_url = found_source.get("Path")
+        if not strm_url:
+            ui_logger.error("    - ❌ 匹配到的媒体源中缺少 'Path' 字段，无法解析文件名。", task_category=task_cat)
+            return None
+        
+        ui_logger.debug(f"    - 从命中的源获取到 Path (URL): \"{strm_url}\"", task_category=task_cat)
+
+        try:
+            filename = strm_url.split('?/')[-1].split('/')[-1]
+            ui_logger.info(f"    - 成功从 URL 中解析出真实文件名: '{filename}'", task_category=task_cat)
+            return found_source, filename
+        except Exception as e:
+            ui_logger.error(f"    - ❌ 从 URL '{strm_url}' 解析文件名时出错: {e}", task_category=task_cat)
+            return None
+    # --- 修改结束 ---
 
     def _get_clouddrive_path(self, emby_strm_path: str, real_filename: str, task_cat: str) -> Optional[str]:
         """根据 Emby 路径和真实文件名，构造 CloudDrive 的绝对路径"""
@@ -117,6 +140,7 @@ class MovieRenamerLogic:
         
         return renamed_any
 
+    # --- 核心修改：重构此函数以适应新逻辑 ---
     def process_single_movie(self, movie_info: Dict, task_cat: str) -> Dict:
         """处理单个电影的核心逻辑函数"""
         item_id = movie_info.get("Id")
@@ -124,14 +148,18 @@ class MovieRenamerLogic:
         emby_path = movie_info.get("Path")
         media_sources = movie_info.get("MediaSources")
 
-        ui_logger.info(f"--- 正在处理电影: 【{emby_name}】 ---", task_category=task_cat)
+        ui_logger.info(f"--- 正在处理电影: 【{emby_name}】 (ID: {item_id}) ---", task_category=task_cat)
 
         if not all([emby_path, media_sources]):
+            ui_logger.warning(f"  - [跳过] 媒体项缺少 Path 或 MediaSources 关键信息。", task_category=task_cat)
             return {"status": "skipped", "message": "缺少路径或 MediaSources 信息"}
 
-        real_filename = self._get_real_filename_from_mediasources(media_sources, task_cat)
-        if not real_filename:
-            return {"status": "skipped", "message": "无法从 MediaSources 解析真实文件名"}
+        find_result = self._find_source_and_get_filename(media_sources, item_id, task_cat)
+        if not find_result:
+            ui_logger.error(f"  - [跳过] 无法为 ID {item_id} 找到匹配的媒体源或解析文件名。", task_category=task_cat)
+            return {"status": "skipped", "message": "无法找到匹配的媒体源"}
+        
+        target_source, real_filename = find_result
 
         # --- 阶段二：预检查 ---
         ui_logger.info(f"  - [预检查] 正在检查文件名: '{real_filename}'", task_category=task_cat)
@@ -142,22 +170,22 @@ class MovieRenamerLogic:
         
         # 检查大小标签
         if not size_match:
-            ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: 缺失大小标签)", task_category=task_cat)
-        elif size_match.start() > 25:
-            ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: 大小标签位置靠后, 索引 {size_match.start()} > 25)", task_category=task_cat)
+            ui_logger.info(f"    - ➡️ 不合格 (原因: 缺失大小标签)", task_category=task_cat)
+        elif size_match.start() > 20:
+            ui_logger.info(f"    - ➡️ 不合格 (原因: 大小标签位置靠后, 索引 {size_match.start()} > 20)", task_category=task_cat)
         else:
             # 大小标签合格，检查 ISO 标签
             if not is_iso:
-                ui_logger.info(f"  - [预检查] ✅ 合格 (大小标签位置规范, 非 ISO 文件)", task_category=task_cat)
+                ui_logger.info(f"    - ✅ 合格 (大小标签位置规范, 非 ISO 文件)", task_category=task_cat)
                 return {"status": "skipped", "message": "命名已规范"}
             
             iso_match = self.iso_regex.search(filename_body)
             if not iso_match:
-                ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: ISO 文件缺失 [ISO] 标签)", task_category=task_cat)
-            elif iso_match.start() > 25:
-                ui_logger.info(f"  - [预检查] ➡️ 不合格 (原因: [ISO] 标签位置靠后, 索引 {iso_match.start()} > 25)", task_category=task_cat)
+                ui_logger.info(f"    - ➡️ 不合格 (原因: ISO 文件缺失 [ISO] 标签)", task_category=task_cat)
+            elif iso_match.start() > 20:
+                ui_logger.info(f"    - ➡️ 不合格 (原因: [ISO] 标签位置靠后, 索引 {iso_match.start()} > 20)", task_category=task_cat)
             else:
-                ui_logger.info(f"  - [预检查] ✅ 合格 (大小和 ISO 标签均位置规范)", task_category=task_cat)
+                ui_logger.info(f"    - ✅ 合格 (大小和 ISO 标签均位置规范)", task_category=task_cat)
                 return {"status": "skipped", "message": "命名已规范"}
 
         # --- 阶段三：完整处理 ---
@@ -242,6 +270,7 @@ class MovieRenamerLogic:
                 with open(new_strm_path, 'r', encoding='utf-8') as f:
                     strm_content = f.read()
                 
+                # 精确替换，防止URL中其他部分被误改
                 new_strm_content = strm_content.replace(real_filename, ideal_filename)
                 
                 with open(new_strm_path, 'w', encoding='utf-8') as f:
@@ -251,18 +280,15 @@ class MovieRenamerLogic:
                 ui_logger.error(f"    - ❌ 更新 .strm 文件内容失败: {e}", task_category=task_cat)
         
         # d. 执行冷却
-        # --- 核心修改：直接使用配置中的冷却时间 ---
         cooldown = self.renamer_config.clouddrive_rename_cooldown
         if cooldown > 0:
             ui_logger.debug(f"    - [冷却] ⏱️ 等待 {cooldown} 秒...", task_category=task_cat)
             time.sleep(cooldown)
-        # --- 修改结束 ---
 
         return {"status": "success", "message": f"成功重命名为 {ideal_filename}"}
 
     def run_rename_task_for_items(self, item_ids: List[str], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager, task_category: str):
         """(定时任务)为指定的电影 ID 列表执行文件重命名。"""
-        # --- 核心修改：移除前置检查 ---
         total_items = len(item_ids)
         ui_logger.info(f"【电影重命名任务】启动，共需处理 {total_items} 个电影。", task_category=task_category)
         task_manager.update_task_progress(task_id, 0, total_items)
@@ -299,5 +325,5 @@ class MovieRenamerLogic:
         ui_logger.info(f"---", task_category=task_category)
         ui_logger.info(f"🎉【电影重命名任务】全部执行完毕。", task_category=task_category)
         ui_logger.info(f"  - 成功重命名: {success_count} 项", task_category=task_category)
-        ui_logger.info(f"  - 跳过 (已规范): {skipped_count} 项", task_category=task_category)
+        ui_logger.info(f"  - 跳过 (已规范或信息不足): {skipped_count} 项", task_category=task_category)
         ui_logger.info(f"  - 失败: {error_count} 项", task_category=task_category)
