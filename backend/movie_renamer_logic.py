@@ -134,6 +134,7 @@ class MovieRenamerLogic:
             return {"status": "skipped", "message": "无法从 MediaSources 解析真实文件名"}
 
         # --- 阶段二：预检查 ---
+        ui_logger.info(f"  - [预检查] 正在检查文件名: '{real_filename}'", task_category=task_cat)
         filename_body, file_ext = os.path.splitext(real_filename)
         
         size_match = self.size_regex.search(filename_body)
