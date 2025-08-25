@@ -6,6 +6,8 @@ import json
 import threading
 import time
 import re
+import hmac
+import hashlib
 import base64
 import subprocess
 from typing import List, Dict, Any, Optional
@@ -21,6 +23,50 @@ from proxy_manager import ProxyManager
 ACTOR_ROLE_MAP_FILE = os.path.join('/app/data', 'actor_role_map.json')
 ACTOR_ROLE_MAP_LOCK_FILE = ACTOR_ROLE_MAP_FILE + ".lock"
 GITHUB_MAP_PATH = "database/actor_role_map.json"
+
+
+def _contains_chinese(text: str) -> bool:
+    """检查字符串是否包含中文字符"""
+    if not text: return False
+    return bool(re.search(r'[\u4e00-\u9fa5]', text))
+
+def _rename_person_item_static(base_url: str, user_id: str, api_key: str, session, person_id: str, old_name: str, new_name: str, task_category: str) -> bool:
+    """
+    通过独立的 API 请求，直接重命名一个演员（Person）Item。
+    这是一个静态化的版本，以便在 actor_role_mapper_logic 中复用。
+    """
+    try:
+        params = {"api_key": api_key}
+        person_url = f"{base_url}/Users/{user_id}/Items/{person_id}"
+        person_details_resp = session.get(person_url, params=params, timeout=15)
+        person_details_resp.raise_for_status()
+        person_details = person_details_resp.json()
+
+        if person_details.get("Name") == new_name:
+            ui_logger.debug(f"       - [跳过重命名] 演员 '{old_name}' 的名称已经是 '{new_name}'。", task_category=task_category)
+            return True
+
+        person_details['Name'] = new_name
+        
+        update_url = f"{base_url}/Items/{person_id}"
+        headers = {'Content-Type': 'application/json'}
+        
+        resp = session.post(update_url, params=params, json=person_details, headers=headers, timeout=30)
+        resp.raise_for_status()
+        
+        if resp.status_code == 204:
+            ui_logger.info(f"       - ✅ 演员名修正: '{old_name}' -> '{new_name}' (通过ID匹配更新)", task_category=task_category)
+            return True
+        else:
+            ui_logger.warning(f"       - ⚠️ 演员重命名请求已发送，但服务器返回状态码 {resp.status_code}，可能未成功。", task_category=task_category)
+            return False
+
+    except requests.RequestException as e:
+        ui_logger.error(f"       - ❌ 演员重命名API请求失败: {e}", task_category=task_category)
+        return False
+    except Exception as e:
+        ui_logger.error(f"       - ❌ 演员重命名时发生未知错误: {e}", task_category=task_category, exc_info=True)
+        return False
 
 class ActorRoleMapperLogic:
     def __init__(self, config: AppConfig):
@@ -493,12 +539,11 @@ class ActorRoleMapperLogic:
             raise e
         
 
-    # backend/actor_role_mapper_logic.py (函数替换)
 
     def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
         根据映射关系，恢复指定 Emby 媒体项列表的演员角色名。
-        新版逻辑：以映射表为驱动，ID优先，名称降级。
+        新版逻辑：以映射表为驱动，ID优先，名称降级。在ID匹配成功时，会额外检查并修正演员名。
         """
         task_cat = "演员角色映射-恢复"
         
@@ -519,8 +564,6 @@ class ActorRoleMapperLogic:
             try:
                 ui_logger.info(f"     - 正在处理第 {i+1}/{total_items} 个媒体项 (ID: {item_id})...", task_category=task_cat)
                 
-                # --- 核心修改 1: 重构 Emby 演员列表的获取和预处理逻辑 ---
-                # 1a. 先获取基础的 People 列表
                 item_details_base = self._get_emby_item_details(item_id, "People")
                 current_people_base = item_details_base.get("People", [])
                 if not current_people_base:
@@ -529,7 +572,6 @@ class ActorRoleMapperLogic:
                 
                 emby_actors_base = [p for p in current_people_base if p.get("Type") == "Actor"]
 
-                # 1b. 并发为每个演员获取完整的 ProviderIds
                 emby_actors_by_id = {}
                 emby_actors_by_name = {}
                 
@@ -539,7 +581,6 @@ class ActorRoleMapperLogic:
                         original_person = future_to_person[future]
                         try:
                             full_person_details = future.result()
-                            # 将获取到的完整信息（主要是ProviderIds）更新回原始的 person 对象
                             original_person.update(full_person_details)
                             
                             provider_ids_lower = {k.lower(): v for k, v in full_person_details.get("ProviderIds", {}).items()}
@@ -549,45 +590,59 @@ class ActorRoleMapperLogic:
                                 emby_actors_by_id[str(person_tmdb_id)] = original_person
                             emby_actors_by_name[original_person.get("Name")] = original_person
                         except Exception as e:
-                            # 如果获取某个演员详情失败，至少保证能按名字匹配
                             emby_actors_by_name[original_person.get("Name")] = original_person
                             logging.debug(f"【调试】恢复时获取演员 {original_person.get('Name')} (ID: {original_person.get('Id')}) 的详情失败: {e}")
-                # --- 核心修改 1 结束 ---
 
-                # 2. 遍历映射表，进行匹配和更新
                 has_changes = False
                 updated_logs = []
                 for map_actor_name, map_actor_data in role_map.items():
                     map_tmdb_id = map_actor_data.get("tmdb_id")
                     target_emby_person = None
+                    match_source = ""
 
-                    # a. ID 优先匹配
                     if map_tmdb_id and str(map_tmdb_id) != "null":
                         target_emby_person = emby_actors_by_id.get(str(map_tmdb_id))
                         if target_emby_person:
-                            logging.debug(f"【调试】[ID匹配成功] 映射表演员 [{map_actor_name}] 通过 TMDB ID {map_tmdb_id} 关联到 Emby 演员 [{target_emby_person.get('Name')}]。")
+                            match_source = "ID"
+                            current_emby_name = target_emby_person.get("Name")
+                            
+                            # --- 新增：演员名修正逻辑 ---
+                            if current_emby_name != map_actor_name and _contains_chinese(map_actor_name):
+                                ui_logger.info(f"       - 🔍 [ID匹配] 发现演员名不一致: Emby='{current_emby_name}', 映射表='{map_actor_name}'，尝试修正...", task_category=task_cat)
+                                if _rename_person_item_static(
+                                    base_url=self.server_config.server,
+                                    user_id=self.server_config.user_id,
+                                    api_key=self.server_config.api_key,
+                                    session=self.session,
+                                    person_id=target_emby_person.get("Id"),
+                                    old_name=current_emby_name,
+                                    new_name=map_actor_name,
+                                    task_category=task_cat
+                                ):
+                                    # 在内存中同步名称变更
+                                    target_emby_person["Name"] = map_actor_name
+                                    has_changes = True # 标记有变更，即使角色名不变也要提交
+                            # --- 新增结束 ---
 
-                    # b. 名称降级匹配
                     if not target_emby_person:
                         target_emby_person = emby_actors_by_name.get(map_actor_name)
                         if target_emby_person:
-                            logging.debug(f"【调试】[名称匹配成功] 映射表演员 [{map_actor_name}] 通过名称关联到 Emby 演员。")
+                            match_source = "名称"
                     
-                    # c. 对比与更新
                     if target_emby_person:
                         current_role = target_emby_person.get("Role", "")
                         target_role = map_actor_data.get("role", "")
                         if current_role != target_role:
                             target_emby_person["Role"] = target_role
                             has_changes = True
-                            updated_logs.append(f"       - ✅ 演员 [{target_emby_person.get('Name')}] 角色已更新: '{current_role}' → '{target_role}'")
+                            # 使用更新后的演员名记录日志
+                            log_actor_name = target_emby_person.get("Name")
+                            updated_logs.append(f"       - ✅ 演员 [{log_actor_name}] 角色已更新: '{current_role}' → '{target_role}' (通过{match_source}匹配)")
                     else:
                         logging.debug(f"【调试】[匹配失败] 在 Emby 媒体项 {item_id} 中未找到演员 [{map_actor_name}]。")
 
-                # 3. 如果有变更，则写回 Emby
                 if has_changes:
-                    ui_logger.info(f"     - 发现角色变更，正在写回 Emby...", task_category=task_cat)
-                    # --- 核心修改 2: 使用原始的 People 列表进行更新，而不是只包含 Actor 的列表 ---
+                    ui_logger.info(f"     - 发现角色或演员名变更，正在写回 Emby...", task_category=task_cat)
                     item_details_base["People"] = current_people_base
                     
                     update_url = f"{self.server_config.server}/Items/{item_id}"
@@ -602,7 +657,7 @@ class ActorRoleMapperLogic:
                         ui_logger.info(log_line, task_category=task_cat)
                     ui_logger.info(f"     - ✅ 媒体项 (ID: {item_id}) 更新成功！", task_category=task_cat)
                 else:
-                    ui_logger.info(f"     - 角色名均与映射表一致，无需更新。", task_category=task_cat)
+                    ui_logger.info(f"     - 角色名与演员名均与映射表一致，无需更新。", task_category=task_cat)
 
             except Exception as e:
                 ui_logger.error(f"  - ❌ 处理媒体项 {item_id} 时发生错误: {e}", task_category=task_cat, exc_info=True)
