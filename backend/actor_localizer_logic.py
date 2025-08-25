@@ -13,8 +13,7 @@ from typing import List, Dict, Any, Generator, Optional, Iterable
 try:
     import translators as ts
 except ImportError:
-
-    logging.warning("【演员中文化】'translators' 库未安装，相关功能将不可用。请运行 'pip install translators'。")
+    logging.warning("【演员中文化】'translators' 库未安装，基于此库的“第三方库”翻译模式将不可用。如需使用，请在 backend 目录下运行 'pip install translators' 并重启服务。")
     ts = None
 
 from models import AppConfig, ActorLocalizerConfig, TargetScope, TencentApiConfig, SiliconflowApiConfig

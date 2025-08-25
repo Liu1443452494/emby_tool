@@ -10,11 +10,11 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# --- 核心修改：安装 Node.js, ffmpeg, OpenCV 依赖, 以及 curl ---
+# --- 核心修改：安装 Node.js, ffmpeg, OpenCV 依赖, 以及 curl   
+#  移除了第三方库的支持，nodejs \  npm \
+#    
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    nodejs \
-    npm \
     ffmpeg \
     libgl1-mesa-glx \
     libglib2.0-0 \

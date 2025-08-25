@@ -98,7 +98,7 @@
                   <div v-if="localConfig.translation_enabled">
                     <el-form-item label="翻译模式">
                       <el-radio-group v-model="localConfig.translation_mode">
-                        <el-radio value="translators">第三方库</el-radio>
+                        <el-radio value="translators" disabled>第三方库 (依赖已移除)</el-radio>
                         <el-radio value="tencent">腾讯云API</el-radio>
                         <el-radio value="siliconflow">AI大模型</el-radio>
                       </el-radio-group>
