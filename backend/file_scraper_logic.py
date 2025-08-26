@@ -468,28 +468,31 @@ class FileScraperLogic:
     def _is_bare_file(self, file_path: str) -> bool:
         """
         判断一个视频文件是否为“裸文件”。
-        如果在其父目录中找到除自身外的任何一个其他视频文件，就判定为裸文件。
+        如果在其父目录中找到除自身外的任何一个其他视频文件或任何一个子目录，就判定为裸文件。
         """
         task_cat = "文件刮削器-工具"
         video_extensions = [ext.lower() for ext in self.scraper_config.file_extensions]
 
-        # --- 核心修改：增加对输入文件类型的检查 ---
         if os.path.splitext(file_path)[1].lower() not in video_extensions:
-            # 如果输入路径本身不是视频文件，则不进行裸文件判断，直接返回False
             return False
-        # --- 修改结束 ---
 
         try:
             parent_dir = os.path.dirname(file_path)
             my_filename = os.path.basename(file_path)
 
             for entry in os.scandir(parent_dir):
+                # 规则 1: 检查同级是否有其他视频文件
                 if entry.is_file() and entry.name != my_filename:
                     if os.path.splitext(entry.name)[1].lower() in video_extensions:
                         ui_logger.info(f"  - ℹ️ [独立性检测] 检测到同级目录下存在另一个视频文件: {entry.name}。判定 '{my_filename}' 为裸文件。", task_category=task_cat)
                         return True
+                
+                # 规则 2 (新增): 检查同级是否有任何子目录
+                elif entry.is_dir():
+                    ui_logger.info(f"  - ℹ️ [独立性检测] 检测到同级目录下存在子目录: {entry.name}。判定 '{my_filename}' 为裸文件。", task_category=task_cat)
+                    return True
             
-            ui_logger.info(f"  - ℹ️ [独立性检测] 未在同级目录下发现其他视频文件。判定 '{my_filename}' 为独立文件。", task_category=task_cat)
+            ui_logger.info(f"  - ℹ️ [独立性检测] 未在同级目录下发现其他视频文件或子目录。判定 '{my_filename}' 为独立文件。", task_category=task_cat)
             return False
         except Exception as e:
             ui_logger.error(f"  - ❌ [独立性检测] 执行时发生错误: {e}。将默认其为独立文件以保证安全。", task_category=task_cat)
@@ -503,9 +506,6 @@ class FileScraperLogic:
         item_name = os.path.basename(file_path)
         task_cat = f"文件刮削器-{item_name}"
         ui_logger.info(f"➡️ 开始为 '{item_name}' 执行刮削任务...", task_category=task_cat)
-
-        # --- 核心修改：移除刮削模式的日志输出 ---
-        # --- 修改结束 ---
 
         # 1. 前置决策判断
         if not urls:
@@ -528,8 +528,6 @@ class FileScraperLogic:
                 continue
 
             parser = self._get_scraper_for_domain(domain)
-
-            
                 
             if not parser:
                 ui_logger.warning(f"  - ⚠️ 域名 '{domain}' 没有匹配的解析器，已跳过。", task_category=task_cat)
@@ -538,14 +536,23 @@ class FileScraperLogic:
             ui_logger.info(f"  - 🔄 正在使用 '{domain}' 刮削: {url}", task_category=task_cat)
             try:
                 proxies = self.proxy_manager.get_proxies(url)
-                # --- 核心修改：调用新的请求方法 ---
                 response = self._make_request(url, timeout=20, proxies=proxies)
-                # --- 修改结束 ---
                 response.raise_for_status()
                 
                 partial_data = parser(response.text, task_cat)
                 if partial_data:
-                    # --- 核心修改：重构聚合逻辑，保留URL来源 ---
+                    # --- 新增/修改 ---
+                    # 演员名格式化
+                    if 'actors' in partial_data and isinstance(partial_data['actors'], list):
+                        for actor in partial_data['actors']:
+                            if 'name' in actor and isinstance(actor['name'], str):
+                                original_name = actor['name']
+                                formatted_name = original_name.title()
+                                if original_name != formatted_name:
+                                    ui_logger.info(f"  - [格式化] 演员名 '{original_name}' -> '{formatted_name}'", task_category=task_cat)
+                                    actor['name'] = formatted_name
+                    # --- 新增/修改结束 ---
+
                     # 1. 聚合 tags (保持不变)
                     new_tags = partial_data.get('tags')
                     if new_tags:
@@ -559,7 +566,6 @@ class FileScraperLogic:
 
                     # 2. 聚合图片URL，按来源存储
                     for img_key in ['poster_url', 'fanart_url']:
-                        # 构造按来源存储的字典键
                         storage_key = f"{img_key}s_by_source" 
                         if storage_key not in scraped_data:
                             scraped_data[storage_key] = {}
@@ -579,7 +585,6 @@ class FileScraperLogic:
                             if isinstance(value, str) and not value.strip(): continue
                             scraped_data[key] = value
                             ui_logger.info(f"  - [聚合] 填充了字段: '{key}'。", task_category=task_cat)
-                    # --- 修改结束 ---
             except Exception as e:
                 ui_logger.error(f"  - ❌ 访问或解析 '{url}' 失败: {e}", task_category=task_cat)
         
@@ -643,9 +648,7 @@ class FileScraperLogic:
             ui_logger.info(f"  - 路径类型：独立文件。元数据将保存在其父目录中。", task_category=task_cat)
             save_dir = os.path.dirname(original_path)
 
-        # --- 核心修改：统一 base_name_for_meta ---
         base_name_for_meta = "movie"
-        # --- 修改结束 ---
 
         # 4. 执行文件写入
         try:
@@ -657,10 +660,8 @@ class FileScraperLogic:
             nfo_exists = os.path.exists(nfo_path)
             
             if overwrite or not nfo_exists:
-                # --- 核心修改：按优先级顺序写入所有图片URL ---
                 nfo_parts = ["<?xml version='1.0' encoding='utf-8' standalone='yes'?>", "<movie>"]
                 
-                # (title, plot, actors, tags 的逻辑保持不变)
                 title = scraped_data.get('title')
                 if title: nfo_parts.append(f"  <title>{title}</title>")
                 plot = scraped_data.get('plot')
@@ -679,7 +680,6 @@ class FileScraperLogic:
                     for tag in tags:
                         if tag: nfo_parts.append(f"  <tag>{tag}</tag>")
 
-                # 按源优先级顺序写入图片URL
                 poster_urls_by_source = scraped_data.get('poster_urls_by_source', {})
                 fanart_urls_by_source = scraped_data.get('fanart_urls_by_source', {})
 
@@ -691,7 +691,6 @@ class FileScraperLogic:
 
                 nfo_parts.append("</movie>")
                 nfo_content = "\n".join(nfo_parts)
-                # --- 修改结束 ---
 
                 with open(nfo_path, 'w', encoding='utf-8') as f:
                     f.write(nfo_content)
@@ -704,7 +703,6 @@ class FileScraperLogic:
                 
             main_page_url = next((urls[domain] for domain in priority_list if domain in urls), None)
 
-            # --- 核心修改：按优先级和容错机制下载图片 ---
             image_map = {
                 'poster': ('poster_urls_by_source', 'poster.jpg'),
                 'fanart': ('fanart_urls_by_source', 'fanart.jpg')
@@ -716,21 +714,18 @@ class FileScraperLogic:
 
                 if overwrite or not img_exists:
                     download_success = False
-                    # 遍历优先级列表
                     for domain in self.scraper_config.source_priority:
                         urls_by_source = scraped_data.get(source_key, {})
                         img_url = urls_by_source.get(domain)
                         
                         if not img_url:
-                            continue # 当前优先级的源没有提供此图片，跳到下一个
+                            continue
 
                         ui_logger.info(f"    - 🔄 尝试从源 '{domain}' 下载 {img_type} 图片...", task_category=task_cat)
                         try:
                             proxies = self.proxy_manager.get_proxies(img_url)
                             headers = {'Referer': main_page_url} if main_page_url else {}
-                            # --- 核心修改：调用新的请求方法 ---
                             img_response = self._make_request(img_url, timeout=30, proxies=proxies, stream=True, headers=headers)
-                            # --- 修改结束 ---
                             img_response.raise_for_status()
                             
                             image_data = io.BytesIO(img_response.content)
@@ -745,13 +740,13 @@ class FileScraperLogic:
                                 final_poster_path = img_path
                             
                             download_success = True
-                            break # 下载成功，跳出循环
+                            break
                         
                         except Exception as e:
                             ui_logger.warning(f"    - ⚠️ 从源 '{domain}' 下载失败: {e}。将尝试下一个源...", task_category=task_cat)
                     
                     if not download_success:
-                         ui_logger.error(f"    - ❌ 尝试了所有源，仍未能成功下载 {img_type} 图片。", task_category=task_cat)
+                        ui_logger.error(f"    - ❌ 尝试了所有源，仍未能成功下载 {img_type} 图片。", task_category=task_cat)
                 else:
                     ui_logger.info(f"    - ℹ️ {img_type.capitalize()} 图片已存在且未开启覆盖，跳过下载。", task_category=task_cat)
                     if img_type == 'poster':
