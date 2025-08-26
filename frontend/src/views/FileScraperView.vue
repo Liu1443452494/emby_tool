@@ -139,12 +139,7 @@
         <el-form-item label="批量刮削冷却时间 (秒)">
           <el-input-number v-model="localConfig.batch_cooldown" :min="0" :step="0.5" />
         </el-form-item>
-        <el-form-item label="FlareSolverr 服务地址 (可选)">
-          <el-input v-model="localConfig.flaresolverr_url" placeholder="例如: http://192.168.1.10:8191/v1" />
-          <div class="form-item-description">
-            填写此地址可启用 FlareSolverr 来解决高强度的 Cloudflare 质询，提高刮削成功率。留空则使用内置的解析器。
-          </div>
-        </el-form-item>
+        
         <el-form-item label="覆盖现有元数据">
           <el-switch v-model="localConfig.overwrite_existing" />
           <div class="form-item-description">

@@ -28,52 +28,13 @@ class FileScraperLogic:
         self.scraper_config = config.file_scraper_config
         self.proxy_manager = ProxyManager(config)
         
-        # --- 核心修改：动态创建 Scraper 实例 ---
-        flaresolverr_url = self.scraper_config.flaresolverr_url
-        
-        # 备用 scraper (总是存在)
-        self.default_scraper = cloudscraper.create_scraper()
-        
-        if flaresolverr_url:
-            ui_logger.info(f"✅ 检测到 FlareSolverr 配置，将优先使用 {flaresolverr_url} 解决 Cloudflare 质询。", task_category="文件刮削器-初始化")
-            try:
-                # --- 核心修改：使用向后兼容的参数格式来初始化 FlareSolverr ---
-                # 旧版的 cloudscraper 可能不支持 'solver' 参数，
-                # 改用 'browser' 和 'captcha' 字典的方式有更好的兼容性。
-                self.primary_scraper = cloudscraper.create_scraper(
-                    browser={
-                        'custom': 'cf_flare'
-                    },
-                    captcha={
-                        'provider': 'flaresolverr',
-                        'url': flaresolverr_url
-                    }
-                )
-                # --- 修改结束 ---
-                self.flaresolverr_enabled = True
-            except Exception as e:
-                ui_logger.error(f"❌ 初始化 FlareSolverr scraper 失败: {e}。将回退到内置 solver。", task_category="文件刮削器-初始化")
-                self.primary_scraper = self.default_scraper
-                self.flaresolverr_enabled = False
+        # --- 核心修改：移除 FlareSolverr 逻辑，统一创建一个 scraper 实例 ---
+        self.scraper = cloudscraper.create_scraper()
+        ui_logger.info(f"✅ 文件刮削器已初始化，当前使用内置 Cloudflare 解析器。", task_category="文件刮削器-初始化")
 
-    def _make_request_with_fallback(self, url, **kwargs):
-        task_cat = "文件刮削器-网络"
-        
-        try:
-            if self.flaresolverr_enabled:
-                ui_logger.info(f"  - 🚀 尝试通过 FlareSolverr 访问: {url}", task_category=task_cat)
-            return self.primary_scraper.get(url, **kwargs)
-        except Exception as e:
-            # 简化判断：任何来自 primary_scraper 的异常，如果启用了 FlareSolverr，都尝试降级
-            if self.flaresolverr_enabled:
-                ui_logger.warning(f"  - ⚠️ FlareSolverr 访问失败: {e}", task_category=task_cat)
-                ui_logger.info(f"  - 🔄 自动降级，尝试使用内置 solver 再次访问: {url}", task_category=task_cat)
-                
-                # 使用备用 scraper 重试
-                return self.default_scraper.get(url, **kwargs)
-            else:
-                # 如果没有启用 FlareSolverr，或者降级后依然失败，直接抛出异常
-                raise e
+    def _make_request(self, url, **kwargs):
+        # --- 核心修改：移除回退逻辑，直接使用唯一的 scraper 实例 ---
+        return self.scraper.get(url, **kwargs)
 
     def _read_cache(self) -> Dict:
         """安全地读取缓存文件"""
@@ -543,10 +504,8 @@ class FileScraperLogic:
         task_cat = f"文件刮削器-{item_name}"
         ui_logger.info(f"➡️ 开始为 '{item_name}' 执行刮削任务...", task_category=task_cat)
 
-        if self.flaresolverr_enabled:
-            ui_logger.info(f"  - ⚙️ 当前刮削模式: FlareSolverr", task_category=task_cat)
-        else:
-            ui_logger.info(f"  - ⚙️ 当前刮削模式: 内置 Solver", task_category=task_cat)
+        # --- 核心修改：移除刮削模式的日志输出 ---
+        # --- 修改结束 ---
 
         # 1. 前置决策判断
         if not urls:
@@ -579,7 +538,9 @@ class FileScraperLogic:
             ui_logger.info(f"  - 🔄 正在使用 '{domain}' 刮削: {url}", task_category=task_cat)
             try:
                 proxies = self.proxy_manager.get_proxies(url)
-                response = self._make_request_with_fallback(url, timeout=20, proxies=proxies)
+                # --- 核心修改：调用新的请求方法 ---
+                response = self._make_request(url, timeout=20, proxies=proxies)
+                # --- 修改结束 ---
                 response.raise_for_status()
                 
                 partial_data = parser(response.text, task_cat)
@@ -767,7 +728,9 @@ class FileScraperLogic:
                         try:
                             proxies = self.proxy_manager.get_proxies(img_url)
                             headers = {'Referer': main_page_url} if main_page_url else {}
-                            img_response = self._make_request_with_fallback(img_url, timeout=30, proxies=proxies, stream=True, headers=headers)
+                            # --- 核心修改：调用新的请求方法 ---
+                            img_response = self._make_request(img_url, timeout=30, proxies=proxies, stream=True, headers=headers)
+                            # --- 修改结束 ---
                             img_response.raise_for_status()
                             
                             image_data = io.BytesIO(img_response.content)

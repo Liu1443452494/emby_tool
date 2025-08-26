@@ -360,7 +360,7 @@ class FileScraperConfig(BaseModel):
     overwrite_existing: bool = Field(default=False, description="是否覆盖现有元数据")
     batch_cooldown: float = Field(default=2.0, description="批量刮削时每个文件之间的冷却时间（秒）", ge=0)
     source_priority: List[str] = Field(default_factory=lambda: ['xchina.co', 'javday.app', 'madou.club', 'madouqu.com'], description="刮削源域名优先级列表")
-    flaresolverr_url: str = Field(default="", description="FlareSolverr 服务地址")
+    
 
 class AppConfig(BaseModel):
     """应用的主配置模型，聚合所有子配置"""
