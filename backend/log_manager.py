@@ -150,6 +150,6 @@ def setup_logging(add_websocket_handler: bool = True):
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.INFO) # Access日志可以保留INFO
     # --- 修改结束 ---
-    
+    logging.getLogger('PIL').setLevel(logging.INFO)
     if add_websocket_handler:
         ui_logger.info("✅ 日志系统已成功初始化 (每日滚动，保留14天)。", task_category='系统启动')

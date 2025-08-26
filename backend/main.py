@@ -29,6 +29,7 @@ from episode_role_sync_router import router as episode_role_sync_router
 from actor_avatar_mapper_router import router as actor_avatar_mapper_router
 from chasing_center_router import router as chasing_center_router
 from upcoming_router import router as upcoming_router
+from file_scraper_router import router as file_scraper_router
 
 from media_selector import MediaSelector
 from models import ScheduledTasksConfig, ScheduledTasksTargetScope
@@ -833,6 +834,7 @@ app.include_router(episode_role_sync_router, prefix="/api/episode-role-sync")
 app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper")
 app.include_router(chasing_center_router, prefix="/api/chasing-center")
 app.include_router(upcoming_router, prefix="/api/upcoming")
+app.include_router(file_scraper_router, prefix="/api/file-scraper")
 
 from models import TraktConfig
 from trakt_manager import TraktManager

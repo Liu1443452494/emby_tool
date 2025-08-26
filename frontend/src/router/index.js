@@ -69,7 +69,11 @@ const router = createRouter({
       name: 'episode-renamer',
       component: () => import('../views/EpisodeRenamerView.vue')
     },
-
+    {
+      path: '/file-scraper',
+      name: 'file-scraper',
+      component: () => import('../views/FileScraperView.vue')
+    },
     {
       path: '/scheduled-tasks',
       name: 'scheduled-tasks',

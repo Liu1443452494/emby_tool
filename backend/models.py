@@ -353,6 +353,15 @@ class EpisodeRoleSyncConfig(BaseModel):
     actor_limit: int = Field(default=50, description="每个分集处理的演员数量上限", ge=1, le=200)
     fallback_to_actor_string: bool = Field(default=True, description="当所有匹配失败时，是否将分集英文角色名替换为'演员'")
 
+class FileScraperConfig(BaseModel):
+    """文件刮削器功能的配置"""
+    scan_directory: str = Field(default="", description="扫描目录")
+    file_extensions: List[str] = Field(default_factory=lambda: ['.mp4', '.mkv', '.strm'], description="要扫描的文件后缀名列表")
+    overwrite_existing: bool = Field(default=False, description="是否覆盖现有元数据")
+    batch_cooldown: float = Field(default=2.0, description="批量刮削时每个文件之间的冷却时间（秒）", ge=0)
+    source_priority: List[str] = Field(default_factory=lambda: ['xchina.co', 'javday.app', 'madou.club', 'madouqu.com'], description="刮削源域名优先级列表")
+    flaresolverr_url: str = Field(default="", description="FlareSolverr 服务地址")
+
 class AppConfig(BaseModel):
     """应用的主配置模型，聚合所有子配置"""
     server_config: ServerConfig = Field(default_factory=ServerConfig)
@@ -376,6 +385,7 @@ class AppConfig(BaseModel):
     upcoming_config: UpcomingConfig = Field(default_factory=UpcomingConfig)
     actor_role_mapper_config: ActorRoleMapperConfig = Field(default_factory=ActorRoleMapperConfig)
     episode_role_sync_config: EpisodeRoleSyncConfig = Field(default_factory=EpisodeRoleSyncConfig)
+    file_scraper_config: FileScraperConfig = Field(default_factory=FileScraperConfig)
 
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]

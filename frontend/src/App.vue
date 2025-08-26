@@ -74,6 +74,10 @@
               <el-icon><EditPen /></el-icon>
               <template #title>网盘文件重命名</template>
             </el-menu-item>
+            <el-menu-item index="/file-scraper">
+              <el-icon><DocumentCopy /></el-icon>
+              <template #title>文件刮削器</template>
+            </el-menu-item>
           </el-sub-menu>
 
           <el-sub-menu index="automation-center">
@@ -131,7 +135,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { ElConfigProvider, ElIcon } from 'element-plus'
-import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen, Picture, UserFilled, SwitchFilled, StarFilled, Menu, Cpu, Calendar } from '@element-plus/icons-vue'
+import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen, Picture, UserFilled, SwitchFilled, StarFilled, Menu, Cpu, Calendar, DocumentCopy } from '@element-plus/icons-vue'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { useStorage } from '@vueuse/core'
 import { useConfigStore } from '@/stores/config'
