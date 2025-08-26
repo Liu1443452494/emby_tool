@@ -37,20 +37,24 @@ class FileScraperLogic:
         if flaresolverr_url:
             ui_logger.info(f"✅ 检测到 FlareSolverr 配置，将优先使用 {flaresolverr_url} 解决 Cloudflare 质询。", task_category="文件刮削器-初始化")
             try:
+                # --- 核心修改：使用向后兼容的参数格式来初始化 FlareSolverr ---
+                # 旧版的 cloudscraper 可能不支持 'solver' 参数，
+                # 改用 'browser' 和 'captcha' 字典的方式有更好的兼容性。
                 self.primary_scraper = cloudscraper.create_scraper(
-                    solver={
+                    browser={
+                        'custom': 'cf_flare'
+                    },
+                    captcha={
                         'provider': 'flaresolverr',
                         'url': flaresolverr_url
                     }
                 )
+                # --- 修改结束 ---
                 self.flaresolverr_enabled = True
             except Exception as e:
                 ui_logger.error(f"❌ 初始化 FlareSolverr scraper 失败: {e}。将回退到内置 solver。", task_category="文件刮削器-初始化")
                 self.primary_scraper = self.default_scraper
                 self.flaresolverr_enabled = False
-        else:
-            self.primary_scraper = self.default_scraper
-            self.flaresolverr_enabled = False
 
     def _make_request_with_fallback(self, url, **kwargs):
         task_cat = "文件刮削器-网络"
@@ -565,6 +569,7 @@ class FileScraperLogic:
                 continue
 
             parser = self._get_scraper_for_domain(domain)
+
             
                 
             if not parser:
@@ -579,27 +584,34 @@ class FileScraperLogic:
                 
                 partial_data = parser(response.text, task_cat)
                 if partial_data:
-                    # --- 核心修改：重构聚合逻辑以合并tags ---
-                    # 1. 优先处理并合并 'tags' 字段
+                    # --- 核心修改：重构聚合逻辑，保留URL来源 ---
+                    # 1. 聚合 tags (保持不变)
                     new_tags = partial_data.get('tags')
                     if new_tags:
-                        if 'tags' not in scraped_data:
-                            scraped_data['tags'] = []
-                        
+                        if 'tags' not in scraped_data: scraped_data['tags'] = []
                         existing_tags = set(scraped_data['tags'])
                         tags_to_add = set(new_tags)
-                        updated_tags = sorted(list(existing_tags.union(tags_to_add))) # 使用 sorted 保证顺序稳定
-                        
-                        added_count = len(updated_tags) - len(existing_tags)
-                        if added_count > 0:
-                            ui_logger.info(f"  - [聚合] 为 'tags' 字段新增了 {added_count} 个标签。", task_category=task_cat)
-                        
+                        updated_tags = sorted(list(existing_tags.union(tags_to_add)))
+                        if len(updated_tags) > len(existing_tags):
+                            ui_logger.info(f"  - [聚合] 为 'tags' 字段新增了 {len(updated_tags) - len(existing_tags)} 个标签。", task_category=task_cat)
                         scraped_data['tags'] = updated_tags
 
-                    # 2. 对所有其他字段，应用“先到先得”原则
+                    # 2. 聚合图片URL，按来源存储
+                    for img_key in ['poster_url', 'fanart_url']:
+                        # 构造按来源存储的字典键
+                        storage_key = f"{img_key}s_by_source" 
+                        if storage_key not in scraped_data:
+                            scraped_data[storage_key] = {}
+                        
+                        new_url = partial_data.get(img_key)
+                        if new_url and domain not in scraped_data[storage_key]:
+                            scraped_data[storage_key][domain] = new_url
+                            ui_logger.info(f"  - [聚合] 从 '{domain}' 收集到 '{img_key}': {new_url}", task_category=task_cat)
+
+                    # 3. 对所有其他字段，应用“先到先得”原则
                     for key, value in partial_data.items():
-                        if key == 'tags':
-                            continue # 跳过已经处理过的 tags 字段
+                        if key in ['tags', 'poster_url', 'fanart_url']:
+                            continue
                         
                         if key not in scraped_data or not scraped_data[key]:
                             if isinstance(value, list) and not value: continue
@@ -684,35 +696,37 @@ class FileScraperLogic:
             nfo_exists = os.path.exists(nfo_path)
             
             if overwrite or not nfo_exists:
-                # --- 核心修改：逐个字段判断，只写入有效内容 ---
+                # --- 核心修改：按优先级顺序写入所有图片URL ---
                 nfo_parts = ["<?xml version='1.0' encoding='utf-8' standalone='yes'?>", "<movie>"]
                 
+                # (title, plot, actors, tags 的逻辑保持不变)
                 title = scraped_data.get('title')
-                if title:
-                    nfo_parts.append(f"  <title>{title}</title>")
-                
+                if title: nfo_parts.append(f"  <title>{title}</title>")
                 plot = scraped_data.get('plot')
-                if plot:
-                    nfo_parts.append(f"  <plot>{plot}</plot>")
-                
+                if plot: nfo_parts.append(f"  <plot>{plot}</plot>")
                 actors = scraped_data.get('actors')
                 if actors:
                     for actor in actors:
                         actor_name = actor.get('name')
                         if actor_name:
-                            actor_xml = "  <actor>\n"
-                            actor_xml += f"    <name>{actor_name}</name>\n"
-                            actor_thumb = actor.get('thumb')
-                            if actor_thumb:
-                                actor_xml += f"    <thumb>{actor_thumb}</thumb>\n"
+                            actor_xml = f"  <actor>\n    <name>{actor_name}</name>\n"
+                            if actor.get('thumb'): actor_xml += f"    <thumb>{actor.get('thumb')}</thumb>\n"
                             actor_xml += "  </actor>"
                             nfo_parts.append(actor_xml)
-
                 tags = scraped_data.get('tags')
                 if tags:
                     for tag in tags:
-                        if tag:
-                            nfo_parts.append(f"  <tag>{tag}</tag>")
+                        if tag: nfo_parts.append(f"  <tag>{tag}</tag>")
+
+                # 按源优先级顺序写入图片URL
+                poster_urls_by_source = scraped_data.get('poster_urls_by_source', {})
+                fanart_urls_by_source = scraped_data.get('fanart_urls_by_source', {})
+
+                for domain in self.scraper_config.source_priority:
+                    if domain in poster_urls_by_source:
+                        nfo_parts.append(f'  <thumb aspect="poster">{poster_urls_by_source[domain]}</thumb>')
+                    if domain in fanart_urls_by_source:
+                        nfo_parts.append(f'  <thumb aspect="fanart">{fanart_urls_by_source[domain]}</thumb>')
 
                 nfo_parts.append("</movie>")
                 nfo_content = "\n".join(nfo_parts)
@@ -726,26 +740,30 @@ class FileScraperLogic:
                 ui_logger.info(f"    - ℹ️ NFO 文件已存在且未开启覆盖，跳过写入。", task_category=task_cat)
             final_nfo_path = nfo_path
 
-                # backend/file_scraper_logic.py (代码块替换)
+                
             main_page_url = next((urls[domain] for domain in priority_list if domain in urls), None)
 
-            for img_type, img_key in [('poster', 'poster_url'), ('fanart', 'fanart_url')]:
-                img_url = scraped_data.get(img_key)
-                if img_url:
-                    # --- 核心修改：确保使用标准的 poster.jpg 和 fanart.jpg 文件名 ---
-                    if img_type == 'poster':
-                        file_name = 'poster.jpg'
-                    elif img_type == 'fanart':
-                        file_name = 'fanart.jpg'
-                    else:
-                        # 为未来可能的扩展保留一个通用逻辑
-                        file_name = f'{img_type}.jpg'
-                    # --- 修改结束 ---
-                    
-                    img_path = os.path.join(save_dir, file_name)
-                    img_exists = os.path.exists(img_path)
+            # --- 核心修改：按优先级和容错机制下载图片 ---
+            image_map = {
+                'poster': ('poster_urls_by_source', 'poster.jpg'),
+                'fanart': ('fanart_urls_by_source', 'fanart.jpg')
+            }
 
-                    if overwrite or not img_exists:
+            for img_type, (source_key, file_name) in image_map.items():
+                img_path = os.path.join(save_dir, file_name)
+                img_exists = os.path.exists(img_path)
+
+                if overwrite or not img_exists:
+                    download_success = False
+                    # 遍历优先级列表
+                    for domain in self.scraper_config.source_priority:
+                        urls_by_source = scraped_data.get(source_key, {})
+                        img_url = urls_by_source.get(domain)
+                        
+                        if not img_url:
+                            continue # 当前优先级的源没有提供此图片，跳到下一个
+
+                        ui_logger.info(f"    - 🔄 尝试从源 '{domain}' 下载 {img_type} 图片...", task_category=task_cat)
                         try:
                             proxies = self.proxy_manager.get_proxies(img_url)
                             headers = {'Referer': main_page_url} if main_page_url else {}
@@ -759,15 +777,22 @@ class FileScraperLogic:
                                 img.save(img_path, 'JPEG', quality=95)
 
                             log_action = "覆盖" if img_exists else "下载"
-                            ui_logger.info(f"    - ✅ {img_type.capitalize()} 图片已{log_action}并转为JPG: {img_path}", task_category=task_cat)
+                            ui_logger.info(f"    - ✅ {img_type.capitalize()} 图片已成功{log_action}并转为JPG: {img_path}", task_category=task_cat)
                             if img_type == 'poster':
                                 final_poster_path = img_path
+                            
+                            download_success = True
+                            break # 下载成功，跳出循环
+                        
                         except Exception as e:
-                            ui_logger.error(f"    - ❌ 下载或转换 {img_type} 图片失败: {e}", task_category=task_cat)
-                    else:
-                        ui_logger.info(f"    - ℹ️ {img_type.capitalize()} 图片已存在且未开启覆盖，跳过下载。", task_category=task_cat)
-                        if img_type == 'poster':
-                            final_poster_path = img_path
+                            ui_logger.warning(f"    - ⚠️ 从源 '{domain}' 下载失败: {e}。将尝试下一个源...", task_category=task_cat)
+                    
+                    if not download_success:
+                         ui_logger.error(f"    - ❌ 尝试了所有源，仍未能成功下载 {img_type} 图片。", task_category=task_cat)
+                else:
+                    ui_logger.info(f"    - ℹ️ {img_type.capitalize()} 图片已存在且未开启覆盖，跳过下载。", task_category=task_cat)
+                    if img_type == 'poster':
+                        final_poster_path = img_path
                 
         except Exception as e:
             ui_logger.error(f"  - ❌ 写入元数据文件时发生错误: {e}", task_category=task_cat)
