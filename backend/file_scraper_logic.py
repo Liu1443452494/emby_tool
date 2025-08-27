@@ -448,6 +448,43 @@ class FileScraperLogic:
         except Exception as e:
             ui_logger.error(f"  - ❌ [madouqu.com] 解析HTML时发生内部错误: {e}", task_category=task_cat)
             return None
+        
+    def _parse_taiav_html(self, html_content: str, task_cat: str) -> Optional[Dict]:
+        """使用 BeautifulSoup 解析 taiav.com 的HTML页面。"""
+        try:
+            soup = BeautifulSoup(html_content, 'lxml')
+            data = {
+                'title': None, 'actors': [], 'tags': [], 'plot': None,
+                'poster_url': None, 'fanart_url': None
+            }
+
+            # 步骤 1: 优先从页头的 JSON-LD 结构化数据中提取核心信息
+            json_ld_script = soup.find('script', type='application/ld+json')
+            if json_ld_script:
+                ui_logger.info("  - 🔍 [taiav.com] 发现JSON-LD结构化数据，优先解析...", task_category=task_cat)
+                json_data = json.loads(json_ld_script.string)
+                data['title'] = json_data.get('name')
+                data['poster_url'] = json_data.get('thumbnailUrl')
+            else:
+                ui_logger.warning("  - ⚠️ [taiav.com] 未找到JSON-LD数据，尝试从HTML标签中回退提取标题。", task_category=task_cat)
+                # 回退方案：如果JSON-LD不存在，尝试从h1标签获取标题
+                title_tag = soup.find('h1', class_='uk-h4')
+                if title_tag:
+                    data['title'] = title_tag.get_text(strip=True)
+
+            # 步骤 2: 从HTML标签中提取 Tags
+            tags_container = soup.find('div', class_='primary-background')
+            if tags_container:
+                tag_links = tags_container.find_all('a', class_='uk-button')
+                if tag_links:
+                    data['tags'] = [tag.get_text(strip=True) for tag in tag_links]
+                    ui_logger.info(f"  - ✅ [taiav.com] 成功提取到 {len(data['tags'])} 个标签。", task_category=task_cat)
+
+            ui_logger.info("  - ✅ [taiav.com] HTML内容解析成功。", task_category=task_cat)
+            return data
+        except Exception as e:
+            ui_logger.error(f"  - ❌ [taiav.com] 解析HTML时发生内部错误: {e}", task_category=task_cat)
+            return None
     # --- 新增结束 ---
 
     def _get_scraper_for_domain(self, domain: str) -> Optional[Callable]:
@@ -461,7 +498,10 @@ class FileScraperLogic:
         # --- 新增 ---
         elif 'madouqu.com' in domain:
             return self._parse_madouqu_html
-        # --- 新增结束 ---
+        # --- 修改 ---
+        elif 'taiav.com' in domain:
+            return self._parse_taiav_html
+        # --- 修改结束 ---
         # ... 未来可在此处添加其他网站的 elif ...
         return None
     
@@ -523,6 +563,10 @@ class FileScraperLogic:
         ui_logger.info(f"🔍 按优先级顺序开始刮削，顺序: {', '.join(priority_list)}", task_category=task_cat)
         for domain in priority_list:
             if cancellation_event.is_set(): return {"success": False, "message": "任务被取消"}
+            
+            
+
+
             url = urls.get(domain)
             if not url:
                 continue
