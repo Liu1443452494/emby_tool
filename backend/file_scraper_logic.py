@@ -485,7 +485,54 @@ class FileScraperLogic:
         except Exception as e:
             ui_logger.error(f"  - ❌ [taiav.com] 解析HTML时发生内部错误: {e}", task_category=task_cat)
             return None
-    # --- 新增结束 ---
+        
+    def _parse_kanav_html(self, html_content: str, task_cat: str) -> Optional[Dict]:
+        """使用 BeautifulSoup 解析 kanav.info 的HTML页面。"""
+        try:
+            soup = BeautifulSoup(html_content, 'lxml')
+            data = {
+                'title': None, 'actors': [], 'tags': [], 'plot': None,
+                'poster_url': None, 'fanart_url': None
+            }
+
+            # 步骤 1: 提取标题 (根据指定要求，从h3标签提取)
+            title_tag = soup.find('h3', style="line-height:auto;margin-top:30px")
+            if title_tag:
+                data['title'] = title_tag.get_text(strip=True)
+            else:
+                ui_logger.warning("  - ⚠️ [kanav.info] 未找到指定的 h3 标题标签，尝试备用方案 h1。", task_category=task_cat)
+                h1_title = soup.find('h1')
+                if h1_title:
+                    data['title'] = h1_title.get_text(strip=True)
+
+            # 步骤 2: 提取海报
+            poster_img = soup.find('img', class_='countext-img')
+            if poster_img and poster_img.get('src'):
+                data['poster_url'] = poster_img['src']
+
+            # --- 最终修复：改用更精确的CSS选择器定位 ---
+            # 步骤 3: 提取演员
+            # 使用 select_one 匹配同时拥有三个 class 的 div
+            actor_header = soup.select_one('div.hr-style.hr-actor.info')
+            if actor_header and actor_header.parent:
+                actor_links = actor_header.parent.find_all('a')
+                data['actors'] = [{'name': actor.get_text(strip=True), 'thumb': None} for actor in actor_links]
+                ui_logger.info(f"  - ✅ [kanav.info] 成功提取到 {len(data['actors'])} 位演员。", task_category=task_cat)
+
+            # 步骤 4: 提取标签
+            # 使用 select_one 匹配同时拥有三个 class 的 div
+            tags_header = soup.select_one('div.hr-style.hr-tags.info')
+            if tags_header and tags_header.parent:
+                tag_links = tags_header.parent.find_all('a')
+                data['tags'] = [tag.get_text(strip=True) for tag in tag_links]
+                ui_logger.info(f"  - ✅ [kanav.info] 成功提取到 {len(data['tags'])} 个标签。", task_category=task_cat)
+            # --- 修复结束 ---
+
+            ui_logger.info("  - ✅ [kanav.info] HTML内容解析成功。", task_category=task_cat)
+            return data
+        except Exception as e:
+            ui_logger.error(f"  - ❌ [kanav.info] 解析HTML时发生内部错误: {e}", task_category=task_cat)
+            return None
 
     def _get_scraper_for_domain(self, domain: str) -> Optional[Callable]:
         """根据域名返回对应的刮削解析函数"""
@@ -501,6 +548,9 @@ class FileScraperLogic:
         # --- 修改 ---
         elif 'taiav.com' in domain:
             return self._parse_taiav_html
+        
+        elif 'kanav.info' in domain:
+            return self._parse_kanav_html
         # --- 修改结束 ---
         # ... 未来可在此处添加其他网站的 elif ...
         return None
@@ -563,7 +613,6 @@ class FileScraperLogic:
         ui_logger.info(f"🔍 按优先级顺序开始刮削，顺序: {', '.join(priority_list)}", task_category=task_cat)
         for domain in priority_list:
             if cancellation_event.is_set(): return {"success": False, "message": "任务被取消"}
-            
             
 
 
