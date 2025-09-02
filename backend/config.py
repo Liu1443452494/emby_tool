@@ -187,6 +187,10 @@ def load_app_config() -> AppConfig:
         config_data["file_scraper_config"] = {}
         migration_needed = True
 
+    if "media_tagger_config" not in config_data:
+        config_data["media_tagger_config"] = {}
+        migration_needed = True
+
     if "subtitle_processor_config" in config_data:
         del config_data["subtitle_processor_config"]
 

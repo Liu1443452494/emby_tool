@@ -30,6 +30,7 @@ from actor_avatar_mapper_router import router as actor_avatar_mapper_router
 from chasing_center_router import router as chasing_center_router
 from upcoming_router import router as upcoming_router
 from file_scraper_router import router as file_scraper_router
+from media_tagger_router import router as media_tagger_router
 
 from media_selector import MediaSelector
 from models import ScheduledTasksConfig, ScheduledTasksTargetScope
@@ -608,6 +609,19 @@ def trigger_calendar_notification():
     logic = ChasingCenterLogic(config)
     task_manager.register_task(logic.send_calendar_notification_task, "定时任务-追剧日历通知")
 
+def trigger_media_tagger_task():
+    """媒体标签器定时任务触发器"""
+    task_cat = "定时任务-媒体标签器"
+    config = app_config.load_app_config()
+    if not config.media_tagger_config.enabled:
+        logging.info(f"【调度任务】媒体标签器定时任务未启用，跳过执行。")
+        return
+    
+    ui_logger.info("开始执行媒体标签器定时任务...", task_category=task_cat)
+    from media_tagger_logic import MediaTaggerLogic
+    logic = MediaTaggerLogic(config)
+    task_manager.register_task(logic.run_tagging_task, "媒体标签器-定时任务")
+
 def update_chasing_scheduler():
     """更新追更中心的定时任务"""
     task_cat = "系统配置"
@@ -792,6 +806,19 @@ async def lifespan(app: FastAPI):
     ui_logger.info("【调度任务】开始设置即将上映任务...", task_category=task_cat)
     update_upcoming_scheduler()
 
+    media_tagger_conf = config.media_tagger_config
+    if media_tagger_conf.enabled and media_tagger_conf.cron:
+        try:
+            scheduler.add_job(
+                trigger_media_tagger_task,
+                CronTrigger.from_crontab(media_tagger_conf.cron),
+                id="media_tagger_job",
+                replace_existing=True
+            )
+            ui_logger.info(f"【调度任务】已成功设置媒体标签器任务，CRON表达式: '{media_tagger_conf.cron}'", task_category=task_cat)
+        except Exception as e:
+            ui_logger.error(f"【调度任务】设置媒体标签器任务失败，CRON表达式可能无效: {e}", task_category=task_cat)
+
     if not scheduler.running:
         scheduler.start()
 
@@ -835,6 +862,7 @@ app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper"
 app.include_router(chasing_center_router, prefix="/api/chasing-center")
 app.include_router(upcoming_router, prefix="/api/upcoming")
 app.include_router(file_scraper_router, prefix="/api/file-scraper")
+app.include_router(media_tagger_router, prefix="/api/media-tagger")
 
 from models import TraktConfig
 from trakt_manager import TraktManager
@@ -1425,6 +1453,8 @@ def clear_logs_api():
         ui_logger.error(f"❌ 清空日志文件时发生未知错误: {e}", task_category="日志管理", exc_info=True)
         raise HTTPException(status_code=500, detail=f"清空日志失败: {e}")
     
+# backend/main.py (函数替换)
+
 @app.get("/api/media/libraries")
 def get_libraries_api():
     config = app_config.load_app_config()
@@ -1434,20 +1464,35 @@ def get_libraries_api():
         logging.info(f"正在从 {server_conf.server} 获取媒体库列表...")
         url = f"{server_conf.server}/Users/{server_conf.user_id}/Views"
         
-        # --- 核心修改：使用新的 ProxyManager ---
         proxy_manager = ProxyManager(config)
         proxies = proxy_manager.get_proxies(url)
-        # --- 结束修改 ---
 
         response = requests.get(url, params={"api_key": server_conf.api_key}, timeout=15, proxies=proxies)
         response.raise_for_status()
         views = response.json().get("Items", [])
-        libraries = [{"id": v["Id"], "name": v["Name"]} for v in views if v.get("CollectionType") in ["movies", "tvshows", "homevideos", "music"]]
+
+        # --- 核心修改：增加健壮性，并添加调试日志 ---
+        # 临时调试日志，用于观察所有返回的视图及其类型
+        for v in views:
+            logging.debug(f"【媒体库API调试】找到视图: \"{v.get('Name')}\", CollectionType: \"{v.get('CollectionType')}\", Type: \"{v.get('Type')}\"")
+
+        # 更健壮的媒体库识别逻辑：
+        # 1. CollectionType 在我们的白名单中
+        # 2. 或者，它的 Type 是 'CollectionFolder' (这是媒体库的根本类型)
+        valid_collection_types = ["movies", "tvshows", "homevideos", "music", "mixed"]
+        libraries = [
+            {"id": v["Id"], "name": v["Name"]} 
+            for v in views 
+            if v.get("CollectionType") in valid_collection_types or v.get("Type") == "CollectionFolder"
+        ]
+        # --- 修改结束 ---
+        
         logging.info(f"成功获取到 {len(libraries)} 个媒体库。")
         return libraries
     except Exception as e:
         logging.error(f"获取媒体库列表失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取媒体库列表时出错: {e}")
+    
 @app.post("/api/media/search")
 def search_media_api(query: MediaSearchQuery):
     config = app_config.load_app_config()

@@ -360,6 +360,37 @@ class FileScraperConfig(BaseModel):
     overwrite_existing: bool = Field(default=False, description="是否覆盖现有元数据")
     batch_cooldown: float = Field(default=2.0, description="批量刮削时每个文件之间的冷却时间（秒）", ge=0)
     source_priority: List[str] = Field(default_factory=lambda: ['xchina.co', 'javday.app', 'madou.club', 'madouqu.com', 'taiav.com', 'kanav.info'], description="刮削源域名优先级列表")
+
+class MediaTaggerTargetLibraries(BaseModel):
+    mode: Literal['all', 'include', 'exclude'] = Field(default='all', description="媒体库筛选模式")
+    names: List[str] = Field(default_factory=list, description="媒体库名称列表")
+
+class MediaTaggerTargetGenres(BaseModel):
+    mode: Literal['any', 'include', 'exclude'] = Field(default='any', description="类型筛选模式")
+    names: List[str] = Field(default_factory=list, description="类型名称列表")
+    match: Literal['or', 'and'] = Field(default='or', description="类型匹配逻辑")
+
+class MediaTaggerTarget(BaseModel):
+    libraries: MediaTaggerTargetLibraries = Field(default_factory=MediaTaggerTargetLibraries)
+    genres: MediaTaggerTargetGenres = Field(default_factory=MediaTaggerTargetGenres)
+
+class MediaTaggerAction(BaseModel):
+    add_tags: List[str] = Field(default_factory=list, description="要添加的标签列表")
+    remove_tags: List[str] = Field(default_factory=list, description="要移除的标签列表")
+
+class MediaTaggerRule(BaseModel):
+    id: str = Field(description="规则的唯一ID")
+    enabled: bool = Field(default=True, description="是否启用此规则")
+    remark: str = Field(default="", description="规则备注")
+    target: MediaTaggerTarget = Field(default_factory=MediaTaggerTarget)
+    action: MediaTaggerAction = Field(default_factory=MediaTaggerAction)
+
+class MediaTaggerConfig(BaseModel):
+    """媒体标签器功能的配置"""
+    enabled: bool = Field(default=False, description="是否启用定时任务")
+    cron: str = Field(default="0 2 * * *", description="定时任务的CRON表达式")
+    rules: List[MediaTaggerRule] = Field(default_factory=list, description="所有标签规则列表")
+
 class AppConfig(BaseModel):
     """应用的主配置模型，聚合所有子配置"""
     server_config: ServerConfig = Field(default_factory=ServerConfig)
@@ -384,6 +415,7 @@ class AppConfig(BaseModel):
     actor_role_mapper_config: ActorRoleMapperConfig = Field(default_factory=ActorRoleMapperConfig)
     episode_role_sync_config: EpisodeRoleSyncConfig = Field(default_factory=EpisodeRoleSyncConfig)
     file_scraper_config: FileScraperConfig = Field(default_factory=FileScraperConfig)
+    media_tagger_config: MediaTaggerConfig = Field(default_factory=MediaTaggerConfig)
 
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]

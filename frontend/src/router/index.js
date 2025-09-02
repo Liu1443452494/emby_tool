@@ -75,6 +75,11 @@ const router = createRouter({
       component: () => import('../views/FileScraperView.vue')
     },
     {
+      path: '/media-tagger',
+      name: 'media-tagger',
+      component: () => import('../views/MediaTaggerView.vue')
+    },
+    {
       path: '/scheduled-tasks',
       name: 'scheduled-tasks',
       component: () => import('../views/ScheduledTasksView.vue')

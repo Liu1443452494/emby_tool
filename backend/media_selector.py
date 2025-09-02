@@ -17,6 +17,8 @@ class MediaSelector:
         self.params = {"api_key": self.api_key}
         self.session = requests.Session()
 
+
+
     def _get_latest_items(self, item_types: str, fetch_limit: int) -> List[dict]:
         """从 Emby 获取最新入库的项目"""
         url = f"{self.base_url}/Users/{self.user_id}/Items/Latest"
