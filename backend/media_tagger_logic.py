@@ -233,8 +233,11 @@ class MediaTaggerLogic:
             ui_logger.info(f"   - ✅ 已确定媒体项所属媒体库为: 【{library_name}】", task_category=task_cat)
 
             # 2. 获取媒体项的详细信息
+            # --- 核心修改：移除 Fields 参数，获取默认的完整 item 数据 ---
+            # 这样可以更可靠地获取到 Genres 或 GenreItems 字段
             item_data_url = f"{self.server_config.server}/Users/{self.server_config.user_id}/Items/{item_id}"
-            item_data_params = {"api_key": self.server_config.api_key, "Fields": "Tags,TagItems,Genres"}
+            item_data_params = {"api_key": self.server_config.api_key}
+            # --- 修改结束 ---
             item_data_proxies = self.proxy_manager.get_proxies(item_data_url)
             item_data_response = self.session.get(item_data_url, params=item_data_params, timeout=15, proxies=item_data_proxies)
             item_data_response.raise_for_status()
@@ -272,9 +275,7 @@ class MediaTaggerLogic:
         except Exception as e:
             ui_logger.error(f"❌ 为媒体项 {item_id} 应用标签时发生错误: {e}", task_category=task_cat)
 
-    # backend/media_tagger_logic.py (函数替换)
 
-    # backend/media_tagger_logic.py (函数替换)
 
     def run_tagging_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "媒体标签器-应用规则"
