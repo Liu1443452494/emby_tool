@@ -221,23 +221,21 @@ class MediaTaggerLogic:
                 elif genre_target.match == 'and' and not filter_genres.issubset(item_genres): final_ids.add(item_id)
         return final_ids
 
+    
+
     def process_single_item(self, item_id: str, task_cat: str):
         ui_logger.info(f"➡️ 开始为媒体项 (ID: {item_id}) 应用标签规则...", task_category=task_cat)
         try:
-            # 1. 确定媒体项所属的媒体库 (使用物理路径匹配的专用方法)
+            # 1. 确定媒体项所属的媒体库
             library = self._get_library_for_item_by_path(item_id)
             if not library:
                 ui_logger.warning(f"⚠️ 无法确定媒体项 (ID: {item_id}) 所属的媒体库，跳过打标签。", task_category=task_cat)
                 return
             library_id, library_name = library['Id'], library['Name']
-            ui_logger.info(f"   - ✅ 已确定媒体项所属媒体库为: 【{library_name}】", task_category=task_cat)
-
+            
             # 2. 获取媒体项的详细信息
-            # --- 核心修改：移除 Fields 参数，获取默认的完整 item 数据 ---
-            # 这样可以更可靠地获取到 Genres 或 GenreItems 字段
             item_data_url = f"{self.server_config.server}/Users/{self.server_config.user_id}/Items/{item_id}"
             item_data_params = {"api_key": self.server_config.api_key}
-            # --- 修改结束 ---
             item_data_proxies = self.proxy_manager.get_proxies(item_data_url)
             item_data_response = self.session.get(item_data_url, params=item_data_params, timeout=15, proxies=item_data_proxies)
             item_data_response.raise_for_status()
@@ -246,12 +244,20 @@ class MediaTaggerLogic:
             # 3. 规则匹配与演算
             parsed_item = self._parse_item_data(item_data, library_id, library_name)
             initial_tags = parsed_item['Tags']
+            
             change_set = {"add": set(), "remove": set()}
+            # --- 核心修改：存储命中的规则序号和备注 ---
+            matched_rules_info = []
+            
             enabled_rules = [rule for rule in self.tagger_config.rules if rule.enabled]
+            # 使用 enumerate 获取规则的索引 (从0开始)
             for i, rule in enumerate(enabled_rules):
+            # --- 修改结束 ---
                 matched_ids = self._filter_items_by_rule({item_id: parsed_item}, rule)
                 if item_id in matched_ids:
-                    ui_logger.info(f"   - ✅ 命中规则 #{i+1}: “{rule.remark}”", task_category=task_cat)
+                    # --- 核心修改：存储序号 (i+1) 和备注 ---
+                    matched_rules_info.append({"index": i + 1, "remark": rule.remark})
+                    # --- 修改结束 ---
                     tags_to_add, tags_to_remove = set(rule.action.add_tags), set(rule.action.remove_tags)
                     change_set["add"].update(tags_to_add)
                     change_set["remove"].update(tags_to_remove)
@@ -262,16 +268,41 @@ class MediaTaggerLogic:
             
             # 4. 计算并更新
             final_tags = (initial_tags.union(change_set['add'])).difference(change_set['remove'])
+            
+            log_lines = [f"正在处理【{parsed_item['Name']}】"]
+            log_lines.append(f"  - 所属媒体库: 【{library_name}】")
+            
+            genres_str = ', '.join(sorted(list(parsed_item['Genres']))) if parsed_item['Genres'] else '无'
+            log_lines.append(f"  - 类型: [{genres_str}]")
+
+            # --- 核心修改：使用新的 matched_rules_info 来构建日志 ---
+            if not matched_rules_info:
+                log_lines.append("  - 未命中任何规则，无需操作。")
+            else:
+                for info in matched_rules_info:
+                    log_lines.append(f"  - 命中规则 #{info['index']}: “{info['remark']}”")
+            # --- 修改结束 ---
+
             if final_tags != initial_tags:
                 added = sorted(list(final_tags - initial_tags))
                 removed = sorted(list(initial_tags - final_tags))
-                log_msg = f"   - 正在处理【{parsed_item['Name']}】: 当前标签 [{', '.join(sorted(list(initial_tags)))}]，"
-                if added: log_msg += f" 新增 [{', '.join(added)}]"
-                if removed: log_msg += f" 移除 [{', '.join(removed)}]"
-                ui_logger.info(log_msg.strip(), task_category=task_cat)
+                
+                change_log_parts = []
+                if added: change_log_parts.append(f"新增 [{', '.join(added)}]")
+                if removed: change_log_parts.append(f"移除 [{', '.join(removed)}]")
+                
+                if change_log_parts:
+                    initial_tags_str = f"当前 [{', '.join(sorted(list(initial_tags)))}]" if initial_tags else "当前 [无]"
+                    change_str = ' '.join(change_log_parts)
+                    log_lines.append(f"  - 🔄 标签变更: {initial_tags_str} → {change_str}")
+                
+                full_log_message = "\n".join(log_lines)
+                ui_logger.info(full_log_message, task_category=task_cat)
                 self._update_item_tags(item_id, list(final_tags))
             else:
-                ui_logger.info(f"   - 媒体项【{parsed_item['Name']}】的标签已符合所有规则，无需更新。", task_category=task_cat)
+                full_log_message = "\n".join(log_lines)
+                ui_logger.info(full_log_message, task_category=task_cat)
+
         except Exception as e:
             ui_logger.error(f"❌ 为媒体项 {item_id} 应用标签时发生错误: {e}", task_category=task_cat)
 
@@ -315,6 +346,7 @@ class MediaTaggerLogic:
         
         change_set: Dict[str, Dict[str, Any]] = {}
 
+        # --- 核心修改：使用 enumerate 获取规则序号 ---
         for i, rule in enumerate(enabled_rules):
             ui_logger.info(f"   - [规则 {i+1}/{len(enabled_rules)}] 正在处理: “{rule.remark}”", task_category=task_cat)
             matched_ids = self._filter_items_by_rule(all_items, rule)
@@ -326,12 +358,16 @@ class MediaTaggerLogic:
                 
                 change_set[item_id]["add"].update(tags_to_add)
                 change_set[item_id]["remove"].update(tags_to_remove)
-                change_set[item_id]["matched_rules"].append(rule.remark)
+                # --- 核心修改：存储序号和备注 ---
+                change_set[item_id]["matched_rules"].append({"index": i + 1, "remark": rule.remark})
 
                 conflicts = change_set[item_id]["add"].intersection(change_set[item_id]["remove"])
                 if conflicts:
+                    # 去重，确保每个规则只记录一次
+                    change_set[item_id]["matched_rules"] = [dict(t) for t in {tuple(d.items()) for d in change_set[item_id]["matched_rules"]}]
                     change_set[item_id]["add"].difference_update(conflicts)
                     change_set[item_id]["remove"].difference_update(conflicts)
+        # --- 修改结束 ---
 
         ui_logger.info("✅ [步骤 2/4] 离线演算完成。", task_category=task_cat)
         ui_logger.info("➡️ [步骤 3/4] 开始计算最终标签并识别变更...", task_category=task_cat)
@@ -359,7 +395,6 @@ class MediaTaggerLogic:
                 ui_logger.warning("⚠️ 任务在应用变更阶段被取消。", task_category=task_cat)
                 return
             
-            # --- 核心修改：将所有日志信息构建成一个单独的字符串 ---
             item_id, item_name = item_data['id'], item_data['name']
             initial_tags, final_tags = item_data['initial_tags'], item_data['final_tags']
             
@@ -368,8 +403,15 @@ class MediaTaggerLogic:
             genres_str = ', '.join(sorted(list(item_data['genres']))) if item_data['genres'] else '无'
             log_lines.append(f"  - 类型: [{genres_str}]")
 
-            for rule_remark in item_data['matched_rules']:
-                log_lines.append(f"  - 命中规则: “{rule_remark}”")
+            # --- 核心修改：使用新的 matched_rules 结构来构建日志 ---
+            if not item_data['matched_rules']:
+                 log_lines.append("  - 未命中任何规则，无需操作。")
+            else:
+                # 排序确保日志输出顺序稳定
+                sorted_rules = sorted(item_data['matched_rules'], key=lambda x: x['index'])
+                for info in sorted_rules:
+                    log_lines.append(f"  - 命中规则 #{info['index']}: “{info['remark']}”")
+            # --- 修改结束 ---
 
             added = sorted(list(final_tags - initial_tags))
             removed = sorted(list(initial_tags - final_tags))
@@ -383,10 +425,8 @@ class MediaTaggerLogic:
                 change_str = ' '.join(change_log_parts)
                 log_lines.append(f"  - 🔄 标签变更: {initial_tags_str} → {change_str}")
             
-            # 将所有行合并成一个日志消息，用换行符分隔
             full_log_message = "\n".join(log_lines)
             ui_logger.info(full_log_message, task_category=task_cat)
-            # --- 修改结束 ---
 
             if self._update_item_tags(item_id, list(final_tags)):
                 success_count += 1
