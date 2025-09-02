@@ -156,7 +156,7 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
         
         # --- 核心修改 3: 更新最终的日志输出 ---
         total_emby_ids_mapped = sum(len(v) for v in id_map.values())
-        ui_logger.info(f"✅ 映射表生成完毕。共映射 {len(id_map)} 个唯一的 TMDB-ID-类型 组合，关联 {total_emby_ids_mapped} 个Emby媒体项。跳过: {skipped_count} 项, 失败: {failed_count} 项。", task_category=task_cat)
+        ui_logger.info(f"✅ 映射表生成完毕。共处理 {total_items} 个媒体项，映射 {len(id_map)} 个唯一的 TMDB-ID-类型 组合，关联 {total_emby_ids_mapped} 个Emby媒体项。跳过: {skipped_count} 项, 失败: {failed_count} 项。", task_category=task_cat)
         # --- 修改结束 ---
     except IOError as e:
         ui_logger.error(f"❌ 写入映射表文件失败: {e}", task_category=task_cat)

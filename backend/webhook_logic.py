@@ -186,6 +186,8 @@ class WebhookLogic:
         from actor_role_mapper_logic import ActorRoleMapperLogic, ACTOR_ROLE_MAP_FILE
         # --- 新增：导入电影重命名逻辑 ---
         from movie_renamer_logic import MovieRenamerLogic
+
+        from media_tagger_logic import MediaTaggerLogic
         # --- 新增结束 ---
 
         item_details_pre = self._get_emby_item_details(item_id)
@@ -374,7 +376,6 @@ class WebhookLogic:
 
         ui_logger.info(f"【步骤 8.5/9 | 自动应用媒体标签】开始...", task_category=task_cat)
         try:
-            from media_tagger_logic import MediaTaggerLogic
             tagger_logic = MediaTaggerLogic(self.config)
             tagger_logic.process_single_item(item_id, task_cat)
         except Exception as e:
