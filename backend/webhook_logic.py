@@ -371,6 +371,15 @@ class WebhookLogic:
         except Exception as e:
             ui_logger.error(f"【豆瓣海报更新】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
         if cancellation_event.is_set(): return
+
+        ui_logger.info(f"【步骤 8.5/9 | 自动应用媒体标签】开始...", task_category=task_cat)
+        try:
+            from media_tagger_logic import MediaTaggerLogic
+            tagger_logic = MediaTaggerLogic(self.config)
+            tagger_logic.process_single_item(item_id, task_cat)
+        except Exception as e:
+            ui_logger.error(f"【自动应用媒体标签】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
+        if cancellation_event.is_set(): return
         
         # --- 新增：电影文件重命名逻辑 ---
         if item_type == "Movie":
