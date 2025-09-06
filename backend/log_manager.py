@@ -110,6 +110,9 @@ def setup_logging(add_websocket_handler: bool = True):
         os.makedirs(LOGS_DIR)
     LOG_FILE = os.path.join(LOGS_DIR, "app.log")
 
+    # 定义日志保留天数常量
+    LOG_BACKUP_COUNT = 5
+
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG) 
 
@@ -124,7 +127,7 @@ def setup_logging(add_websocket_handler: bool = True):
         LOG_FILE, 
         when='D', 
         interval=1, 
-        backupCount=14, 
+        backupCount=LOG_BACKUP_COUNT, 
         encoding='utf-8'
     )
     file_handler.setFormatter(log_format)
@@ -152,4 +155,4 @@ def setup_logging(add_websocket_handler: bool = True):
     # --- 修改结束 ---
     logging.getLogger('PIL').setLevel(logging.INFO)
     if add_websocket_handler:
-        ui_logger.info("✅ 日志系统已成功初始化 (每日滚动，保留14天)。", task_category='系统启动')
+        ui_logger.info(f"✅ 日志系统已成功初始化 (每日滚动，保留{LOG_BACKUP_COUNT}天)。", task_category='系统启动')
