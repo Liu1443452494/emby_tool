@@ -219,11 +219,11 @@ async def library_scan_scheduler():
     主要服务于 Webhook 场景。
     """
     task_cat = "媒体库扫描调度器"
-    logging.info(f"【{task_cat}】已启动，将每 30 秒检查一次待处理队列...")
+    logging.info(f"【{task_cat}】已启动，将每 60 秒检查一次待处理队列...")
     
     while True:
         try:
-            await asyncio.sleep(30) # 调度器检查周期
+            await asyncio.sleep(60) # 调度器检查周期
             
             now = time.time()
             ready_to_scan_ids = []
