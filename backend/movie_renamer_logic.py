@@ -200,7 +200,7 @@ class MovieRenamerLogic:
                 target_filenames.add(f"{old_filename_no_ext}{suffix}{ext}")
         
         ui_logger.info(f"     - [关联文件扫描] 开始在目录中查找 {len(target_filenames)} 种可能的关联文件...", task_category=task_cat)
-        logging.debug(f"       - 目标清单: {target_filenames}", task_category=task_cat)
+        ui_logger.debug(f"       - 目标清单: {target_filenames}", task_category=task_cat)
 
         renamed_count = 0
         renamed_files_details = []
