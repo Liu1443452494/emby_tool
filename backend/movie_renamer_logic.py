@@ -379,6 +379,24 @@ class MovieRenamerLogic:
                 ui_logger.info(f"    - ✅ 成功更新 .strm 文件内容。", task_category=task_cat)
             except IOError as e:
                 ui_logger.error(f"    - ❌ 更新 .strm 文件内容失败: {e}", task_category=task_cat)
+
+
+        try:
+            # 稍微延时，给Emby创建残留文件留出时间窗口
+            time.sleep(2) 
+            
+            # 我们要查找的残留文件，就是以旧文件名主干命名的文件
+            # 例如 '异教徒...CHD.nfo'
+            old_nfo_filename = f"{local_strm_filename_no_ext}.nfo"
+            old_nfo_path = os.path.join(local_dir, old_nfo_filename)
+
+            if os.path.exists(old_nfo_path):
+                ui_logger.info(f"  - [战后清理] 发现由 Emby 重新生成的残留 .nfo 文件，正在清理...", task_category=task_cat)
+                os.remove(old_nfo_path)
+                ui_logger.info(f"    - ✅ 成功删除残留文件: {old_nfo_filename}", task_category=task_cat)
+
+        except Exception as e:
+            ui_logger.warning(f"  - ⚠️ [战后清理] 清理残留文件时发生错误: {e}", task_category=task_cat)
         
         # 5. 执行冷却
         cooldown = self.renamer_config.clouddrive_rename_cooldown
