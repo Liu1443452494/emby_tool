@@ -178,7 +178,7 @@ class WebhookLogic:
 
     def process_new_media_task(self, item_id: str, cancellation_event: threading.Event, series_id: str):
         # --- 新增：从 main 导入全局标记集合 ---
-        from main import main_task_completed_series, episode_sync_queue_lock, id_map_update_lock
+        from main import main_task_completed_series, episode_sync_queue_lock, id_map_update_lock, library_scan_queue_lock
         import main as main_module
         # --- 新增结束 ---
         from tmdb_logic import TmdbLogic
@@ -382,20 +382,23 @@ class WebhookLogic:
             ui_logger.error(f"【自动应用媒体标签】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
         if cancellation_event.is_set(): return
         
-        # --- 新增：电影文件重命名逻辑 ---
         if item_type == "Movie":
             ui_logger.info(f"【步骤 9/9 | 电影文件重命名】开始...", task_category=task_cat)
             try:
                 movie_renamer_logic = MovieRenamerLogic(self.config)
-                # 重新获取一次最新的媒体信息，确保 Path 和 MediaSources 是准确的
                 final_movie_details = self._get_emby_item_details(item_id, fields="Name,Path,MediaSources")
                 if final_movie_details:
-                    movie_renamer_logic.process_single_movie(final_movie_details, task_cat)
+                    # --- 修改：接收返回值并请求扫描 ---
+                    library_info = movie_renamer_logic.process_single_movie(final_movie_details, task_cat)
+                    if library_info:
+                        with library_scan_queue_lock:
+                            main_module.libraries_to_scan_queue[library_info['Id']] = time.time()
+                        ui_logger.info(f"  - 🔔 [扫描调度器] 已为媒体库【{library_info['Name']}】发送扫描请求，静默期计时器已重置。", task_category=task_cat)
+                    # --- 修改结束 ---
                 else:
                     ui_logger.error(f"【电影文件重命名】在最后阶段无法获取电影详情，跳过重命名。", task_category=task_cat)
             except Exception as e:
-                # 即使重命名失败，也只记录错误，不影响后续流程
-                ui_logger.error(f"【电影文件重命名】步骤执行时发生未知错误，但将继续完成 Webhook 流程。错误: {e}", task_category=task_cat, exc_info=True)
+                ui_logger.error(f"【电影文件重命名】步骤执行时发生未知错误: {e}", task_category=task_cat, exc_info=True)
         # --- 新增结束 ---
 
         if item_type == "Series":

@@ -71,9 +71,15 @@ scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 episode_sync_queue: Dict[str, Dict[str, Any]] = {}
 episode_sync_queue_lock = threading.Lock()
 episode_sync_scheduler_task = None
+
 id_map_update_request_time: Optional[float] = None
 id_map_update_lock = threading.Lock()
 id_map_update_scheduler_task = None
+
+libraries_to_scan_queue: Dict[str, float] = {}
+library_scan_queue_lock = threading.Lock()
+library_scan_scheduler_task = None
+
 main_task_completed_series: set[str] = set()
 
 def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
@@ -206,6 +212,61 @@ async def id_map_update_scheduler():
         except Exception as e:
             logging.error(f"【{task_cat}】运行时发生未知错误: {e}", exc_info=True)
             await asyncio.sleep(120) # 发生错误时等待更长时间
+
+async def library_scan_scheduler():
+    """
+    独立的后台调度器，用于处理媒体库文件扫描的防抖触发任务。
+    主要服务于 Webhook 场景。
+    """
+    task_cat = "媒体库扫描调度器"
+    logging.info(f"【{task_cat}】已启动，将每 30 秒检查一次待处理队列...")
+    
+    while True:
+        try:
+            await asyncio.sleep(30) # 调度器检查周期
+            
+            now = time.time()
+            ready_to_scan_ids = []
+            
+            with library_scan_queue_lock:
+                if not libraries_to_scan_queue:
+                    continue
+
+                logging.info(f"【{task_cat}】🔍 开始检查队列，当前有 {len(libraries_to_scan_queue)} 个媒体库待扫描...")
+                
+                for lib_id, last_update_time in list(libraries_to_scan_queue.items()):
+                    silence_duration = now - last_update_time
+                    
+                    if silence_duration >= 90: # 90秒静默期
+                        logging.info(f"   - ✅ 媒体库 (ID: {lib_id}) 条件满足：静默 {silence_duration:.1f} 秒 (>=90s)。准备扫描。")
+                        ready_to_scan_ids.append(lib_id)
+                    else:
+                        remaining_time = 90 - silence_duration
+                        logging.info(f"   - ⏱️ 媒体库 (ID: {lib_id}) 静默时长 {silence_duration:.1f} 秒，等待剩余 {remaining_time:.1f} 秒...")
+
+                # 从主队列中安全地弹出这些媒体库
+                for lib_id in ready_to_scan_ids:
+                    libraries_to_scan_queue.pop(lib_id, None)
+
+            # 在锁外执行耗时（网络IO）任务
+            if ready_to_scan_ids:
+                ui_logger.info(f"➡️ {len(ready_to_scan_ids)} 个媒体库已满足扫描条件，开始派发扫描任务...", task_category=task_cat)
+                config = app_config.load_app_config()
+                # 复用一个 MovieRenamerLogic 实例来执行扫描
+                from movie_renamer_logic import MovieRenamerLogic
+                logic = MovieRenamerLogic(config)
+                
+                # 理论上这里不会有太多项，直接循环即可
+                for lib_id in ready_to_scan_ids:
+                    # 扫描API不返回库名称，所以我们这里只用ID
+                    logic._trigger_library_scan(lib_id, f"ID {lib_id}", task_cat)
+
+        except asyncio.CancelledError:
+            logging.info(f"【{task_cat}】收到关闭信号，正在退出...")
+            break
+        except Exception as e:
+            logging.error(f"【{task_cat}】运行时发生未知错误: {e}", exc_info=True)
+            await asyncio.sleep(120)
 
 async def episode_sync_scheduler():
     """
@@ -746,6 +807,8 @@ async def lifespan(app: FastAPI):
     episode_sync_scheduler_task = asyncio.create_task(episode_sync_scheduler())
     # --- 新增：启动ID映射表更新调度器 ---
     id_map_update_scheduler_task = asyncio.create_task(id_map_update_scheduler())
+
+    library_scan_scheduler_task = asyncio.create_task(library_scan_scheduler())
     # --- 新增结束 ---
 
     config = app_config.load_app_config()
@@ -835,10 +898,19 @@ async def lifespan(app: FastAPI):
     # --- 新增 ---
     if episode_sync_scheduler_task:
         episode_sync_scheduler_task.cancel()
-    # --- 新增：取消ID映射表更新调度器 ---
     if id_map_update_scheduler_task:
         id_map_update_scheduler_task.cancel()
-    await asyncio.gather(webhook_worker_task, task_manager_consumer, episode_sync_scheduler_task, id_map_update_scheduler_task, return_exceptions=True)
+    # --- 新增：取消媒体库扫描调度器 ---
+    if library_scan_scheduler_task:
+        library_scan_scheduler_task.cancel()
+    await asyncio.gather(
+        webhook_worker_task, 
+        task_manager_consumer, 
+        episode_sync_scheduler_task, 
+        id_map_update_scheduler_task, 
+        library_scan_scheduler_task, # 添加到 gather
+        return_exceptions=True
+    )
     # --- 修改结束 ---
     logging.info("所有后台任务已成功取消。")
 

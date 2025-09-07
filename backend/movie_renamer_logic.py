@@ -24,10 +24,65 @@ class MovieRenamerLogic:
         self.user_id = self.server_config.user_id
         self.params = {"api_key": self.api_key}
 
+        self._physical_library_cache: Optional[List[Dict]] = None
+
         # 编译正则表达式以提高效率
         self.size_regex = re.compile(r'([\[【])\s*(\d+(\.\d+)?)\s*(G|M)B?\s*([\]】])', re.IGNORECASE)
         self.iso_regex = re.compile(r'([\[【])\s*ISO\s*([\]】])', re.IGNORECASE)
         self.chinese_char_regex = re.compile('[\u4e00-\u9fa5]')
+
+    def _get_library_for_item(self, item_path: str, task_cat: str) -> Optional[Dict]:
+        """根据媒体项的物理路径，定位其所属的媒体库。"""
+        import requests
+        try:
+            # 1. 获取所有媒体库及其扫描路径 (带缓存)
+            if self._physical_library_cache is None:
+                ui_logger.info(f"  - [媒体库定位] 首次运行，正在从 Emby 获取所有媒体库的物理路径...", task_category=task_cat)
+                folders_url = f"{self.base_url}/Library/VirtualFolders/Query"
+                folders_params = self.params
+                # 兼容 Jellyfin 的路径
+                try:
+                    folders_response = requests.get(folders_url, params=folders_params, timeout=15)
+                    if folders_response.status_code == 404:
+                        folders_url = f"{self.base_url}/emby/Library/VirtualFolders/Query"
+                        folders_response = requests.get(folders_url, params=folders_params, timeout=15)
+                    folders_response.raise_for_status()
+                    self._physical_library_cache = folders_response.json().get("Items", [])
+                except requests.RequestException as e:
+                    ui_logger.error(f"  - ❌ [媒体库定位] 获取媒体库物理路径失败: {e}", task_category=task_cat)
+                    self._physical_library_cache = []
+            
+            # 2. 进行前缀匹配
+            for library in self._physical_library_cache:
+                if library.get("CollectionType") == "boxsets": continue # 显式跳过合集
+                locations = library.get("Locations", [])
+                for loc_path in locations:
+                    # 确保路径格式一致，避免因尾部斜杠导致匹配失败
+                    normalized_loc_path = os.path.join(loc_path, '')
+                    normalized_item_path = os.path.join(item_path, '')
+                    if normalized_item_path.startswith(normalized_loc_path):
+                        library_info = {"Id": library.get("ItemId", library.get("Id")), "Name": library.get("Name")}
+                        ui_logger.info(f"  - [媒体库定位] ✅ 成功匹配！媒体项位于媒体库【{library_info['Name']}】中。", task_category=task_cat)
+                        return library_info
+            
+            ui_logger.warning(f"  - ⚠️ [媒体库定位] 未能为路径 '{item_path}' 匹配到任何媒体库。", task_category=task_cat)
+            return None
+        except Exception as e:
+            ui_logger.error(f"  - ❌ [媒体库定位] 发生未知错误: {e}", task_category=task_cat, exc_info=True)
+            return None
+
+    def _trigger_library_scan(self, library_id: str, library_name: str, task_cat: str):
+        """触发指定媒体库的文件扫描。"""
+        import requests
+        ui_logger.info(f"  - [媒体库扫描] 正在为媒体库【{library_name}】(ID: {library_id}) 触发文件扫描...", task_category=task_cat)
+        try:
+            url = f"{self.base_url}/Library/Refresh"
+            params = {**self.params, "Recursive": "true"}
+            response = requests.post(url, params=params, timeout=30)
+            response.raise_for_status()
+            ui_logger.info(f"  - [媒体库扫描] ✅ 已成功发送扫描指令。", task_category=task_cat)
+        except requests.RequestException as e:
+            ui_logger.error(f"  - ❌ [媒体库扫描] 向 Emby 发送扫描指令失败: {e}", task_category=task_cat)
 
     def _get_movie_details_batch(self, item_ids: List[str], task_cat: str) -> List[Dict]:
         """批量获取电影的核心信息"""
@@ -116,33 +171,75 @@ class MovieRenamerLogic:
         gb_size = size_bytes / (1024**3)
         return f"{gb_size:.2f}G"
 
+    # backend/movie_renamer_logic.py (函数替换)
+
     def _rename_associated_files(self, old_base_path: str, new_base_path: str, task_cat: str) -> bool:
-        """重命名 .strm, .nfo, 和 -thumb.jpg 等关联文件"""
+        """
+        精确地重命名关联文件，通过主动构建目标清单并查找匹配项的方式。
+        """
         renamed_any = False
         dir_name = os.path.dirname(old_base_path)
         old_filename_no_ext = os.path.basename(old_base_path)
         new_filename_no_ext = os.path.basename(new_base_path)
 
-        # 遍历目录下的所有文件
-        for filename in os.listdir(dir_name):
-            if filename.startswith(old_filename_no_ext):
-                # 构造旧路径和新路径
-                old_file_path = os.path.join(dir_name, filename)
-                new_filename = filename.replace(old_filename_no_ext, new_filename_no_ext, 1)
-                new_file_path = os.path.join(dir_name, new_filename)
-                
-                try:
-                    os.rename(old_file_path, new_file_path)
-                    ui_logger.info(f"     - ✅ 成功重命名关联文件: {filename} -> {new_filename}", task_category=task_cat)
-                    renamed_any = True
-                except OSError as e:
-                    ui_logger.error(f"     - ❌ 重命名关联文件失败: {filename}。错误: {e}", task_category=task_cat)
+        # --- 核心修改：采用“主动构建，精确查找”的新逻辑 ---
+
+        # 1. 定义构建模板
+        BASE_EXTENSIONS = ['.nfo', '.jpg', '.png', '.webp']
+        SUFFIX_MODIFIERS = ['-poster', '-fanart', '-clearlogo', '-thumb']
+
+        # 2. 构建期望查找的关联文件清单
+        target_filenames = set()
+        # 第一轮：直接拼接 (e.g., '测试.nfo')
+        for ext in BASE_EXTENSIONS:
+            target_filenames.add(f"{old_filename_no_ext}{ext}")
         
+        # 第二轮：后缀拼接 (e.g., '测试-poster.jpg')
+        for suffix in SUFFIX_MODIFIERS:
+            for ext in BASE_EXTENSIONS:
+                target_filenames.add(f"{old_filename_no_ext}{suffix}{ext}")
+        
+        ui_logger.info(f"     - [关联文件扫描] 已构建 {len(target_filenames)} 个潜在关联文件目标，开始在目录中查找...", task_category=task_cat)
+        ui_logger.debug(f"       - 目标清单: {target_filenames}", task_category=task_cat)
+
+        try:
+            # 3. 遍历实际文件并执行操作
+            for filename in os.listdir(dir_name):
+                # 检查当前文件是否在我们的目标清单中
+                if filename in target_filenames:
+                    old_file_path = os.path.join(dir_name, filename)
+                    
+                    # 构造新文件名，精确替换基础部分
+                    new_filename = filename.replace(old_filename_no_ext, new_filename_no_ext, 1)
+                    new_file_path = os.path.join(dir_name, new_filename)
+
+                    # 安全检查
+                    if old_file_path == new_file_path:
+                        continue
+
+                    try:
+                        os.rename(old_file_path, new_file_path)
+                        ui_logger.info(f"       - ✅ 成功重命名关联文件: {filename} -> {new_filename}", task_category=task_cat)
+                        renamed_any = True
+                    except OSError as e:
+                        ui_logger.error(f"       - ❌ 重命名关联文件 '{filename}' 失败: {e}", task_category=task_cat)
+            
+            ui_logger.info("     - [关联文件扫描] 扫描和处理完成。", task_category=task_cat)
+
+        except Exception as e:
+            ui_logger.error(f"     - ❌ 在处理关联文件时发生未知错误: {e}", task_category=task_cat)
+
+        # --- 修改结束 ---
         return renamed_any
 
-    # --- 核心修改：重构此函数以适应新逻辑 ---
-    def process_single_movie(self, movie_info: Dict, task_cat: str) -> Dict:
-        """处理单个电影的核心逻辑函数"""
+    # backend/movie_renamer_logic.py (函数替换)
+
+    def process_single_movie(self, movie_info: Dict, task_cat: str) -> Optional[Dict]:
+        """
+        处理单个电影的核心逻辑函数。
+        成功重命名后，返回其所在的 library_info 字典。
+        如果跳过或失败，返回 None。
+        """
         item_id = movie_info.get("Id")
         emby_name = movie_info.get("Name", f"ID {item_id}")
         emby_path = movie_info.get("Path")
@@ -152,12 +249,12 @@ class MovieRenamerLogic:
 
         if not all([emby_path, media_sources]):
             ui_logger.warning(f"  - [跳过] 媒体项缺少 Path 或 MediaSources 关键信息。", task_category=task_cat)
-            return {"status": "skipped", "message": "缺少路径或 MediaSources 信息"}
+            return None
 
         find_result = self._find_source_and_get_filename(media_sources, item_id, task_cat)
         if not find_result:
             ui_logger.error(f"  - [跳过] 无法为 ID {item_id} 找到匹配的媒体源或解析文件名。", task_category=task_cat)
-            return {"status": "skipped", "message": "无法找到匹配的媒体源"}
+            return None
         
         target_source, real_filename = find_result
 
@@ -168,127 +265,96 @@ class MovieRenamerLogic:
         size_match = self.size_regex.search(filename_body)
         is_iso = file_ext.lower() == '.iso'
         
-        # 检查大小标签
-        if not size_match:
-            ui_logger.info(f"    - ➡️ 不合格 (原因: 缺失大小标签)", task_category=task_cat)
-        elif size_match.start() > 20:
-            ui_logger.info(f"    - ➡️ 不合格 (原因: 大小标签位置靠后, 索引 {size_match.start()} > 20)", task_category=task_cat)
-        else:
-            # 大小标签合格，检查 ISO 标签
+        if size_match and size_match.start() <= 20:
             if not is_iso:
                 ui_logger.info(f"    - ✅ 合格 (大小标签位置规范, 非 ISO 文件)", task_category=task_cat)
-                return {"status": "skipped", "message": "命名已规范"}
+                return None
             
             iso_match = self.iso_regex.search(filename_body)
-            if not iso_match:
-                ui_logger.info(f"    - ➡️ 不合格 (原因: ISO 文件缺失 [ISO] 标签)", task_category=task_cat)
-            elif iso_match.start() > 20:
-                ui_logger.info(f"    - ➡️ 不合格 (原因: [ISO] 标签位置靠后, 索引 {iso_match.start()} > 20)", task_category=task_cat)
-            else:
+            if iso_match and iso_match.start() <= 20:
                 ui_logger.info(f"    - ✅ 合格 (大小和 ISO 标签均位置规范)", task_category=task_cat)
-                return {"status": "skipped", "message": "命名已规范"}
+                return None
+
+        ui_logger.info(f"    - ➡️ 不合格，将执行重命名流程。", task_category=task_cat)
 
         # --- 阶段三：完整处理 ---
         ui_logger.info(f"  - [完整处理] 开始为【{emby_name}】构建理想文件名...", task_category=task_cat)
         
-        # 1. 获取/确定所需信息
         size_tag = ""
         if size_match:
             size_tag = size_match.group(0)
-            ui_logger.debug(f"    - 从文件名中提取到大小标签: {size_tag}", task_category=task_cat)
         else:
             clouddrive_path = self._get_clouddrive_path(emby_path, real_filename, task_cat)
             if clouddrive_path and os.path.exists(clouddrive_path):
                 try:
                     file_size_bytes = os.path.getsize(clouddrive_path)
                     size_tag = f"[{self._format_filesize(file_size_bytes)}]"
-                    ui_logger.info(f"    - 成功获取到真实文件大小: {self._format_filesize(file_size_bytes)}", task_category=task_cat)
                 except OSError as e:
                     ui_logger.error(f"    - ❌ 获取文件大小失败: {e}", task_category=task_cat)
-                    return {"status": "error", "message": f"获取文件大小失败: {e}"}
+                    return None
             else:
                 ui_logger.warning(f"    - ⚠️ 无法定位网盘文件或文件不存在，跳过大小获取: {clouddrive_path}", task_category=task_cat)
-                return {"status": "skipped", "message": "无法定位网盘文件"}
+                return None
 
-        iso_tag = ""
-        if is_iso:
-            iso_tag = "[ISO]"
-
+        iso_tag = "[ISO]" if is_iso else ""
         clean_body = self.size_regex.sub('', filename_body)
         clean_body = self.iso_regex.sub('', clean_body).strip()
 
         chinese_title_prefix = ""
         if not self.chinese_char_regex.search(clean_body):
             chinese_title_prefix = f"{emby_name}."
-            ui_logger.info(f"    - 检测到纯英文文件名，将添加中文标题前缀: {chinese_title_prefix}", task_category=task_cat)
 
-        # 2. 构建理想文件名
-        parts = []
-        if iso_tag:
-            parts.append(iso_tag)
-        if size_tag:
-            parts.append(size_tag)
-        
+        parts = [p for p in [iso_tag, size_tag] if p]
         ideal_filename_no_ext = " ".join(parts)
-        if chinese_title_prefix:
-            ideal_filename_no_ext += f" {chinese_title_prefix}{clean_body}"
-        else:
-            ideal_filename_no_ext += f" {clean_body}"
-        
+        ideal_filename_no_ext += f" {chinese_title_prefix}{clean_body}"
         ideal_filename = f"{ideal_filename_no_ext.strip()}{file_ext}"
         
-        # 3. 比较与执行
         if ideal_filename == real_filename:
             ui_logger.info(f"  - [最终比较] ✅ 文件名无需改动。", task_category=task_cat)
-            return {"status": "skipped", "message": "计算后发现无需改动"}
+            return None
 
         ui_logger.info(f"  - [执行重命名] 计划: {real_filename} -> {ideal_filename}", task_category=task_cat)
         
-        # a. 重命名网盘文件
         old_clouddrive_path = self._get_clouddrive_path(emby_path, real_filename, task_cat)
         new_clouddrive_path = self._get_clouddrive_path(emby_path, ideal_filename, task_cat)
         if not old_clouddrive_path or not new_clouddrive_path:
-            return {"status": "error", "message": "无法构造网盘文件路径"}
+            return None
         
         try:
             os.rename(old_clouddrive_path, new_clouddrive_path)
             ui_logger.info(f"    - ✅ 成功重命名网盘文件。", task_category=task_cat)
         except OSError as e:
             ui_logger.error(f"    - ❌ 重命名网盘文件失败: {e}", task_category=task_cat)
-            return {"status": "error", "message": f"重命名网盘文件失败: {e}"}
+            return None
 
-        # b. 重命名本地关联文件
         local_dir = os.path.dirname(emby_path)
         old_base_path = os.path.join(local_dir, filename_body)
         new_base_path = os.path.join(local_dir, os.path.splitext(ideal_filename)[0])
         self._rename_associated_files(old_base_path, new_base_path, task_cat)
 
-        # c. 修改 .strm 文件内容
         new_strm_path = f"{new_base_path}.strm"
         if os.path.exists(new_strm_path):
             try:
                 with open(new_strm_path, 'r', encoding='utf-8') as f:
                     strm_content = f.read()
-                
-                # 精确替换，防止URL中其他部分被误改
                 new_strm_content = strm_content.replace(real_filename, ideal_filename)
-                
                 with open(new_strm_path, 'w', encoding='utf-8') as f:
                     f.write(new_strm_content)
                 ui_logger.info(f"    - ✅ 成功更新 .strm 文件内容。", task_category=task_cat)
             except IOError as e:
                 ui_logger.error(f"    - ❌ 更新 .strm 文件内容失败: {e}", task_category=task_cat)
         
-        # d. 执行冷却
         cooldown = self.renamer_config.clouddrive_rename_cooldown
         if cooldown > 0:
-            ui_logger.debug(f"    - [冷却] ⏱️ 等待 {cooldown} 秒...", task_category=task_cat)
             time.sleep(cooldown)
 
-        return {"status": "success", "message": f"成功重命名为 {ideal_filename}"}
+        # 成功后，定位媒体库并返回信息
+        return self._get_library_for_item(emby_path, task_cat)
+
+    # backend/movie_renamer_logic.py (函数替换)
 
     def run_rename_task_for_items(self, item_ids: List[str], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager, task_category: str):
-        """(定时任务)为指定的电影 ID 列表执行文件重命名。"""
+        """(定时任务)为指定的电影 ID 列表执行文件重命名，并在任务结束后统一触发媒体库扫描。"""
         total_items = len(item_ids)
         ui_logger.info(f"【电影重命名任务】启动，共需处理 {total_items} 个电影。", task_category=task_category)
         task_manager.update_task_progress(task_id, 0, total_items)
@@ -304,26 +370,38 @@ class MovieRenamerLogic:
         success_count = 0
         skipped_count = 0
         error_count = 0
+        # --- 新增：用于任务内聚合需要扫描的媒体库 ---
+        libraries_to_scan = {}
 
         for movie_info in all_movie_details:
             if cancellation_event.is_set():
                 ui_logger.warning("⚠️ 任务在处理中被用户取消。", task_category=task_category)
                 break
             
-            result = self.process_single_movie(movie_info, task_category)
+            # --- 修改：接收返回值 ---
+            library_info = self.process_single_movie(movie_info, task_category)
             
-            if result["status"] == "success":
+            if library_info:
                 success_count += 1
-            elif result["status"] == "skipped":
+                # --- 新增：将需要扫描的库ID和名称存入字典 ---
+                libraries_to_scan[library_info['Id']] = library_info['Name']
+            else:
+                # process_single_movie 返回 None 代表跳过或失败
+                # 这里的计数逻辑可以根据需要细化，但目前笼统处理
                 skipped_count += 1
-            else: # error
-                error_count += 1
 
             processed_count += 1
             task_manager.update_task_progress(task_id, processed_count, total_items)
 
+        # --- 新增：任务结束后统一触发扫描 ---
+        if not cancellation_event.is_set() and libraries_to_scan:
+            ui_logger.info(f"---", task_category=task_category)
+            ui_logger.info(f"➡️ 所有文件处理完毕，将为 {len(libraries_to_scan)} 个媒体库触发文件扫描...", task_category=task_category)
+            for lib_id, lib_name in libraries_to_scan.items():
+                self._trigger_library_scan(lib_id, lib_name, task_category)
+        # --- 新增结束 ---
+
         ui_logger.info(f"---", task_category=task_category)
         ui_logger.info(f"🎉【电影重命名任务】全部执行完毕。", task_category=task_category)
         ui_logger.info(f"  - 成功重命名: {success_count} 项", task_category=task_category)
-        ui_logger.info(f"  - 跳过 (已规范或信息不足): {skipped_count} 项", task_category=task_category)
-        ui_logger.info(f"  - 失败: {error_count} 项", task_category=task_category)
+        ui_logger.info(f"  - 跳过或失败: {total_items - success_count} 项", task_category=task_category)
