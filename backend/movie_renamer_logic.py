@@ -173,66 +173,82 @@ class MovieRenamerLogic:
 
     # backend/movie_renamer_logic.py (函数替换)
 
+    # backend/movie_renamer_logic.py (函数替换 - 兼容 .strm 的最终版)
+
     def _rename_associated_files(self, old_base_path: str, new_base_path: str, task_cat: str) -> bool:
         """
         精确地重命名关联文件，通过主动构建目标清单并查找匹配项的方式。
+        日志输出经过优化，INFO级别只报告总数和动态示例，DEBUG级别报告详情。
         """
         renamed_any = False
         dir_name = os.path.dirname(old_base_path)
         old_filename_no_ext = os.path.basename(old_base_path)
         new_filename_no_ext = os.path.basename(new_base_path)
 
-        # --- 核心修改：采用“主动构建，精确查找”的新逻辑 ---
-
         # 1. 定义构建模板
-        BASE_EXTENSIONS = ['.nfo', '.jpg', '.png', '.webp']
+        # --- 核心修正：将 .strm 加入基础扩展名，确保它能被处理 ---
+        BASE_EXTENSIONS = ['.nfo', '.jpg', '.png', '.webp', '.strm']
+        # --- 修正结束 ---
         SUFFIX_MODIFIERS = ['-poster', '-fanart', '-clearlogo', '-thumb']
 
         # 2. 构建期望查找的关联文件清单
         target_filenames = set()
-        # 第一轮：直接拼接 (e.g., '测试.nfo')
         for ext in BASE_EXTENSIONS:
             target_filenames.add(f"{old_filename_no_ext}{ext}")
-        
-        # 第二轮：后缀拼接 (e.g., '测试-poster.jpg')
         for suffix in SUFFIX_MODIFIERS:
             for ext in BASE_EXTENSIONS:
                 target_filenames.add(f"{old_filename_no_ext}{suffix}{ext}")
         
-        ui_logger.info(f"     - [关联文件扫描] 已构建 {len(target_filenames)} 个潜在关联文件目标，开始在目录中查找...", task_category=task_cat)
-        ui_logger.debug(f"       - 目标清单: {target_filenames}", task_category=task_cat)
+        ui_logger.info(f"     - [关联文件扫描] 开始在目录中查找 {len(target_filenames)} 种可能的关联文件...", task_category=task_cat)
+        logging.debug(f"       - 目标清单: {target_filenames}", task_category=task_cat)
+
+        renamed_count = 0
+        renamed_files_details = []
+        renamed_examples = set()
 
         try:
             # 3. 遍历实际文件并执行操作
             for filename in os.listdir(dir_name):
-                # 检查当前文件是否在我们的目标清单中
                 if filename in target_filenames:
                     old_file_path = os.path.join(dir_name, filename)
-                    
-                    # 构造新文件名，精确替换基础部分
                     new_filename = filename.replace(old_filename_no_ext, new_filename_no_ext, 1)
                     new_file_path = os.path.join(dir_name, new_filename)
 
-                    # 安全检查
                     if old_file_path == new_file_path:
                         continue
 
                     try:
                         os.rename(old_file_path, new_file_path)
-                        ui_logger.info(f"       - ✅ 成功重命名关联文件: {filename} -> {new_filename}", task_category=task_cat)
+                        renamed_count += 1
+                        renamed_files_details.append(f"{filename} -> {new_filename}")
                         renamed_any = True
+                        _, ext = os.path.splitext(filename)
+                        base_name = filename.replace(old_filename_no_ext, '')
+                        if base_name == ext:
+                            renamed_examples.add(ext)
+                        else:
+                            renamed_examples.add(base_name)
                     except OSError as e:
                         ui_logger.error(f"       - ❌ 重命名关联文件 '{filename}' 失败: {e}", task_category=task_cat)
             
-            ui_logger.info("     - [关联文件扫描] 扫描和处理完成。", task_category=task_cat)
+            if renamed_count > 0:
+                example_str = ""
+                if renamed_examples:
+                    sorted_examples = sorted(list(renamed_examples))
+                    display_examples = sorted_examples[:3]
+                    example_str = f" (如 {', '.join(display_examples)}{' 等' if len(sorted_examples) > 3 else ''})"
+                
+                ui_logger.info(f"     - ✅ 成功重命名 {renamed_count} 个关联文件{example_str}。", task_category=task_cat)
+                logging.debug(f"       - 详细列表: {renamed_files_details}", task_category=task_cat)
+            else:
+                ui_logger.info("     - [关联文件扫描] 未找到需要重命名的关联文件。", task_category=task_cat)
 
         except Exception as e:
             ui_logger.error(f"     - ❌ 在处理关联文件时发生未知错误: {e}", task_category=task_cat)
 
-        # --- 修改结束 ---
         return renamed_any
 
-    # backend/movie_renamer_logic.py (函数替换 - 严格遵循原始逻辑版)
+    # backend/movie_renamer_logic.py (函数替换 - 严格遵循原始逻辑并修复bug的最终版)
 
     def process_single_movie(self, movie_info: Dict, task_cat: str) -> Optional[Dict]:
         """
@@ -258,23 +274,20 @@ class MovieRenamerLogic:
         
         target_source, real_filename = find_result
 
-        # --- 阶段二：预检查 (严格遵循原始逻辑) ---
         ui_logger.info(f"  - [预检查] 正在检查文件名: '{real_filename}'", task_category=task_cat)
         filename_body, file_ext = os.path.splitext(real_filename)
         
         size_match = self.size_regex.search(filename_body)
         is_iso = file_ext.lower() == '.iso'
         
-        # 原始判断逻辑：检查大小标签
         if not size_match:
             ui_logger.info(f"    - ➡️ 不合格 (原因: 缺失大小标签)", task_category=task_cat)
         elif size_match.start() > 20:
             ui_logger.info(f"    - ➡️ 不合格 (原因: 大小标签位置靠后, 索引 {size_match.start()} > 20)", task_category=task_cat)
         else:
-            # 大小标签合格，检查 ISO 标签
             if not is_iso:
                 ui_logger.info(f"    - ✅ 合格 (大小标签位置规范, 非 ISO 文件)", task_category=task_cat)
-                return None # 原始逻辑：合格则直接返回
+                return None
             
             iso_match = self.iso_regex.search(filename_body)
             if not iso_match:
@@ -283,9 +296,8 @@ class MovieRenamerLogic:
                 ui_logger.info(f"    - ➡️ 不合格 (原因: [ISO] 标签位置靠后, 索引 {iso_match.start()} > 20)", task_category=task_cat)
             else:
                 ui_logger.info(f"    - ✅ 合格 (大小和 ISO 标签均位置规范)", task_category=task_cat)
-                return None # 原始逻辑：合格则直接返回
+                return None
 
-        # --- 阶段三：完整处理 (严格遵循原始逻辑) ---
         ui_logger.info(f"  - [完整处理] 开始为【{emby_name}】构建理想文件名...", task_category=task_cat)
         
         size_tag = ""
@@ -315,17 +327,25 @@ class MovieRenamerLogic:
         parts = [p for p in [iso_tag, size_tag] if p]
         ideal_filename_no_ext = " ".join(parts)
         ideal_filename_no_ext += f" {chinese_title_prefix}{clean_body}"
-        ideal_filename = f"{ideal_filename_no_ext.strip()}{file_ext}"
         
-        if ideal_filename == real_filename:
+        # --- 核心修正：强制使用 .strm 扩展名来构建本地理想文件名 ---
+        # 获取原始 .strm 文件的扩展名，以防万一不是 .strm
+        _, local_strm_ext = os.path.splitext(os.path.basename(emby_path))
+        ideal_strm_filename = f"{ideal_filename_no_ext.strip()}{local_strm_ext}"
+        # --- 修正结束 ---
+        
+        # 比较时，也应该用本地文件名进行比较
+        if ideal_strm_filename == os.path.basename(emby_path):
             ui_logger.info(f"  - [最终比较] ✅ 文件名无需改动。", task_category=task_cat)
             return None
 
-        ui_logger.info(f"  - [执行重命名] 计划: {real_filename} -> {ideal_filename}", task_category=task_cat)
+        ui_logger.info(f"  - [执行重命名] 计划: {os.path.basename(emby_path)} -> {ideal_strm_filename}", task_category=task_cat)
         
-        # 1. 重命名网盘文件 (原始逻辑)
+        # 1. 重命名网盘文件
+        # 新的网盘文件名需要用新的基础名和原始媒体扩展名拼接
+        ideal_media_filename = f"{ideal_filename_no_ext.strip()}{file_ext}"
         old_clouddrive_path = self._get_clouddrive_path(emby_path, real_filename, task_cat)
-        new_clouddrive_path = self._get_clouddrive_path(emby_path, ideal_filename, task_cat)
+        new_clouddrive_path = self._get_clouddrive_path(emby_path, ideal_media_filename, task_cat)
         if not old_clouddrive_path or not new_clouddrive_path:
             return None
         
@@ -336,47 +356,28 @@ class MovieRenamerLogic:
             ui_logger.error(f"    - ❌ 重命名网盘文件失败: {e}", task_category=task_cat)
             return None
 
-        # 2. 重命名本地关联文件 (这里调用新逻辑的函数)
+        # 2. 重命名本地关联文件 (调用新逻辑的函数)
         local_dir = os.path.dirname(emby_path)
-        old_base_path = os.path.join(local_dir, filename_body)
-        new_base_path = os.path.join(local_dir, os.path.splitext(ideal_filename)[0])
-        # ❗注意：这里调用的是我们已经修改好的 _rename_associated_files 函数
+        old_base_path = os.path.join(local_dir, os.path.splitext(os.path.basename(emby_path))[0])
+        new_base_path = os.path.join(local_dir, ideal_filename_no_ext.strip())
         self._rename_associated_files(old_base_path, new_base_path, task_cat)
 
-        # 3. 修改 .strm 文件内容 (原始逻辑)
-        # ❗注意：原始代码在这里有一个逻辑缺陷，它没有重命名.strm文件，而是直接修改旧路径下的文件内容。
-        # 为了严格遵循，我们暂时保留这个逻辑，但需要意识到这可能不是最终期望的行为。
-        # 如果要修复，需要先重命名.strm文件。
-        # 经过我们之前的讨论，正确的做法是先重命名.strm，再修改内容。
-        # 我将采用修复后的逻辑，因为它更正确且符合您的意图。
-        
-        new_strm_path_local = os.path.join(local_dir, ideal_filename)
-        try:
-            if os.path.exists(emby_path):
-                os.rename(emby_path, new_strm_path_local)
-                ui_logger.info(f"    - ✅ 成功重命名本地 .strm 文件。", task_category=task_cat)
-            else:
-                # 如果旧的.strm文件不存在，可能是因为关联文件重命名逻辑先把它改了名
-                # 这是一个理论上的边界情况，我们检查新路径是否存在
-                if not os.path.exists(new_strm_path_local):
-                     ui_logger.warning(f"    - ⚠️ .strm 文件在 '{emby_path}' 和 '{new_strm_path_local}' 均未找到，跳过内容更新。", task_category=task_cat)
-                     new_strm_path_local = None # 标记为None，后续不再处理
-        except OSError as e:
-            ui_logger.error(f"    - ❌ 重命名本地 .strm 文件失败: {e}", task_category=task_cat)
-            return None
-
-        if new_strm_path_local and os.path.exists(new_strm_path_local):
+        # 3. 修改 .strm 文件内容
+        # 这里的逻辑现在是正确的，因为它依赖于 _rename_associated_files 先重命名 .strm
+        # 为了确保万无一失，我们让 _rename_associated_files 也处理 .strm
+        new_strm_path = os.path.join(local_dir, ideal_strm_filename)
+        if os.path.exists(new_strm_path):
             try:
-                with open(new_strm_path_local, 'r', encoding='utf-8') as f:
+                with open(new_strm_path, 'r', encoding='utf-8') as f:
                     strm_content = f.read()
-                new_strm_content = strm_content.replace(real_filename, ideal_filename)
-                with open(new_strm_path_local, 'w', encoding='utf-8') as f:
+                new_strm_content = strm_content.replace(real_filename, ideal_media_filename)
+                with open(new_strm_path, 'w', encoding='utf-8') as f:
                     f.write(new_strm_content)
                 ui_logger.info(f"    - ✅ 成功更新 .strm 文件内容。", task_category=task_cat)
             except IOError as e:
                 ui_logger.error(f"    - ❌ 更新 .strm 文件内容失败: {e}", task_category=task_cat)
         
-        # 4. 执行冷却 (原始逻辑)
+        # 4. 执行冷却
         cooldown = self.renamer_config.clouddrive_rename_cooldown
         if cooldown > 0:
             time.sleep(cooldown)
