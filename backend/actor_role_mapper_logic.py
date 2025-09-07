@@ -30,43 +30,7 @@ def _contains_chinese(text: str) -> bool:
     if not text: return False
     return bool(re.search(r'[\u4e00-\u9fa5]', text))
 
-def _rename_person_item_static(base_url: str, user_id: str, api_key: str, session, person_id: str, old_name: str, new_name: str, task_category: str) -> bool:
-    """
-    通过独立的 API 请求，直接重命名一个演员（Person）Item。
-    这是一个静态化的版本，以便在 actor_role_mapper_logic 中复用。
-    """
-    try:
-        params = {"api_key": api_key}
-        person_url = f"{base_url}/Users/{user_id}/Items/{person_id}"
-        person_details_resp = session.get(person_url, params=params, timeout=15)
-        person_details_resp.raise_for_status()
-        person_details = person_details_resp.json()
 
-        if person_details.get("Name") == new_name:
-            ui_logger.debug(f"       - [跳过重命名] 演员 '{old_name}' 的名称已经是 '{new_name}'。", task_category=task_category)
-            return True
-
-        person_details['Name'] = new_name
-        
-        update_url = f"{base_url}/Items/{person_id}"
-        headers = {'Content-Type': 'application/json'}
-        
-        resp = session.post(update_url, params=params, json=person_details, headers=headers, timeout=30)
-        resp.raise_for_status()
-        
-        if resp.status_code == 204:
-            ui_logger.info(f"       - ✅ 演员名修正: '{old_name}' -> '{new_name}' (通过ID匹配更新)", task_category=task_category)
-            return True
-        else:
-            ui_logger.warning(f"       - ⚠️ 演员重命名请求已发送，但服务器返回状态码 {resp.status_code}，可能未成功。", task_category=task_category)
-            return False
-
-    except requests.RequestException as e:
-        ui_logger.error(f"       - ❌ 演员重命名API请求失败: {e}", task_category=task_category)
-        return False
-    except Exception as e:
-        ui_logger.error(f"       - ❌ 演员重命名时发生未知错误: {e}", task_category=task_category, exc_info=True)
-        return False
 
 class ActorRoleMapperLogic:
     def __init__(self, config: AppConfig):
@@ -97,6 +61,61 @@ class ActorRoleMapperLogic:
         response = self.session.get(url, params=params, timeout=20, proxies=proxies)
         response.raise_for_status()
         return response.json()
+
+    # backend/actor_role_mapper_logic.py (新增代码块)
+
+    def _search_persons_by_name(self, name: str) -> List[Dict]:
+        """在 Emby 中按姓名搜索所有 Person Item"""
+        try:
+            url = f"{self.server_config.server}/Items"
+            params = {
+                "api_key": self.server_config.api_key,
+                "IncludeItemTypes": "Person",
+                "Recursive": "true",
+                "SearchTerm": name,
+                "Fields": "ProviderIds" 
+            }
+            proxies = self.proxy_manager.get_proxies(url)
+            response = self.session.get(url, params=params, timeout=20, proxies=proxies)
+            response.raise_for_status()
+            items = response.json().get("Items", [])
+            # 精确匹配，防止返回 "张赫" 时也返回 "张赫一"
+            return [p for p in items if p.get("Name") == name]
+        except Exception as e:
+            logging.error(f"【调试】按姓名 '{name}' 搜索演员时失败: {e}")
+            return []
+
+    def _rename_person_by_id(self, person_id: str, new_name: str, task_category: str) -> bool:
+        """通过 Person ID 重命名一个演员，包含重试逻辑"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                person_details = self._get_emby_item_details(person_id, "ProviderIds")
+                if person_details.get("Name") == new_name:
+                    return True # 已经是目标名称，无需修改
+                
+                person_details['Name'] = new_name
+                
+                update_url = f"{self.server_config.server}/Items/{person_id}"
+                headers = {'Content-Type': 'application/json'}
+                params = {"api_key": self.server_config.api_key}
+                proxies = self.proxy_manager.get_proxies(update_url)
+
+                resp = self.session.post(update_url, params=params, json=person_details, headers=headers, timeout=30, proxies=proxies)
+                resp.raise_for_status()
+                
+                if resp.status_code == 204:
+                    return True
+                else:
+                    # 记录警告但继续尝试
+                    ui_logger.warning(f"       - ⚠️ 演员重命名请求返回状态码 {resp.status_code} (尝试 {attempt + 1}/{max_retries})", task_category=task_category)
+
+            except Exception as e:
+                ui_logger.error(f"       - ❌ 演员重命名API请求失败 (尝试 {attempt + 1}/{max_retries}): {e}", task_category=task_category)
+            
+            time.sleep(2) # 每次失败后等待2秒
+        
+        return False
 
     
 
@@ -505,6 +524,8 @@ class ActorRoleMapperLogic:
             ui_logger.error(f"❌ 上传到 GitHub 失败: {e}", task_category=task_cat, exc_info=True)
             raise e
 
+    # backend/actor_role_mapper_logic.py (函数替换)
+
     def download_from_github_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员角色映射-下载"
         ui_logger.info("🎉 任务启动，开始从 GitHub 下载映射表...", task_category=task_cat)
@@ -514,13 +535,32 @@ class ActorRoleMapperLogic:
 
         try:
             api_url = self._get_github_api_url()
-            ui_logger.info("➡️ [阶段1/2] 正在下载远程文件...", task_category=task_cat)
+            ui_logger.info("➡️ [阶段1/2] 正在请求远程文件元数据...", task_category=task_cat)
             
-            remote_file = self._github_request("GET", api_url)
-            if not remote_file or 'content' not in remote_file:
-                raise ValueError("从 GitHub 获取文件内容失败或文件为空。")
+            # 第一次请求，获取文件元数据
+            remote_file_meta = self._github_request("GET", api_url)
+            if not remote_file_meta:
+                raise ValueError("从 GitHub 获取文件元数据失败。")
 
-            content = base64.b64decode(remote_file['content']).decode('utf-8')
+            content = ""
+            # --- 核心修改：判断文件大小，选择不同下载策略 ---
+            if 'content' in remote_file_meta and remote_file_meta['content']:
+                # 文件小于1MB，直接从元数据中解码
+                ui_logger.info("   - 文件小于 1MB，直接解码内容...", task_category=task_cat)
+                content = base64.b64decode(remote_file_meta['content']).decode('utf-8')
+            elif 'download_url' in remote_file_meta and remote_file_meta['download_url']:
+                # 文件大于1MB，需要通过 download_url 再次请求
+                download_url = remote_file_meta['download_url']
+                file_size_mb = remote_file_meta.get('size', 0) / (1024 * 1024)
+                ui_logger.info(f"   - 文件大小为 {file_size_mb:.2f} MB (>1MB)，将通过下载链接获取...", task_category=task_cat)
+                
+                proxies = self.proxy_manager.get_proxies(download_url)
+                response = self.session.get(download_url, timeout=60, proxies=proxies) # 增加大文件下载超时
+                response.raise_for_status()
+                content = response.text
+            else:
+                raise ValueError("GitHub API 响应中既无 'content' 也无 'download_url'，无法下载文件。")
+            # --- 修改结束 ---
 
             if cancellation_event.is_set(): return
 
@@ -538,12 +578,12 @@ class ActorRoleMapperLogic:
             ui_logger.error(f"❌ 从 GitHub 下载失败: {e}", task_category=task_cat, exc_info=True)
             raise e
         
-
+    # backend/actor_role_mapper_logic.py (函数替换)
 
     def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
         根据映射关系，恢复指定 Emby 媒体项列表的演员角色名。
-        新版逻辑：以映射表为驱动，ID优先，名称降级。在ID匹配成功时，会额外检查并修正演员名。
+        采用【反向锁定】策略，融合【演员名修正】逻辑，并使用最终优化的日志风格。
         """
         task_cat = "演员角色映射-恢复"
         
@@ -561,6 +601,8 @@ class ActorRoleMapperLogic:
                 ui_logger.warning("⚠️ 任务被用户取消。", task_category=task_cat)
                 return
 
+            isolated_persons = {} 
+            
             try:
                 ui_logger.info(f"     - 正在处理第 {i+1}/{total_items} 个媒体项 (ID: {item_id})...", task_category=task_cat)
                 
@@ -571,7 +613,6 @@ class ActorRoleMapperLogic:
                     continue
                 
                 emby_actors_base = [p for p in current_people_base if p.get("Type") == "Actor"]
-
                 emby_actors_by_id = {}
                 emby_actors_by_name = {}
                 
@@ -582,86 +623,111 @@ class ActorRoleMapperLogic:
                         try:
                             full_person_details = future.result()
                             original_person.update(full_person_details)
-                            
                             provider_ids_lower = {k.lower(): v for k, v in full_person_details.get("ProviderIds", {}).items()}
                             person_tmdb_id = provider_ids_lower.get("tmdb")
-                            
                             if person_tmdb_id:
                                 emby_actors_by_id[str(person_tmdb_id)] = original_person
                             emby_actors_by_name[original_person.get("Name")] = original_person
-                        except Exception as e:
+                        except Exception:
                             emby_actors_by_name[original_person.get("Name")] = original_person
-                            logging.debug(f"【调试】恢复时获取演员 {original_person.get('Name')} (ID: {original_person.get('Id')}) 的详情失败: {e}")
 
-                has_changes = False
-                updated_logs = []
+                actors_to_update_map = {}
                 for map_actor_name, map_actor_data in role_map.items():
                     map_tmdb_id = map_actor_data.get("tmdb_id")
                     target_emby_person = None
                     match_source = ""
-
                     if map_tmdb_id and str(map_tmdb_id) != "null":
                         target_emby_person = emby_actors_by_id.get(str(map_tmdb_id))
-                        if target_emby_person:
-                            match_source = "ID"
-                            current_emby_name = target_emby_person.get("Name")
-                            
-                            # --- 新增：演员名修正逻辑 ---
-                            if current_emby_name != map_actor_name and _contains_chinese(map_actor_name):
-                                ui_logger.info(f"       - 🔍 [ID匹配] 发现演员名不一致: Emby='{current_emby_name}', 映射表='{map_actor_name}'，尝试修正...", task_category=task_cat)
-                                if _rename_person_item_static(
-                                    base_url=self.server_config.server,
-                                    user_id=self.server_config.user_id,
-                                    api_key=self.server_config.api_key,
-                                    session=self.session,
-                                    person_id=target_emby_person.get("Id"),
-                                    old_name=current_emby_name,
-                                    new_name=map_actor_name,
-                                    task_category=task_cat
-                                ):
-                                    # 在内存中同步名称变更
-                                    target_emby_person["Name"] = map_actor_name
-                                    has_changes = True # 标记有变更，即使角色名不变也要提交
-                            # --- 新增结束 ---
-
+                        if target_emby_person: match_source = "ID"
                     if not target_emby_person:
                         target_emby_person = emby_actors_by_name.get(map_actor_name)
-                        if target_emby_person:
-                            match_source = "名称"
+                        if target_emby_person: match_source = "名称"
                     
                     if target_emby_person:
                         current_role = target_emby_person.get("Role", "")
                         target_role = map_actor_data.get("role", "")
-                        if current_role != target_role:
-                            target_emby_person["Role"] = target_role
-                            has_changes = True
-                            # 使用更新后的演员名记录日志
-                            log_actor_name = target_emby_person.get("Name")
-                            updated_logs.append(f"       - ✅ 演员 [{log_actor_name}] 角色已更新: '{current_role}' → '{target_role}' (通过{match_source}匹配)")
-                    else:
-                        logging.debug(f"【调试】[匹配失败] 在 Emby 媒体项 {item_id} 中未找到演员 [{map_actor_name}]。")
+                        current_name = target_emby_person.get("Name")
+                        target_name = map_actor_name
 
-                if has_changes:
-                    ui_logger.info(f"     - 发现角色或演员名变更，正在写回 Emby...", task_category=task_cat)
-                    item_details_base["People"] = current_people_base
+                        if current_role != target_role or (current_name != target_name and _contains_chinese(target_name)):
+                            actors_to_update_map[target_emby_person.get("Id")] = {
+                                'target_role': target_role, 'current_role': current_role,
+                                'target_name': target_name, 'current_name': current_name,
+                                'match_source': match_source
+                            }
+
+                if not actors_to_update_map:
+                    ui_logger.info(f"       - 角色名与演员名均与映射表一致，无需更新。", task_category=task_cat)
+                    continue
+
+                ui_logger.info(f"       - 🔍 扫描发现 {len(actors_to_update_map)} 位演员信息需要更新。", task_category=task_cat)
+                
+                # --- 阶段1: 隔离自身 ---
+                ui_logger.info(f"       - [隔离] 正在为 {len(actors_to_update_map)} 个待更新演员进行临时改名...", task_category=task_cat)
+                for person_id, update_info in actors_to_update_map.items():
+                    current_name = update_info['current_name']
+                    target_name = update_info['target_name']
+                    unique_name = f"{current_name}_embytoolkit_update_{person_id}"
                     
-                    update_url = f"{self.server_config.server}/Items/{item_id}"
-                    headers = {'Content-Type': 'application/json'}
-                    params = {"api_key": self.server_config.api_key}
-                    proxies = self.proxy_manager.get_proxies(update_url)
+                    logging.debug(f"【调试】隔离: {current_name} (ID: {person_id}) -> {unique_name}")
+                    if self._rename_person_by_id(person_id, unique_name, task_cat):
+                        isolated_persons[person_id] = (current_name, target_name)
+                        person_in_list = next((p for p in current_people_base if p.get("Id") == person_id), None)
+                        if person_in_list:
+                            person_in_list["Name"] = unique_name
+                    else:
+                        raise Exception(f"隔离演员 {current_name} (ID: {person_id}) 失败，中止操作。")
+
+                # --- 阶段2: 更新角色和（临时）名称 ---
+                ui_logger.info(f"       - [更新] 隔离完成，开始将变更写入 Emby...", task_category=task_cat)
+                for person in current_people_base:
+                    person_id = person.get("Id")
+                    if person_id in actors_to_update_map:
+                        person["Role"] = actors_to_update_map[person_id]['target_role']
+                
+                item_details_base["People"] = current_people_base
+                update_url = f"{self.server_config.server}/Items/{item_id}"
+                headers = {'Content-Type': 'application/json'}
+                params = {"api_key": self.server_config.api_key}
+                proxies = self.proxy_manager.get_proxies(update_url)
+                response = self.session.post(update_url, params=params, json=item_details_base, headers=headers, timeout=30, proxies=proxies)
+                response.raise_for_status()
+                ui_logger.info(f"       - ✅ 媒体项 (ID: {item_id}) 更新成功！", task_category=task_cat)
+
+                # --- 新增：最终日志打印 ---
+                ui_logger.info(f"     - 🔄 [变更详情]", task_category=task_cat)
+                for update_info in actors_to_update_map.values():
+                    current_name = update_info['current_name']
+                    target_name = update_info['target_name']
+                    current_role = update_info['current_role']
+                    target_role = update_info['target_role']
+                    match_source_text = f"(通过{update_info['match_source']}匹配)" if update_info['match_source'] else ""
                     
-                    response = self.session.post(update_url, params=params, json=item_details_base, headers=headers, timeout=30, proxies=proxies)
-                    response.raise_for_status()
+                    if current_name != target_name and _contains_chinese(target_name):
+                        ui_logger.info(f"       - ✅ 演员名修正: '{current_name}' -> '{target_name}' {match_source_text}", task_category=task_cat)
                     
-                    for log_line in updated_logs:
-                        ui_logger.info(log_line, task_category=task_cat)
-                    ui_logger.info(f"     - ✅ 媒体项 (ID: {item_id}) 更新成功！", task_category=task_cat)
-                else:
-                    ui_logger.info(f"     - 角色名与演员名均与映射表一致，无需更新。", task_category=task_cat)
+                    if current_role != target_role:
+                        actor_display_name = target_name if current_name == target_name else f"[{target_name}]"
+                        match_source_text_role = f"(通过{update_info['match_source']}匹配)" if update_info['match_source'] else "(通过名称降级匹配)"
+                        ui_logger.info(f"       - ✅ 角色名更新: {actor_display_name} '{current_role}' -> '{target_role}' {match_source_text_role}", task_category=task_cat)
 
             except Exception as e:
                 ui_logger.error(f"  - ❌ 处理媒体项 {item_id} 时发生错误: {e}", task_category=task_cat, exc_info=True)
-
+            
+            finally:
+                # --- 阶段3: 恢复到目标名称 ---
+                if isolated_persons:
+                    ui_logger.info(f"       - [恢复] 开始将 {len(isolated_persons)} 个演员恢复到目标名称...", task_category=task_cat)
+                    for person_id, (original_name, target_name) in isolated_persons.items():
+                        log_msg = f"         - 🔓 恢复: (ID: {person_id}) -> {target_name}"
+                        if original_name != target_name:
+                            log_msg += f" (原名: '{original_name}')"
+                        logging.debug(log_msg) # 恢复日志仅保留在后端
+                        
+                        if not self._rename_person_by_id(person_id, target_name, task_cat):
+                            ui_logger.error(f"         - ❌ 恢复演员 (ID: {person_id}) 名称失败！请手动将其名称修改为 `{target_name}`。", task_category=task_cat)
+                
+                ui_logger.info(f"     - 🎉 作品《{title}》处理完毕。", task_category=task_cat)
 
 
     def update_single_map_file(self, single_map_data: Dict):
