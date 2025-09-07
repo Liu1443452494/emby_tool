@@ -70,6 +70,36 @@ class MovieRenamerLogic:
         except Exception as e:
             ui_logger.error(f"  - ❌ [媒体库定位] 发生未知错误: {e}", task_category=task_cat, exc_info=True)
             return None
+        
+    def _get_library_for_item_by_id(self, library_id: str) -> Optional[Dict]:
+        """根据媒体库ID，从缓存或API获取其信息。"""
+        import requests
+        task_cat = "媒体库定位(by-ID)"
+        try:
+            if self._physical_library_cache is None:
+                ui_logger.info(f"  - [媒体库定位] 首次运行，正在从 Emby 获取所有媒体库的物理路径...", task_category=task_cat)
+                folders_url = f"{self.base_url}/Library/VirtualFolders/Query"
+                folders_params = self.params
+                try:
+                    folders_response = requests.get(folders_url, params=folders_params, timeout=15)
+                    if folders_response.status_code == 404:
+                        folders_url = f"{self.base_url}/emby/Library/VirtualFolders/Query"
+                        folders_response = requests.get(folders_url, params=folders_params, timeout=15)
+                    folders_response.raise_for_status()
+                    self._physical_library_cache = folders_response.json().get("Items", [])
+                except requests.RequestException as e:
+                    ui_logger.error(f"  - ❌ [媒体库定位] 获取媒体库物理路径失败: {e}", task_category=task_cat)
+                    self._physical_library_cache = []
+            
+            for library in self._physical_library_cache:
+                lib_item_id = library.get("ItemId", library.get("Id"))
+                if str(lib_item_id) == str(library_id):
+                    return {"Id": lib_item_id, "Name": library.get("Name")}
+            
+            return None
+        except Exception as e:
+            ui_logger.error(f"  - ❌ [媒体库定位] 通过ID查找时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+            return None
 
     def _trigger_library_scan(self, library_id: str, library_name: str, task_cat: str):
         """触发指定媒体库的文件扫描。"""
@@ -380,23 +410,6 @@ class MovieRenamerLogic:
             except IOError as e:
                 ui_logger.error(f"    - ❌ 更新 .strm 文件内容失败: {e}", task_category=task_cat)
 
-
-        try:
-            # 稍微延时，给Emby创建残留文件留出时间窗口
-            time.sleep(2) 
-            
-            # 我们要查找的残留文件，就是以旧文件名主干命名的文件
-            # 例如 '异教徒...CHD.nfo'
-            old_nfo_filename = f"{local_strm_filename_no_ext}.nfo"
-            old_nfo_path = os.path.join(local_dir, old_nfo_filename)
-
-            if os.path.exists(old_nfo_path):
-                ui_logger.info(f"  - [战后清理] 发现由 Emby 重新生成的残留 .nfo 文件，正在清理...", task_category=task_cat)
-                os.remove(old_nfo_path)
-                ui_logger.info(f"    - ✅ 成功删除残留文件: {old_nfo_filename}", task_category=task_cat)
-
-        except Exception as e:
-            ui_logger.warning(f"  - ⚠️ [战后清理] 清理残留文件时发生错误: {e}", task_category=task_cat)
         
         # 5. 执行冷却
         cooldown = self.renamer_config.clouddrive_rename_cooldown

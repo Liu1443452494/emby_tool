@@ -178,7 +178,7 @@ class WebhookLogic:
 
     def process_new_media_task(self, item_id: str, cancellation_event: threading.Event, series_id: str):
         # --- 新增：从 main 导入全局标记集合 ---
-        from main import main_task_completed_series, episode_sync_queue_lock, id_map_update_lock, library_scan_queue_lock
+        from main import main_task_completed_series, episode_sync_queue_lock, id_map_update_lock, scan_and_rename_queue, scan_and_rename_queue_lock
         import main as main_module
         # --- 新增结束 ---
         from tmdb_logic import TmdbLogic
@@ -386,17 +386,30 @@ class WebhookLogic:
             ui_logger.info(f"【步骤 9/9 | 电影文件重命名】开始...", task_category=task_cat)
             try:
                 movie_renamer_logic = MovieRenamerLogic(self.config)
-                final_movie_details = self._get_emby_item_details(item_id, fields="Name,Path,MediaSources")
-                if final_movie_details:
-                    # --- 修改：接收返回值并请求扫描 ---
-                    library_info = movie_renamer_logic.process_single_movie(final_movie_details, task_cat)
+                final_movie_details = self._get_emby_item_details(item_id, fields="Path")
+                if final_movie_details and final_movie_details.get("Path"):
+                    library_info = movie_renamer_logic._get_library_for_item(final_movie_details["Path"], task_cat)
                     if library_info:
-                        with library_scan_queue_lock:
-                            main_module.libraries_to_scan_queue[library_info['Id']] = time.time()
-                        ui_logger.info(f"  - 🔔 [扫描调度器] 已为媒体库【{library_info['Name']}】发送扫描请求，静默期计时器已重置。", task_category=task_cat)
-                    # --- 修改结束 ---
+                        lib_id = library_info['Id']
+                        lib_name = library_info['Name']
+                        
+                        # --- 核心修改：与新的单字典队列交互 ---
+                        with scan_and_rename_queue_lock:
+                            if lib_id not in scan_and_rename_queue:
+                                scan_and_rename_queue[lib_id] = {}
+                            
+                            if 'items_to_rename' not in scan_and_rename_queue[lib_id]:
+                                scan_and_rename_queue[lib_id]['items_to_rename'] = set()
+                            
+                            scan_and_rename_queue[lib_id]['items_to_rename'].add(item_id)
+                            scan_and_rename_queue[lib_id]['last_update'] = time.time()
+                        # --- 修改结束 ---
+                        
+                        ui_logger.info(f"  - 🔔 [扫描调度器] 已为电影【{item_name}】创建重命名任务，并为媒体库【{lib_name}】发送扫描请求。静默期计时器已重置。", task_category=task_cat)
+                    else:
+                        ui_logger.error(f"【电影文件重命名】无法确定电影所属的媒体库，无法调度重命名任务。", task_category=task_cat)
                 else:
-                    ui_logger.error(f"【电影文件重命名】在最后阶段无法获取电影详情，跳过重命名。", task_category=task_cat)
+                    ui_logger.error(f"【电影文件重命名】在最后阶段无法获取电影详情或路径，跳过重命名。", task_category=task_cat)
             except Exception as e:
                 ui_logger.error(f"【电影文件重命名】步骤执行时发生未知错误: {e}", task_category=task_cat, exc_info=True)
         # --- 新增结束 ---

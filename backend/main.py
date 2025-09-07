@@ -76,8 +76,8 @@ id_map_update_request_time: Optional[float] = None
 id_map_update_lock = threading.Lock()
 id_map_update_scheduler_task = None
 
-libraries_to_scan_queue: Dict[str, float] = {}
-library_scan_queue_lock = threading.Lock()
+scan_and_rename_queue: Dict[str, Dict[str, Any]] = {}
+scan_and_rename_queue_lock = threading.Lock()
 library_scan_scheduler_task = None
 
 main_task_completed_series: set[str] = set()
@@ -213,10 +213,12 @@ async def id_map_update_scheduler():
             logging.error(f"【{task_cat}】运行时发生未知错误: {e}", exc_info=True)
             await asyncio.sleep(120) # 发生错误时等待更长时间
 
+# backend/main.py (函数替换)
+
 async def library_scan_scheduler():
     """
     独立的后台调度器，用于处理媒体库文件扫描的防抖触发任务。
-    主要服务于 Webhook 场景。
+    在扫描前，会先处理该媒体库下待重命名的电影。
     """
     task_cat = "媒体库扫描调度器"
     logging.info(f"【{task_cat}】已启动，将每 60 秒检查一次待处理队列...")
@@ -226,40 +228,61 @@ async def library_scan_scheduler():
             await asyncio.sleep(60) # 调度器检查周期
             
             now = time.time()
-            ready_to_scan_ids = []
+            ready_to_process_tasks = {}
             
-            with library_scan_queue_lock:
-                if not libraries_to_scan_queue:
+            with scan_and_rename_queue_lock:
+                if not scan_and_rename_queue:
                     continue
 
-                logging.info(f"【{task_cat}】🔍 开始检查队列，当前有 {len(libraries_to_scan_queue)} 个媒体库待扫描...")
+                logging.info(f"【{task_cat}】🔍 开始检查队列，当前有 {len(scan_and_rename_queue)} 个媒体库待处理...")
                 
-                for lib_id, last_update_time in list(libraries_to_scan_queue.items()):
+                libs_to_pop = []
+                for lib_id, entry in scan_and_rename_queue.items():
+                    last_update_time = entry.get('last_update', 0)
                     silence_duration = now - last_update_time
                     
                     if silence_duration >= 90: # 90秒静默期
-                        logging.info(f"   - ✅ 媒体库 (ID: {lib_id}) 条件满足：静默 {silence_duration:.1f} 秒 (>=90s)。准备扫描。")
-                        ready_to_scan_ids.append(lib_id)
+                        logging.info(f"   - ✅ 媒体库 (ID: {lib_id}) 条件满足：静默 {silence_duration:.1f} 秒 (>=90s)。准备处理。")
+                        ready_to_process_tasks[lib_id] = entry
+                        libs_to_pop.append(lib_id)
                     else:
                         remaining_time = 90 - silence_duration
                         logging.info(f"   - ⏱️ 媒体库 (ID: {lib_id}) 静默时长 {silence_duration:.1f} 秒，等待剩余 {remaining_time:.1f} 秒...")
 
                 # 从主队列中安全地弹出这些媒体库
-                for lib_id in ready_to_scan_ids:
-                    libraries_to_scan_queue.pop(lib_id, None)
+                for lib_id in libs_to_pop:
+                    scan_and_rename_queue.pop(lib_id, None)
 
-            # 在锁外执行耗时（网络IO）任务
-            if ready_to_scan_ids:
-                ui_logger.info(f"➡️ {len(ready_to_scan_ids)} 个媒体库已满足扫描条件，开始派发扫描任务...", task_category=task_cat)
+            # 在锁外执行耗时任务
+            if ready_to_process_tasks:
                 config = app_config.load_app_config()
-                # 复用一个 MovieRenamerLogic 实例来执行扫描
                 from movie_renamer_logic import MovieRenamerLogic
-                logic = MovieRenamerLogic(config)
+                renamer_logic = MovieRenamerLogic(config)
                 
-                # 理论上这里不会有太多项，直接循环即可
-                for lib_id in ready_to_scan_ids:
-                    # 扫描API不返回库名称，所以我们这里只用ID
-                    logic._trigger_library_scan(lib_id, f"ID {lib_id}", task_cat)
+                for lib_id, entry in ready_to_process_tasks.items():
+                    # 尝试获取库名称用于日志
+                    try:
+                        lib_info = renamer_logic._get_library_for_item_by_id(lib_id)
+                        lib_name = lib_info.get("Name") if lib_info else f"ID {lib_id}"
+                    except Exception:
+                        lib_name = f"ID {lib_id}"
+
+                    items_to_rename = entry.get('items_to_rename')
+                    
+                    if items_to_rename:
+                        ui_logger.info(f"➡️ [扫描前置任务] 检测到媒体库【{lib_name}】有 {len(items_to_rename)} 个电影待重命名，开始处理...", task_category=task_cat)
+                        
+                        movie_details_list = renamer_logic._get_movie_details_batch(list(items_to_rename), task_cat)
+                        
+                        for movie_details in movie_details_list:
+                            renamer_logic.process_single_movie(movie_details, task_cat)
+                        
+                        ui_logger.info(f"✅ [扫描前置任务] 媒体库【{lib_name}】的所有电影重命名操作已完成。", task_category=task_cat)
+                    else:
+                        logging.info(f"【{task_cat}】媒体库【{lib_name}】没有待处理的重命名任务。")
+
+                    # 无论是否重命名，最后都执行扫描
+                    renamer_logic._trigger_library_scan(lib_id, lib_name, task_cat)
 
         except asyncio.CancelledError:
             logging.info(f"【{task_cat}】收到关闭信号，正在退出...")
