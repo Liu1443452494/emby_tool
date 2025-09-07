@@ -239,7 +239,7 @@ class MovieRenamerLogic:
                     example_str = f" (如 {', '.join(display_examples)}{' 等' if len(sorted_examples) > 3 else ''})"
                 
                 ui_logger.info(f"     - ✅ 成功重命名 {renamed_count} 个关联文件{example_str}。", task_category=task_cat)
-                logging.debug(f"       - 详细列表: {renamed_files_details}", task_category=task_cat)
+                ui_logger.debug(f"       - 详细列表: {renamed_files_details}", task_category=task_cat)
             else:
                 ui_logger.info("     - [关联文件扫描] 未找到需要重命名的关联文件。", task_category=task_cat)
 
