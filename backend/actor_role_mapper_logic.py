@@ -580,12 +580,12 @@ class ActorRoleMapperLogic:
         
     # backend/actor_role_mapper_logic.py (函数替换)
 
-    def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: Optional[TaskManager] = None, task_category: Optional[str] = None):
         """
         根据映射关系，恢复指定 Emby 媒体项列表的演员角色名。
         采用【反向锁定】策略，融合【演员名修正】逻辑，并使用最终优化的日志风格。
         """
-        task_cat = "演员角色映射-恢复"
+        task_cat = task_category if task_category else "演员角色映射-恢复"
         
         if not item_ids or not role_map:
             ui_logger.error(f"❌ 任务失败：传入的映射数据不完整。作品: {title}", task_category=task_cat)
@@ -653,7 +653,8 @@ class ActorRoleMapperLogic:
                             actors_to_update_map[target_emby_person.get("Id")] = {
                                 'target_role': target_role, 'current_role': current_role,
                                 'target_name': target_name, 'current_name': current_name,
-                                'match_source': match_source
+                                'match_source': match_source,
+                                'source': map_actor_data.get('source')
                             }
 
                 if not actors_to_update_map:
@@ -662,23 +663,20 @@ class ActorRoleMapperLogic:
 
                 ui_logger.info(f"       - 🔍 扫描发现 {len(actors_to_update_map)} 位演员信息需要更新。", task_category=task_cat)
                 
-                # --- 阶段1: 隔离自身 ---
                 ui_logger.info(f"       - [隔离] 正在为 {len(actors_to_update_map)} 个待更新演员进行临时改名...", task_category=task_cat)
                 for person_id, update_info in actors_to_update_map.items():
                     current_name = update_info['current_name']
-                    target_name = update_info['target_name']
                     unique_name = f"{current_name}_embytoolkit_update_{person_id}"
                     
                     logging.debug(f"【调试】隔离: {current_name} (ID: {person_id}) -> {unique_name}")
                     if self._rename_person_by_id(person_id, unique_name, task_cat):
-                        isolated_persons[person_id] = (current_name, target_name)
+                        isolated_persons[person_id] = (current_name, update_info['target_name'])
                         person_in_list = next((p for p in current_people_base if p.get("Id") == person_id), None)
                         if person_in_list:
                             person_in_list["Name"] = unique_name
                     else:
                         raise Exception(f"隔离演员 {current_name} (ID: {person_id}) 失败，中止操作。")
 
-                # --- 阶段2: 更新角色和（临时）名称 ---
                 ui_logger.info(f"       - [更新] 隔离完成，开始将变更写入 Emby...", task_category=task_cat)
                 for person in current_people_base:
                     person_id = person.get("Id")
@@ -694,41 +692,41 @@ class ActorRoleMapperLogic:
                 response.raise_for_status()
                 ui_logger.info(f"       - ✅ 媒体项 (ID: {item_id}) 更新成功！", task_category=task_cat)
 
-                # --- 新增：最终日志打印 ---
                 ui_logger.info(f"     - 🔄 [变更详情]", task_category=task_cat)
                 for update_info in actors_to_update_map.values():
-                    current_name = update_info['current_name']
-                    target_name = update_info['target_name']
-                    current_role = update_info['current_role']
-                    target_role = update_info['target_role']
-                    match_source_text = f"(通过{update_info['match_source']}匹配)" if update_info['match_source'] else ""
+                    current_name, target_name = update_info['current_name'], update_info['target_name']
+                    current_role, target_role = update_info['current_role'], update_info['target_role']
                     
+                    # --- 核心修正：直接使用 source，否则回退 ---
+                    source_text = update_info.get('source') or f"(通过{update_info['match_source']}匹配)"
+
                     if current_name != target_name and _contains_chinese(target_name):
-                        ui_logger.info(f"       - ✅ 演员名修正: '{current_name}' -> '{target_name}' {match_source_text}", task_category=task_cat)
+                        ui_logger.info(f"       - ✅ 演员名修正: '{current_name}' -> '{target_name}' {source_text}", task_category=task_cat)
                     
                     if current_role != target_role:
                         actor_display_name = target_name if current_name == target_name else f"[{target_name}]"
-                        match_source_text_role = f"(通过{update_info['match_source']}匹配)" if update_info['match_source'] else "(通过名称降级匹配)"
-                        ui_logger.info(f"       - ✅ 角色名更新: {actor_display_name} '{current_role}' -> '{target_role}' {match_source_text_role}", task_category=task_cat)
+                        # 如果演员名也被修正了，角色日志就不再重复显示来源
+                        if current_name != target_name and _contains_chinese(target_name):
+                            ui_logger.info(f"       - ✅ 角色名更新: {actor_display_name} '{current_role}' -> '{target_role}'", task_category=task_cat)
+                        else:
+                            ui_logger.info(f"       - ✅ 角色名更新: {actor_display_name} '{current_role}' -> '{target_role}' {source_text}", task_category=task_cat)
 
             except Exception as e:
                 ui_logger.error(f"  - ❌ 处理媒体项 {item_id} 时发生错误: {e}", task_category=task_cat, exc_info=True)
             
             finally:
-                # --- 阶段3: 恢复到目标名称 ---
                 if isolated_persons:
                     ui_logger.info(f"       - [恢复] 开始将 {len(isolated_persons)} 个演员恢复到目标名称...", task_category=task_cat)
                     for person_id, (original_name, target_name) in isolated_persons.items():
                         log_msg = f"         - 🔓 恢复: (ID: {person_id}) -> {target_name}"
                         if original_name != target_name:
                             log_msg += f" (原名: '{original_name}')"
-                        logging.debug(log_msg) # 恢复日志仅保留在后端
+                        logging.debug(log_msg)
                         
                         if not self._rename_person_by_id(person_id, target_name, task_cat):
                             ui_logger.error(f"         - ❌ 恢复演员 (ID: {person_id}) 名称失败！请手动将其名称修改为 `{target_name}`。", task_category=task_cat)
                 
                 ui_logger.info(f"     - 🎉 作品《{title}》处理完毕。", task_category=task_cat)
-
 
     def update_single_map_file(self, single_map_data: Dict):
         """

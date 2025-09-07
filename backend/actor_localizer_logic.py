@@ -9,6 +9,7 @@ import os
 import hmac
 import hashlib
 from typing import List, Dict, Any, Generator, Optional, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import translators as ts
@@ -20,6 +21,9 @@ from models import AppConfig, ActorLocalizerConfig, TargetScope, TencentApiConfi
 from task_manager import TaskManager
 from douban_manager import DOUBAN_CACHE_FILE
 from log_manager import ui_logger
+from actor_role_mapper_logic import ActorRoleMapperLogic
+
+
 
 class ActorLocalizerLogic:
     def __init__(self, app_config: AppConfig):
@@ -235,6 +239,8 @@ class ActorLocalizerLogic:
         return None
     
 
+    # backend/actor_localizer_logic.py (函数替换)
+
     def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig, task_category: str, preview_mode: bool = False) -> Dict[str, Any]:
         details = self._get_item_details(item_id)
         if not details: return {"has_changes": False}
@@ -292,6 +298,8 @@ class ActorLocalizerLogic:
         actors_to_translate = []
         item_changes_log = {}
         
+        actor_source_map = {}
+
         for person in new_people_list:
             if person.get('Type') != 'Actor':
                 continue
@@ -299,7 +307,7 @@ class ActorLocalizerLogic:
             emby_actor_name = person.get('Name')
             original_role = person.get('Role', '')
             current_role = original_role
-            source = ""
+            source_text = ""
 
             matched_douban_actor = douban_actor_map.get(emby_actor_name)
             if not matched_douban_actor:
@@ -310,13 +318,13 @@ class ActorLocalizerLogic:
                 if correct_chinese_name and emby_actor_name != correct_chinese_name:
                     person_id = person.get('Id')
                     if person_id:
+                        has_changes = True
+                        person['Name'] = correct_chinese_name
+                        actor_source_map[correct_chinese_name] = "(来自豆瓣)"
                         if preview_mode:
-                            has_changes = True
-                            person['Name'] = correct_chinese_name
-                            item_changes_log[emby_actor_name] = {'old_name': emby_actor_name, 'new_name': correct_chinese_name, 'source': 'douban_rename'}
-                        elif self._rename_person_item(person_id, emby_actor_name, correct_chinese_name, task_category):
-                            has_changes = True
-                            person['Name'] = correct_chinese_name
+                            item_changes_log[emby_actor_name] = {'old_name': emby_actor_name, 'new_name': correct_chinese_name, 'source': '(来自豆瓣)'}
+                        else:
+                            ui_logger.info(f"     -- 演员名待修正: '{emby_actor_name}' -> '{correct_chinese_name}' (来自豆瓣)", task_category=task_category)
                     elif not preview_mode:
                         ui_logger.warning(f"     -- ⚠️ 演员 '{emby_actor_name}' 需要重命名，但无法获取其在Emby中的ID，跳过重命名。", task_category=task_category)
             
@@ -332,20 +340,20 @@ class ActorLocalizerLogic:
                         if not preview_mode: ui_logger.debug(f"     -- 忽略豆瓣通用角色名: {current_actor_name_for_log}: '{douban_role}' (在黑名单中)", task_category=task_category)
                     else:
                         current_role = douban_role
-                        source = "豆瓣"
+                        source_text = "(来自豆瓣)"
                 
-                if not source and config.enhance_english_role_with_douban and douban_role and not self._contains_chinese(douban_role):
+                if not source_text and config.enhance_english_role_with_douban and douban_role and not self._contains_chinese(douban_role):
                     if douban_role.strip() != original_role.strip():
                          current_role = douban_role
-                         source = "豆瓣英文优化"
+                         source_text = "(来自豆瓣英文优化)"
 
-            if source != "豆瓣" and self._contains_chinese(current_role):
+            if source_text != "(来自豆瓣)" and self._contains_chinese(current_role):
                 SUFFIX_MAP = {"(voice)": "配 "}
                 for suffix, prefix in SUFFIX_MAP.items():
                     if current_role.endswith(suffix):
                         current_role = prefix + current_role[:-len(suffix)].strip()
-                        if not source:
-                            source = "后缀格式化"
+                        if not source_text:
+                            source_text = "(来自后缀格式化)"
                         break
             
             if not self._contains_chinese(current_role):
@@ -353,14 +361,15 @@ class ActorLocalizerLogic:
                     actors_to_translate.append({'name': current_actor_name_for_log, 'role': current_role})
                 elif config.replace_english_role and self._is_pure_english(current_role):
                     current_role = "演员"
-                    source = "暴力替换"
+                    source_text = "(来自暴力替换)"
             
             if original_role.strip() != current_role.strip():
-                source_text = f" (来自{source})" if source else ""
-                if not preview_mode: ui_logger.info(f"     -- 角色名更新: {current_actor_name_for_log}: '{original_role}' -> '{current_role}'{source_text}", task_category=task_category)
+                if not preview_mode: ui_logger.info(f"     -- 角色名更新: {current_actor_name_for_log}: '{original_role}' -> '{current_role}' {source_text}", task_category=task_category)
                 person['Role'] = current_role
                 has_changes = True
-                item_changes_log[current_actor_name_for_log] = {'old': original_role, 'new': current_role, 'source': source.lower()}
+                # --- 核心修正：预览时也存入完整的日志字符串 ---
+                item_changes_log[current_actor_name_for_log] = {'old': original_role, 'new': current_role, 'source': source_text}
+                actor_source_map[current_actor_name_for_log] = source_text
 
         if config.translation_enabled and actors_to_translate:
             if not preview_mode: ui_logger.info(f"【翻译】为媒体《{item_name}》收集到 {len(actors_to_translate)} 个待翻译角色。", task_category=task_category)
@@ -399,7 +408,8 @@ class ActorLocalizerLogic:
                                 has_changes = True
                                 if not preview_mode: ui_logger.info(f"     -- 更新: {person.get('Name')}: '{original_role_for_person}' -> '{new_role}' (来自批量翻译)", task_category=task_category)
                                 person['Role'] = new_role
-                                item_changes_log[person.get('Name')] = {'old': original_role_for_person, 'new': new_role, 'source': 'translation'}
+                                item_changes_log[person.get('Name')] = {'old': original_role_for_person, 'new': new_role, 'source': '(来自翻译引擎)'}
+                                actor_source_map[person.get('Name')] = '(来自翻译引擎)'
                             elif not preview_mode:
                                 ui_logger.debug(f"     -- 跳过: {person.get('Name')}: '{original_role_for_person}' -> '{new_role}' (无变化)", task_category=task_category)
                 else:
@@ -419,7 +429,8 @@ class ActorLocalizerLogic:
                             if person.get('Name') == actor_info['name'] and person.get('Role') == actor_info['role']:
                                 person['Role'] = new_role
                                 if not preview_mode: ui_logger.info(f"     -- 更新: {actor_info['name']}: '{actor_info['role']}' -> '{new_role}' (来自单个翻译)", task_category=task_category)
-                                item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': new_role, 'source': 'translation'}
+                                item_changes_log[actor_info['name']] = {'old': actor_info['role'], 'new': new_role, 'source': '(来自翻译引擎)'}
+                                actor_source_map[actor_info['name']] = '(来自翻译引擎)'
                                 break
                     elif not preview_mode:
                         ui_logger.debug(f"     -- 跳过: {actor_info['name']}: '{actor_info['role']}' -> '{new_role}' (无变化)", task_category=task_category)
@@ -433,26 +444,67 @@ class ActorLocalizerLogic:
             }
 
         if has_changes:
-            full_item_json = self._get_item_details(item_id, full_json=True)
-            if full_item_json:
-                updated_actors_map = {p['Id']: p for p in new_people_list}
-                
-                original_full_people = full_item_json.get('People', [])
-                final_people_list = []
-                
-                for original_person in original_full_people:
-                    person_id = original_person.get('Id')
-                    if original_person.get('Type') == 'Actor' and person_id in updated_actors_map:
-                        final_people_list.append(updated_actors_map[person_id])
-                    else:
-                        final_people_list.append(original_person)
-                
-                full_item_json['People'] = final_people_list
+            ui_logger.info(f"     -- 🔍 检测到变更，开始构建内存映射并调用恢复逻辑...", task_category=task_category)
+            
+            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+            tmdb_id = provider_ids_lower.get("tmdb")
+            item_type = details.get("Type")
 
-                if self._update_item_on_server(item_id, full_item_json):
-                    ui_logger.info(f"     -- ✅ 成功将角色名更新应用到 Emby。", task_category=task_category)
+            if not tmdb_id or not item_type:
+                ui_logger.error(f"     -- ❌ 无法构建映射，媒体【{item_name}】缺少 TMDB ID 或媒体类型，跳过应用。", task_category=task_category)
+                return {"has_changes": False}
+
+            work_map = {}
+            person_ids_to_fetch = [p.get("Id") for p in new_people_list if p.get("Id")]
+            person_details_map = {}
+
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_person_id = {executor.submit(self._get_item_details, person_id, full_json=True): person_id for person_id in person_ids_to_fetch}
+                for future in as_completed(future_to_person_id):
+                    person_id = future_to_person_id[future]
+                    try:
+                        person_details_map[person_id] = future.result()
+                    except Exception as e:
+                        logging.debug(f"【演员中文化-获取TMDBID】获取演员 {person_id} 详情失败: {e}")
+
+            for person in new_people_list:
+                actor_name = person.get("Name")
+                if not actor_name: continue
+
+                person_tmdb_id = None
+                person_full_details = person_details_map.get(person.get("Id"))
+                if person_full_details:
+                    p_ids = person_full_details.get("ProviderIds", {})
+                    p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
+                    person_tmdb_id = p_ids_lower.get("tmdb")
+                
+                work_map[actor_name] = {
+                    "tmdb_id": person_tmdb_id,
+                    "role": person.get("Role", ""),
+                    "source": actor_source_map.get(actor_name)
+                }
+            
+            if work_map:
+                try:
+                    full_app_config = AppConfig(server_config=self.server_config)
+                    role_mapper_logic = ActorRoleMapperLogic(full_app_config)
+                    
+                    role_mapper_logic.restore_single_map_task(
+                        item_ids=[item_id],
+                        role_map=work_map,
+                        title=item_name,
+                        cancellation_event=threading.Event(),
+                        task_id=None,
+                        task_manager=None,
+                        task_category=task_category
+                    )
                     return {"has_changes": True}
-            ui_logger.error(f"     -- ❌ 应用角色名更新到 Emby 失败。", task_category=task_category)
+                except Exception as e:
+                    ui_logger.error(f"     -- ❌ 调用角色恢复逻辑时发生错误: {e}", task_category=task_category, exc_info=True)
+                    return {"has_changes": False}
+            else:
+                ui_logger.warning("     -- 映射构建为空，跳过应用。", task_category=task_category)
+
         else:
             ui_logger.info(f"     -- 处理完成，无任何变更。", task_category=task_category)
 
@@ -723,37 +775,85 @@ class ActorLocalizerLogic:
         
         return items_to_update
 
+    # backend/actor_localizer_logic.py (函数替换)
+
     def apply_actor_changes_task(self, items: List[Dict], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员中文化应用"
         total_items = len(items)
         task_manager.update_task_progress(task_id, 0, total_items)
         ui_logger.info(f"【步骤 1/2】开始应用修改，共 {total_items} 个项目。", task_category=task_cat)
         updated_count = 0
+        
+        full_app_config = AppConfig(server_config=self.server_config)
+        role_mapper_logic = ActorRoleMapperLogic(full_app_config)
+
         for index, item_info in enumerate(items):
             if cancellation_event.is_set(): break
-            item_id, item_name, new_people_list = item_info['id'], item_info['name'], item_info['new_people']
+            
+            item_id = item_info['id']
+            item_name = item_info['name']
+            new_people_list = item_info['new_people']
+            changes_log = item_info.get('changes', {})
+            
             task_manager.update_task_progress(task_id, index + 1, total_items)
-            ui_logger.info(f"应用进度 {index + 1}/{total_items}: 正在更新 [{item_name}]", task_category=task_cat)
-            full_item_json = self._get_item_details(item_id, full_json=True)
-            if not full_item_json:
-                ui_logger.error(f"  -> 获取 '{item_name}' 完整信息失败，跳过更新。", task_category=task_cat)
+            ui_logger.info(f"应用进度 {index + 1}/{total_items}: 正在处理 [{item_name}]", task_category=task_cat)
+
+            item_details = self._get_item_details(item_id)
+            if not item_details:
+                ui_logger.error(f"  -> 获取 '{item_name}' 基础信息失败，跳过更新。", task_category=task_cat)
                 continue
-            full_item_json['People'] = new_people_list
-            if self._update_item_on_server(item_id, full_item_json):
-                ui_logger.info(f"  -> 成功更新 [{item_name}]，详情如下:", task_category=task_cat)
-                for actor, change in item_info.get('changes', {}).items():
-                    source_map = {'douban': '(来自豆瓣)', 'replace': '(来自暴力替换)', 'translation': '(来自翻译引擎)'}
-                    source_text = source_map.get(change.get('source'), '')
-                    ui_logger.info(f"    - {actor}: \"{change['old']}\" -> \"{change['new']}\" {source_text}", task_category=task_cat)
+
+            provider_ids = item_details.get('ProviderIds', {})
+            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+            tmdb_id = provider_ids_lower.get("tmdb")
+            item_type = item_details.get("Type")
+
+            if not tmdb_id or not item_type:
+                ui_logger.error(f"  -> 无法构建映射，媒体【{item_name}】缺少 TMDB ID 或媒体类型，跳过应用。", task_category=task_cat)
+                continue
+
+            work_map = {}
+            for person in new_people_list:
+                actor_name = person.get("Name")
+                if not actor_name: continue
+                
+                # --- 核心修正：直接从 changes_log 中获取 source ---
+                source_text = None
+                
+                change_info_by_new_name = next((v for k, v in changes_log.items() if v.get('new_name') == actor_name), None)
+                change_info_by_old_name = changes_log.get(actor_name)
+                change_info = change_info_by_new_name or change_info_by_old_name
+
+                if change_info:
+                    source_text = change_info.get('source')
+                # --- 修正结束 ---
+
+                work_map[actor_name] = {
+                    "tmdb_id": None,
+                    "role": person.get("Role", ""),
+                    "source": source_text
+                }
+
+            try:
+                role_mapper_logic.restore_single_map_task(
+                    item_ids=[item_id],
+                    role_map=work_map,
+                    title=item_name,
+                    cancellation_event=cancellation_event,
+                    task_id=task_id,
+                    task_manager=task_manager,
+                    task_category=task_cat
+                )
                 updated_count += 1
-            else:
-                 ui_logger.error(f"  -> 更新 '{item_name}' 失败。", task_category=task_cat)
+            except Exception as e:
+                ui_logger.error(f"  -> 应用 '{item_name}' 的修改时发生错误: {e}", task_category=task_cat, exc_info=True)
+
         if cancellation_event.is_set():
             ui_logger.warning(f"应用修改被用户取消。本次共更新 {updated_count} 个项目。", task_category=task_cat)
         else:
             ui_logger.info(f"【步骤 2/2】应用修改完成！共成功更新 {updated_count} 个项目。", task_category=task_cat)
         return {"updated_count": updated_count}
-
+    
     def apply_actor_changes_directly_task(self, config: ActorLocalizerConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager, task_category: str):
         ui_logger.info("【步骤 1/2】自动应用任务启动...", task_category=task_category)
         if not self.douban_map:
