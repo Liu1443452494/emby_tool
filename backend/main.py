@@ -218,7 +218,7 @@ async def id_map_update_scheduler():
 async def library_scan_scheduler():
     """
     独立的后台调度器，用于处理媒体库文件扫描的防抖触发任务。
-    在扫描前，会先处理该媒体库下待重命名的电影。
+    在扫描前，会先处理该媒体库下待重命名的电影，并根据处理结果决定是否需要扫描。
     """
     task_cat = "媒体库扫描调度器"
     logging.info(f"【{task_cat}】已启动，将每 60 秒检查一次待处理队列...")
@@ -260,7 +260,6 @@ async def library_scan_scheduler():
                 renamer_logic = MovieRenamerLogic(config)
                 
                 for lib_id, entry in ready_to_process_tasks.items():
-                    # 尝试获取库名称用于日志
                     try:
                         lib_info = renamer_logic._get_library_for_item_by_id(lib_id)
                         lib_name = lib_info.get("Name") if lib_info else f"ID {lib_id}"
@@ -269,20 +268,33 @@ async def library_scan_scheduler():
 
                     items_to_rename = entry.get('items_to_rename')
                     
+                    # --- 核心修改：引入按需扫描逻辑 ---
+                    should_scan = False
                     if items_to_rename:
+                        # 场景1: 这是由 Webhook 触发的、带重命名任务的流程
                         ui_logger.info(f"➡️ [扫描前置任务] 检测到媒体库【{lib_name}】有 {len(items_to_rename)} 个电影待重命名，开始处理...", task_category=task_cat)
                         
+                        renamed_any_file = False
                         movie_details_list = renamer_logic._get_movie_details_batch(list(items_to_rename), task_cat)
                         
                         for movie_details in movie_details_list:
-                            renamer_logic.process_single_movie(movie_details, task_cat)
+                            result = renamer_logic.process_single_movie(movie_details, task_cat)
+                            if result is not None:
+                                renamed_any_file = True
                         
-                        ui_logger.info(f"✅ [扫描前置任务] 媒体库【{lib_name}】的所有电影重命名操作已完成。", task_category=task_cat)
+                        if renamed_any_file:
+                            ui_logger.info(f"✅ [扫描决策] 检测到文件变更，将为媒体库【{lib_name}】执行扫描。", task_category=task_cat)
+                            should_scan = True
+                        else:
+                            ui_logger.info(f"✅ [扫描决策] 所有待处理电影的文件名均合格，无需为媒体库【{lib_name}】执行扫描。", task_category=task_cat)
                     else:
-                        logging.info(f"【{task_cat}】媒体库【{lib_name}】没有待处理的重命名任务。")
-
-                    # 无论是否重命名，最后都执行扫描
-                    renamer_logic._trigger_library_scan(lib_id, lib_name, task_cat)
+                        # 场景2: 这是“纯扫描”请求
+                        logging.info(f"【{task_cat}】媒体库【{lib_name}】收到一个纯扫描请求，将直接执行扫描。")
+                        should_scan = True
+                    
+                    if should_scan:
+                        renamer_logic._trigger_library_scan(lib_id, lib_name, task_cat)
+                    # --- 修改结束 ---
 
         except asyncio.CancelledError:
             logging.info(f"【{task_cat}】收到关闭信号，正在退出...")
