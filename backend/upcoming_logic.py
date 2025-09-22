@@ -119,6 +119,8 @@ class UpcomingLogic:
         ui_logger.info(f"✅ [步骤 2/3] 预筛选完成。候选条目从 {len(raw_items)} 个减少到 {len(verified_items)} 个。", task_category=task_cat)
         return verified_items
 
+    # backend/upcoming_logic.py (函数替换)
+
     def get_upcoming_list(self, dynamic_filters: Optional[Dict] = None) -> List[Dict]:
         task_cat = "即将上映-获取"
         ui_logger.info(f"➡️ [核心入口] get_upcoming_list 被调用。强制刷新: {bool(dynamic_filters and not dynamic_filters.get('use_defaults', True))}", task_category=task_cat)
@@ -176,6 +178,9 @@ class UpcomingLogic:
             new_items_count = 0
             skipped_items_count = 0
             
+            # --- 新增：用于暂存新项目以供通知 ---
+            newly_added_items_for_notification = []
+            # --- 新增结束 ---
 
             for item in filtered_items:
                 tmdb_id_str = str(item['tmdb_id'])
@@ -205,7 +210,7 @@ class UpcomingLogic:
                     cast = details.get('credits', {}).get('cast', [])
                     actors = [actor['name'] for actor in cast[:6]]
 
-                    db_content['data'][tmdb_id_str] = {
+                    new_item_data = {
                         "tmdb_id": details['id'],
                         "media_type": item['media_type'],
                         "title": details.get('title') or details.get('name'),
@@ -220,8 +225,12 @@ class UpcomingLogic:
                         "actors": actors,
                         "is_permanent": False,
                         "is_ignored": False,
-                        "is_new": True, # --- 新增：为新条目添加标记 ---
+                        "is_new": True,
                     }
+                    db_content['data'][tmdb_id_str] = new_item_data
+                    # --- 新增：将新项目添加到通知列表 ---
+                    newly_added_items_for_notification.append(new_item_data)
+                    # --- 新增结束 ---
                     new_items_count += 1
                     logging.debug(f"  - [新增] 成功获取 TMDB ID: {tmdb_id_str} 的数据。")
                     time.sleep(0.1)
@@ -232,6 +241,14 @@ class UpcomingLogic:
             if skipped_items_count > 0:
                 summary_log += f" 跳过了 {skipped_items_count} 条 (因TMDB数据不完整)。"
             ui_logger.info(summary_log, task_category=task_cat)
+
+            # --- 新增：触发新增项目通知 ---
+            if newly_added_items_for_notification:
+                ui_logger.info(f"🔔 检测到 {len(newly_added_items_for_notification)} 个新项目，准备发送 Telegram 通知...", task_category=task_cat)
+                self._send_new_items_notification(newly_added_items_for_notification)
+            else:
+                ui_logger.info("✅ 本次更新未发现任何新项目，无需发送通知。", task_category=task_cat)
+            # --- 新增结束 ---
 
             rules = self.config.auto_subscribe_rules
             if rules.enabled:
@@ -336,7 +353,95 @@ class UpcomingLogic:
         # --- 修改结束 ---
         
         return sorted(final_list, key=lambda x: (x['release_date'], -x.get('popularity', 0)))
+    
 
+
+    def _send_new_items_notification(self, new_items: List[Dict]):
+        """
+        为新发现的即将上映项目，逐条发送带海报的 Telegram 通知。
+        """
+        task_cat = "即将上映-通知"
+        
+        total_items = len(new_items)
+        if total_items == 0:
+            return
+
+        # --- 核心修复：使用关键字参数 task_category ---
+        ui_logger.info(f"➡️ 检测到 {total_items} 个新项目，开始逐条发送带图通知...", task_category=task_cat)
+
+        country_map = {
+            'cn': '中国大陆', 'hk': '中国香港', 'tw': '中国台湾', 'us': '美国',
+            'jp': '日本', 'gb': '英国', 'kr': '韩国', 'fr': '法国',
+            'de': '德国', 'in': '印度', 'th': '泰国', 'ca': '加拿大',
+            'au': '澳大利亚', 'ru': '俄罗斯'
+        }
+
+        for index, item in enumerate(new_items):
+            item_number = index + 1
+            item_title_raw = item.get('title', '未知标题')
+
+            poster_path = item.get('poster_path')
+            if not poster_path:
+                # --- 核心修复：使用关键字参数 task_category ---
+                ui_logger.warning(f"⚠️ [跳过通知] 项目《{item_title_raw}》因缺少海报图而被跳过。", task_category=task_cat)
+                continue
+
+            poster_url = f"https://image.tmdb.org/t/p/w780{poster_path}"
+
+            title_part = f"📅 *即将上映数据更新 `({item_number}/{total_items})`*"
+            
+            summary_part = ""
+            if item_number == 1:
+                summary_part = f"\n🎉 本次更新共新增 *{total_items}* 部影视作品！\n"
+
+            media_type_raw = item.get('media_type')
+            media_type_icon = "📺" if media_type_raw == 'tv' else "🎬"
+            media_type_text = "剧集" if media_type_raw == 'tv' else "电影"
+            
+            item_title = escape_markdown(item_title_raw)
+            tmdb_id = item.get('tmdb_id', 'N/A')
+            
+            release_date = item.get('release_date', '未知日期')
+            release_date_str = f"📅 `{escape_markdown(release_date)}`"
+
+            countries = [country_map.get(c.lower(), c.upper()) for c in item.get('origin_country', [])]
+            countries_str = escape_markdown(" / ".join(countries) if countries else "未知")
+            
+            genres = item.get('genres', [])
+            genres_str = escape_markdown(" / ".join(genres) if genres else "未知")
+            
+            actors = item.get('actors', [])
+            actors_str = escape_markdown(" / ".join(actors) if actors else "无")
+
+            caption = (
+                f"{title_part}"
+                f"{summary_part}"
+                f"\n{media_type_icon} *{media_type_text}：《{item_title}》*\n"
+                f"*TMDB:* `{tmdb_id}`\n"
+                f"*上映:* {release_date_str}\n"
+                f"*地区:* {countries_str}\n"
+                f"*类型:* {genres_str}\n"
+                f"*主演:* {actors_str}"
+            )
+
+            # --- 核心修复：使用关键字参数 task_category ---
+            ui_logger.info(f"   - [发送中 {item_number}/{total_items}] 正在为《{item_title_raw}》发送通知...", task_category=task_cat)
+            
+            result = notification_manager.send_telegram_photo_notification(
+                image_source=poster_url,
+                caption=caption,
+                app_config=self.app_config
+            )
+
+            if not result.get("success"):
+                # --- 核心修复：使用关键字参数 task_category ---
+                ui_logger.error(f"   - ❌ [发送失败]《{item_title_raw}》通知发送失败: {result.get('message')}", task_category=task_cat)
+            
+            if item_number < total_items:
+                time.sleep(3)
+
+        # --- 核心修复：使用关键字参数 task_category ---
+        ui_logger.info(f"✅ 所有新项目通知已尝试发送完毕。", task_category=task_cat)
 
     def update_subscription(self, tmdb_id: int, subscribe: bool) -> bool:
         task_cat = "即将上映-订阅"
@@ -435,10 +540,12 @@ class UpcomingLogic:
             ui_logger.error(f"❌ 操作失败: {e}", task_category=task_cat)
             return False
 
+
     def check_and_notify(self):
         task_cat = "定时任务-订阅通知"
         ui_logger.info("➡️ 开始检查订阅列表并发送通知...", task_category=task_cat)
 
+        
         ui_logger.info("   - [步骤 1/3] 自动检查并按需更新“即将上映”数据...", task_category=task_cat)
         # 传入 use_defaults: True 来触发标准的缓存检查逻辑
         self.get_upcoming_list(dynamic_filters={'use_defaults': True})
