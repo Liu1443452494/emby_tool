@@ -196,11 +196,14 @@
       <div v-if="localWebhookConfig" class="webhook-content">
         <div class="flow-description">
           <p>启用后，当有新媒体添加入库时，将自动触发以下流程：</p>
-          <el-steps direction="vertical" :active="4" space="30px">
+          <el-steps direction="vertical" :active="7" space="30px">
             <el-step title="获取豆瓣ID" description="检查或运行豆瓣ID修复器，确保媒体有关联ID。" />
             <el-step title="同步豆瓣数据" description="等待豆瓣插件下载数据，并将其增量更新到本地缓存。" />
-            <el-step title="演员中文化" description="对新增媒体的演员角色名进行中文化处理。" />
+            <el-step title="追更状态判断 (仅剧集)" description="若为播出中剧集，则自动加入追更列表。" />
+            <el-step title="演员角色处理" description="优先从映射表恢复角色名，否则执行中文化并生成新映射。" />
             <el-step title="更新豆瓣海报" description="使用最新的豆瓣海报替换当前海报。" />
+            <el-step title="应用媒体标签" description="根据规则自动为媒体添加或移除标签。" />
+            <el-step title="电影文件重命名 (仅电影)" description="将电影加入重命名队列，并在处理后触发媒体库扫描。" />
           </el-steps>
         </div>
         <el-divider />
