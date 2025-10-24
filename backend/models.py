@@ -120,6 +120,10 @@ class ActorLocalizerConfig(BaseModel):
         default_factory=lambda: ["演员"], 
         description="要忽略的通用角色名列表"
     )
+    custom_role_suffix_map: Dict[str, str] = Field(
+        default_factory=lambda: {"(演员)": "饰 "}, 
+        description="用户自定义角色名后缀-前缀映射。键为要匹配的后缀(如'(voice)'), 值为要替换的前缀(如'配 ')"
+    )
     tencent_config: TencentApiConfig = Field(default_factory=TencentApiConfig)
     siliconflow_config: SiliconflowApiConfig = Field(default_factory=SiliconflowApiConfig)
     apply_cron: str = Field(default="", description="定时自动应用CRON表达式")
@@ -430,6 +434,7 @@ class ActorLocalizerPreviewRequest(BaseModel):
 
 class ActorLocalizerApplyRequest(BaseModel):
     items: List[Dict]
+    
 
 
 class SuggestRolesRequest(BaseModel):

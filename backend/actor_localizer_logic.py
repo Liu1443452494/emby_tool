@@ -23,7 +23,40 @@ from douban_manager import DOUBAN_CACHE_FILE
 from log_manager import ui_logger
 from actor_role_mapper_logic import ActorRoleMapperLogic
 
+DEFAULT_ROLE_SUFFIX_MAP = {
+    "(voice)": "配 ",
+    "(配音)": "配 "
+}
 
+# backend/actor_localizer_logic.py (函数替换)
+
+def _format_role_with_rules(role: str, final_rules: Dict[str, str]) -> str:
+    """
+    根据最终规则集，格式化角色名。
+    新增了对全角括号的归一化处理。
+    """
+    if not role or not final_rules:
+        return role
+
+    # --- 新增/修改：在匹配前，先对角色名进行归一化处理 ---
+    # 将全角括号替换为半角括号，并去除前后可能存在的空格
+    normalized_role = role.strip().replace('（', '(').replace('）', ')')
+    # --- 新增/修改结束 ---
+
+    # 按后缀长度降序排序，优先匹配更长的后缀，避免 "(voice actor)" 被 "(voice)" 错误匹配
+    sorted_rules = sorted(final_rules.items(), key=lambda item: len(item[0]), reverse=True)
+
+    for suffix, prefix in sorted_rules:
+        # --- 修改：使用归一化后的角色名进行匹配 ---
+        if normalized_role.endswith(suffix):
+            # 从原始role字符串中截取，以保留原始的大小写等信息
+            base_role = role[:-len(suffix)].strip()
+            # --- 修改结束 ---
+            formatted_role = f"{prefix}{base_role}"
+            logging.debug(f"【角色格式化】规则匹配: '{role}' -> '{formatted_role}' (规则: {suffix} -> {prefix})")
+            return formatted_role
+    
+    return role
 
 class ActorLocalizerLogic:
     def __init__(self, app_config: AppConfig):
@@ -434,6 +467,43 @@ class ActorLocalizerLogic:
                                 break
                     elif not preview_mode:
                         ui_logger.debug(f"     -- 跳过: {actor_info['name']}: '{actor_info['role']}' -> '{new_role}' (无变化)", task_category=task_category)
+
+        final_suffix_map = DEFAULT_ROLE_SUFFIX_MAP.copy()
+        if config.custom_role_suffix_map:
+            final_suffix_map.update(config.custom_role_suffix_map)
+
+        if any(final_suffix_map): # 仅当有规则时才执行
+            if not preview_mode:
+                ui_logger.info("     --  aplicando regras de formatação final...", task_category=task_category)
+            
+            for person in new_people_list:
+                actor_name_for_log = person.get('Name')
+                original_role_before_format = person.get('Role', '')
+                formatted_role = _format_role_with_rules(original_role_before_format, final_suffix_map)
+
+                if formatted_role != original_role_before_format:
+                    person['Role'] = formatted_role
+                    
+                    # 同步更新状态和日志
+                    if not has_changes: has_changes = True
+
+                    # 如果之前已有变更日志，则更新 new 值；否则创建新的日志条目
+                    if actor_name_for_log in item_changes_log:
+                        # 记录格式化前的角色名，以便日志更清晰
+                        role_before_format_in_log = item_changes_log[actor_name_for_log]['new']
+                        item_changes_log[actor_name_for_log]['new'] = formatted_role
+                        if not preview_mode:
+                             ui_logger.info(f"       - [格式化] {actor_name_for_log}: '{role_before_format_in_log}' -> '{formatted_role}'")
+                    else:
+                        # 这种情况发生在原始角色名本身就匹配了格式化规则
+                        original_role_from_emby = next((p.get('Role', '') for p in actors_to_process if p.get('Id') == person.get('Id')), '')
+                        item_changes_log[actor_name_for_log] = {'old': original_role_from_emby, 'new': formatted_role, 'source': '(来自后缀格式化)'}
+                        if not preview_mode:
+                            ui_logger.info(f"     -- 角色名更新: {actor_name_for_log}: '{original_role_from_emby}' -> '{formatted_role}' (来自后缀格式化)", task_category=task_category)
+
+                    # 更新来源信息
+                    actor_source_map[actor_name_for_log] = '(来自后缀格式化)'
+
 
         if preview_mode:
             return {
