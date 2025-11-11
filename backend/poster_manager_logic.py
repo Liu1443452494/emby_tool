@@ -846,12 +846,13 @@ class PosterManagerLogic:
 
         if not image_info:
             ui_logger.debug(f"     - 跳过: 在远程备份中未找到 TMDB Key {tmdb_key} 的 {image_type} 图片。", task_category=task_cat)
-            return
+            # --- 修改 ---
+            return False
 
         image_url = image_info.get("url")
         if not image_url:
             ui_logger.warning(f"     - ⚠️ 警告: 远程备份中 TMDB Key {tmdb_key} 的 {image_type} 图片记录缺少下载URL。", task_category=task_cat)
-            return
+            return False
         # --- 修改结束 ---
 
         try:
@@ -894,11 +895,38 @@ class PosterManagerLogic:
                 timeout=60,
                 proxies=upload_proxies
             )
-            upload_response.raise_for_status()
-            
-
+            upload_response.raise_for_status()    
+            return True  
         except Exception as e:
+            raise e
+        
+    def restore_single_image_from_local_cache(self, item_id: str, image_type: str, task_cat: str) -> bool:
+        """
+        尝试从本地缓存中查找并恢复单张图片。
+        :return: True 如果成功从本地恢复，False 如果本地无缓存文件。
+        """
+        try:
+            tmdb_key = self._get_tmdb_id(item_id)
+            if not tmdb_key:
+                ui_logger.debug(f"     - [本地恢复] 跳过，无法获取媒体项 {item_id} 的 TMDB Key。", task_category=task_cat)
+                return False
 
+            filename_map = {"poster": "poster.jpg", "logo": "clearlogo.png", "fanart": "fanart.jpg"}
+            filename = filename_map.get(image_type)
+            if not filename:
+                return False
+
+            local_path = os.path.join(self.pm_config.local_cache_path, tmdb_key, filename)
+
+            if os.path.exists(local_path):
+                ui_logger.info(f"     - 🔍 命中本地缓存: {local_path}", task_category=task_cat)
+                self._restore_single_image_from_local(item_id, image_type, local_path)
+                return True
+            else:
+                ui_logger.debug(f"     - [本地恢复] 未在路径 {local_path} 找到缓存文件。", task_category=task_cat)
+                return False
+        except Exception as e:
+            # 重新抛出异常，以便上层可以捕获并记录
             raise e
 
 
@@ -1522,10 +1550,16 @@ class PosterManagerLogic:
 
             remote_map = self._get_aggregated_remote_index(task_cat)
             
-            self._restore_single_image_from_plan(item_id, image_type, tmdb_key, remote_map, task_cat)
-            # --- 修改结束 ---
+            # --- 修改 ---
+            restored = self._restore_single_image_from_plan(item_id, image_type, tmdb_key, remote_map, task_cat)
             
-            ui_logger.info(f"🎉 为【{item_name}】恢复【{image_type_cn}】的任务已完成。", task_category=task_cat)
+            if restored:
+                ui_logger.info(f"🎉 为【{item_name}】恢复【{image_type_cn}】的任务已完成。", task_category=task_cat)
+            else:
+                ui_logger.info(f"➡️ 为【{item_name}】恢复【{image_type_cn}】的任务跳过，因远程无备份。", task_category=task_cat)
+            
+            return restored
+            # --- 修改结束 ---
         
         except Exception as e:
 

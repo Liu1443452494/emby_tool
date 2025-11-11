@@ -366,12 +366,42 @@ class WebhookLogic:
                 ui_logger.warning("【演员角色映射】因演员中文化步骤失败，本步骤已跳过。", task_category=task_cat)
         if cancellation_event.is_set(): return
 
-        ui_logger.info(f"【步骤 8/9 | 豆瓣海报更新】开始...", task_category=task_cat)
+        ui_logger.info(f"【步骤 8/9 | 智能海报更新】开始执行三级降级策略...", task_category=task_cat)
+        poster_updated = False
         try:
-            poster_logic = DoubanPosterUpdaterLogic(self.config)
-            poster_logic.run_poster_update_for_items([item_id], self.config.douban_poster_updater_config, cancellation_event, None, None)
+            from poster_manager_logic import PosterManagerLogic
+            poster_manager_logic = PosterManagerLogic(self.config)
+
+            # 优先级 1: 本地缓存恢复
+            ui_logger.info(f"  - [优先级 1/3] 正在检查本地缓存...", task_category=task_cat)
+            try:
+                if poster_manager_logic.restore_single_image_from_local_cache(item_id, 'poster', task_cat):
+                    ui_logger.info(f"  - ✅ 成功从本地缓存恢复海报，海报更新流程结束。", task_category=task_cat)
+                    poster_updated = True
+            except Exception as e:
+                ui_logger.error(f"  - ❌ 尝试从本地恢复时发生错误: {e}，将继续尝试远程恢复。", task_category=task_cat)
+
+            # 优先级 2: GitHub 远程恢复
+            if not poster_updated:
+                ui_logger.info(f"  - [优先级 2/3] 本地无缓存，正在检查 GitHub 远程备份...", task_category=task_cat)
+                try:
+                    if poster_manager_logic.restore_single_image(item_id, 'poster'):
+                        ui_logger.info(f"  - ✅ 成功从 GitHub 远程备份恢复海报，海报更新流程结束。", task_category=task_cat)
+                        poster_updated = True
+                except Exception as e:
+                    ui_logger.error(f"  - ❌ 尝试从远程恢复时发生错误: {e}，将继续尝试豆瓣更新。", task_category=task_cat)
+            
+            # 优先级 3: 豆瓣海报更新
+            if not poster_updated:
+                ui_logger.info(f"  - [优先级 3/3] 本地和远程均无备份，开始执行豆瓣海报更新...", task_category=task_cat)
+                try:
+                    poster_logic = DoubanPosterUpdaterLogic(self.config)
+                    poster_logic.run_poster_update_for_items([item_id], self.config.douban_poster_updater_config, cancellation_event, None, None)
+                except Exception as e:
+                    ui_logger.error(f"  - ❌ 豆瓣海报更新步骤执行失败: {e}", task_category=task_cat, exc_info=True)
+
         except Exception as e:
-            ui_logger.error(f"【豆瓣海报更新】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
+            ui_logger.error(f"【智能海报更新】步骤执行时发生未知严重错误: {e}", task_category=task_cat, exc_info=True)
         if cancellation_event.is_set(): return
 
         ui_logger.info(f"【步骤 8.5/9 | 自动应用媒体标签】开始...", task_category=task_cat)
