@@ -58,10 +58,30 @@ export const useUpcomingStore = defineStore('upcoming', () => {
     return releaseDate >= today;
   };
 
-  const upcomingMovies = computed(() => allData.value.filter(item => item.media_type === 'movie' && isUpcoming(item)));
-  const upcomingTvs = computed(() => allData.value.filter(item => item.media_type === 'tv' && isUpcoming(item)));
-  const subscriptionList = computed(() => allData.value.filter(item => item.is_subscribed && isUpcoming(item)).sort((a, b) => a.release_date.localeCompare(b.release_date)));
-  const permanentList = computed(() => allData.value.filter(item => item.is_permanent).sort((a, b) => a.release_date.localeCompare(b.release_date)));
+  // --- 修改 ---
+  // 统一的排序函数，实现 is_new 优先，然后按日期排序
+  const customSort = (a, b) => {
+    // is_new 状态处理 (不存在 is_new 字段时，视为 false)
+    const aIsNew = a.is_new === true;
+    const bIsNew = b.is_new === true;
+
+    if (aIsNew && !bIsNew) {
+      return -1; // a 是新的，排在前面
+    }
+    if (!aIsNew && bIsNew) {
+      return 1; // b 是新的，排在前面
+    }
+
+    // 如果 is_new 状态相同，则按上映日期排序
+    const dateA = a.release_date || '9999-12-31';
+    const dateB = b.release_date || '9999-12-31';
+    return dateA.localeCompare(dateB);
+  };
+
+  const upcomingMovies = computed(() => allData.value.filter(item => item.media_type === 'movie' && isUpcoming(item)).sort(customSort));
+  const upcomingTvs = computed(() => allData.value.filter(item => item.media_type === 'tv' && isUpcoming(item)).sort(customSort));
+  const subscriptionList = computed(() => allData.value.filter(item => item.is_subscribed && isUpcoming(item)).sort(customSort));
+  const permanentList = computed(() => allData.value.filter(item => item.is_permanent).sort(customSort));
   // --- Actions ---
   const showMessage = (type, message) => {
     ElMessage({ message, type, showClose: true, duration: 3000 });
