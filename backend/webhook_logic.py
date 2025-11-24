@@ -325,6 +325,8 @@ class WebhookLogic:
                     ui_logger.info(f"   - 🔄 [角色恢复] 开始将已存在的中文角色名应用到新入库的媒体项...", task_category=task_cat)
                     role_mapper_logic = ActorRoleMapperLogic(self.config)
                     map_data = actor_role_map[map_key]
+                    ui_logger.info(f"   - [索引构建] 正在拉取全库演员数据以加速匹配 (Webhook模式)...", task_category=task_cat)
+                    person_index = role_mapper_logic._fetch_all_persons_index()
                     
                     role_mapper_logic.restore_single_map_task(
                         item_ids=[item_id],
@@ -332,7 +334,8 @@ class WebhookLogic:
                         title=map_data.get("title", item_name),
                         cancellation_event=cancellation_event,
                         task_id=None,
-                        task_manager=None
+                        task_manager=None,
+                        person_index=person_index # 传入索引
                     )
                 else:
                     ui_logger.info(f"   - 未在映射表中找到 Key: {map_key} 的记录，将执行标准流程。", task_category=task_cat)
