@@ -590,10 +590,45 @@ class ActorRoleMapperLogic:
         
     # backend/actor_role_mapper_logic.py (函数替换)
 
-    def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: Optional[TaskManager] = None, task_category: Optional[str] = None):
+    def _fetch_all_persons_index(self) -> Dict[str, Dict]:
+        """
+        一次性拉取全库演员数据，构建 {EmbyID: {ProviderIds, Name}} 的索引。
+        """
+        ui_logger.info("➡️ [索引构建] 正在拉取全库演员数据以加速匹配...", task_category="演员角色映射-索引")
+        start_time = time.time()
+        try:
+            url = f"{self.server_config.server}/Items"
+            params = {
+                "api_key": self.server_config.api_key,
+                "Recursive": "true",
+                "IncludeItemTypes": "Person",
+                "Fields": "ProviderIds,Name"
+            }
+            # 增加超时时间，因为数据量可能很大
+            response = self.session.get(url, params=params, timeout=120)
+            response.raise_for_status()
+            items = response.json().get("Items", [])
+            
+            index = {}
+            for item in items:
+                index[item['Id']] = {
+                    "Name": item.get("Name"),
+                    "ProviderIds": item.get("ProviderIds", {})
+                }
+            
+            duration = time.time() - start_time
+            ui_logger.info(f"✅ [索引构建] 完成！耗时 {duration:.2f} 秒，共索引 {len(index)} 位演员。", task_category="演员角色映射-索引")
+            return index
+        except Exception as e:
+            ui_logger.error(f"❌ [索引构建] 失败: {e}，后续将回退到慢速模式。", task_category="演员角色映射-索引")
+            return {}
+    
+
+    def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: Optional[TaskManager] = None, task_category: Optional[str] = None, person_index: Optional[Dict] = None):
         """
         根据映射关系，恢复指定 Emby 媒体项列表的演员角色名。
         采用【反向锁定】策略，融合【演员名修正】逻辑，并使用最终优化的日志风格。
+        优化版：支持传入 person_index 进行极速查找。
         """
         task_cat = task_category if task_category else "演员角色映射-恢复"
         
@@ -626,20 +661,42 @@ class ActorRoleMapperLogic:
                 emby_actors_by_id = {}
                 emby_actors_by_name = {}
                 
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    future_to_person = {executor.submit(self._get_emby_item_details, p['Id'], "ProviderIds"): p for p in emby_actors_base}
-                    for future in as_completed(future_to_person):
-                        original_person = future_to_person[future]
-                        try:
-                            full_person_details = future.result()
-                            original_person.update(full_person_details)
-                            provider_ids_lower = {k.lower(): v for k, v in full_person_details.get("ProviderIds", {}).items()}
-                            person_tmdb_id = provider_ids_lower.get("tmdb")
-                            if person_tmdb_id:
-                                emby_actors_by_id[str(person_tmdb_id)] = original_person
-                            emby_actors_by_name[original_person.get("Name")] = original_person
-                        except Exception:
-                            emby_actors_by_name[original_person.get("Name")] = original_person
+                # --- 核心优化：优先使用 person_index，如果没有则回退到 API 请求 ---
+                if person_index:
+                    # 极速模式：直接查表
+                    for actor in emby_actors_base:
+                        actor_id = actor['Id']
+                        # 从索引中获取详细信息
+                        indexed_info = person_index.get(actor_id)
+                        
+                        # 构建包含 ProviderIds 的完整对象
+                        full_actor_info = actor.copy()
+                        if indexed_info:
+                            full_actor_info['ProviderIds'] = indexed_info['ProviderIds']
+                            # 注意：这里不覆盖 Name，因为电影里的 Name 可能是特定于电影的（虽然 Emby 通常是一致的）
+                        
+                        # 建立索引
+                        provider_ids_lower = {k.lower(): v for k, v in full_actor_info.get("ProviderIds", {}).items()}
+                        person_tmdb_id = provider_ids_lower.get("tmdb")
+                        if person_tmdb_id:
+                            emby_actors_by_id[str(person_tmdb_id)] = full_actor_info
+                        emby_actors_by_name[full_actor_info.get("Name")] = full_actor_info
+                else:
+                    # 慢速模式：并发请求 (保留原有逻辑作为兜底)
+                    with ThreadPoolExecutor(max_workers=10) as executor:
+                        future_to_person = {executor.submit(self._get_emby_item_details, p['Id'], "ProviderIds"): p for p in emby_actors_base}
+                        for future in as_completed(future_to_person):
+                            original_person = future_to_person[future]
+                            try:
+                                full_person_details = future.result()
+                                original_person.update(full_person_details)
+                                provider_ids_lower = {k.lower(): v for k, v in full_person_details.get("ProviderIds", {}).items()}
+                                person_tmdb_id = provider_ids_lower.get("tmdb")
+                                if person_tmdb_id:
+                                    emby_actors_by_id[str(person_tmdb_id)] = original_person
+                                emby_actors_by_name[original_person.get("Name")] = original_person
+                            except Exception:
+                                emby_actors_by_name[original_person.get("Name")] = original_person
 
                 actors_to_update_map = {}
                 for map_actor_name, map_actor_data in role_map.items():
@@ -707,7 +764,6 @@ class ActorRoleMapperLogic:
                     current_name, target_name = update_info['current_name'], update_info['target_name']
                     current_role, target_role = update_info['current_role'], update_info['target_role']
                     
-                    # --- 核心修正：直接使用 source，否则回退 ---
                     source_text = update_info.get('source') or f"(通过{update_info['match_source']}匹配)"
 
                     if current_name != target_name and _contains_chinese(target_name):
@@ -715,7 +771,6 @@ class ActorRoleMapperLogic:
                     
                     if current_role != target_role:
                         actor_display_name = target_name if current_name == target_name else f"[{target_name}]"
-                        # 如果演员名也被修正了，角色日志就不再重复显示来源
                         if current_name != target_name and _contains_chinese(target_name):
                             ui_logger.info(f"       - ✅ 角色名更新: {actor_display_name} '{current_role}' -> '{target_role}'", task_category=task_cat)
                         else:
@@ -782,12 +837,12 @@ class ActorRoleMapperLogic:
     def restore_roles_from_map_task(self, scope: ScheduledTasksTargetScope, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
         根据通用范围和本地映射表，批量恢复演员角色名。
-        新版逻辑：以映射表为驱动，通过 id_map.json 查找 ItemId。
+        新版逻辑：以映射表为驱动，通过 id_map.json 查找 ItemId，并使用全量演员索引加速。
         """
         task_cat = "演员角色映射-批量恢复"
         ui_logger.info(f"🎉 任务启动，范围: {scope.mode}", task_category=task_cat)
 
-        ui_logger.info("➡️ [阶段1/4] 正在加载本地角色映射表...", task_category=task_cat)
+        ui_logger.info("➡️ [阶段1/5] 正在加载本地角色映射表...", task_category=task_cat)
         if not os.path.exists(ACTOR_ROLE_MAP_FILE):
             raise FileNotFoundError("本地角色映射表文件 actor_role_map.json 不存在，请先生成。")
         
@@ -798,7 +853,7 @@ class ActorRoleMapperLogic:
             ui_logger.warning("⚠️ 本地角色映射表为空，任务中止。", task_category=task_cat)
             return
 
-        ui_logger.info("➡️ [阶段2/4] 正在加载 TMDB-Emby ID 映射表...", task_category=task_cat)
+        ui_logger.info("➡️ [阶段2/5] 正在加载 TMDB-Emby ID 映射表...", task_category=task_cat)
         id_map_file = os.path.join('/app/data', 'id_map.json')
         if not os.path.exists(id_map_file):
             ui_logger.error("❌ 关键文件 id_map.json 不存在！请先在“定时任务”页面生成该映射表。", task_category=task_cat)
@@ -807,19 +862,24 @@ class ActorRoleMapperLogic:
             id_map = json.load(f)
         ui_logger.info("   - ❗ 提示：恢复操作将基于您上一次生成的 `id_map.json`。为确保结果准确，建议在恢复前重新生成ID映射表。", task_category=task_cat)
 
-        ui_logger.info("➡️ [阶段3/4] 正在根据范围获取媒体列表...", task_category=task_cat)
+        # --- 新增步骤：构建全量演员索引 ---
+        ui_logger.info("➡️ [阶段3/5] 正在构建全量演员索引...", task_category=task_cat)
+        person_index = self._fetch_all_persons_index()
+        if not person_index:
+            ui_logger.warning("⚠️ 演员索引构建失败，将回退到慢速模式（逐个查询）。", task_category=task_cat)
+
+        ui_logger.info("➡️ [阶段4/5] 正在根据范围获取媒体列表...", task_category=task_cat)
         selector = MediaSelector(self.config)
         media_ids_in_scope = set(selector.get_item_ids(scope))
         if not media_ids_in_scope:
             ui_logger.info("✅ 在指定范围内未找到任何媒体项，任务完成。", task_category=task_cat)
             return
 
-        ui_logger.info("➡️ [阶段4/4] 开始根据处理计划，逐一恢复作品...", task_category=task_cat)
+        ui_logger.info("➡️ [阶段5/5] 开始根据处理计划，逐一恢复作品...", task_category=task_cat)
         total_works_to_process = len(role_map)
         task_manager.update_task_progress(task_id, 0, total_works_to_process)
         processed_works_count = 0
 
-        # --- 核心修改 1: 变量名从 tmdb_id 改为 map_key，并直接使用它查询 id_map ---
         for map_key, map_data in role_map.items():
             if cancellation_event.is_set():
                 ui_logger.warning("⚠️ 任务被用户取消。", task_category=task_cat)
@@ -842,7 +902,8 @@ class ActorRoleMapperLogic:
                 title=title,
                 cancellation_event=cancellation_event,
                 task_id=task_id,
-                task_manager=task_manager
+                task_manager=task_manager,
+                person_index=person_index # 传入索引
             )
 
         ui_logger.info("🎉 批量恢复演员角色任务执行完毕。", task_category=task_cat)
