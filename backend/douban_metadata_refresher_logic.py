@@ -301,7 +301,6 @@ class DoubanMetadataRefresherLogic:
                             'title': new_data.get('title', 'N/A'),
                             'year': new_data.get('year', ''),
                             'genres': new_data.get('genres', []),
-                            'intro': new_data.get('intro', ''),
                             'pic': new_data.get('pic', {}),
                             'actors': [
                                 {

@@ -95,13 +95,14 @@ def scan_douban_directory_task(directory: str, extra_fields: List[str], cancella
 
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
+
+
+            #下方genres后移除简介  'intro': data.get('intro', ''),
             item_data = {
                 'type': media_type,
                 'title': data.get('title', 'N/A'),
                 'year': data.get('year', ''),
                 'genres': data.get('genres', []),
-                'intro': data.get('intro', ''),
                 'pic': data.get('pic', {}),
                 'actors': [
                     {
