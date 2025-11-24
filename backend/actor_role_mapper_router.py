@@ -166,7 +166,7 @@ def restore_single_map(req: SingleMapRequest):
         raise HTTPException(status_code=404, detail=f"在您的 Emby 库中未找到与作品《{title}》匹配的媒体项。请确认 ID 映射表是否为最新。")
 
     task_id = task_manager.register_task(
-        logic.restore_single_map_task,
+        logic.restore_single_map_with_index_task, # --- 核心修改：使用带索引构建的包装函数 ---
         f"恢复演员角色 - {title}",
         item_ids=item_ids,
         role_map=role_map,

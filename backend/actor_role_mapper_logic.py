@@ -793,6 +793,25 @@ class ActorRoleMapperLogic:
                 
                 ui_logger.info(f"     - 🎉 作品《{title}》处理完毕。", task_category=task_cat)
 
+    def restore_single_map_with_index_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        """
+        包装函数：先构建全量索引，再执行单体恢复。
+        用于 /restore-single 接口的后台任务。
+        """
+        # 1. 构建索引
+        person_index = self._fetch_all_persons_index()
+        
+        # 2. 调用核心逻辑
+        self.restore_single_map_task(
+            item_ids=item_ids,
+            role_map=role_map,
+            title=title,
+            cancellation_event=cancellation_event,
+            task_id=task_id,
+            task_manager=task_manager,
+            person_index=person_index
+        )
+
     def update_single_map_file(self, single_map_data: Dict):
         """
         根据传入的单条映射数据，更新本地的 actor_role_map.json 文件。
