@@ -74,10 +74,6 @@
               <el-icon><EditPen /></el-icon>
               <template #title>网盘文件重命名</template>
             </el-menu-item>
-            <el-menu-item index="/file-scraper">
-              <el-icon><DocumentCopy /></el-icon>
-              <template #title>文件刮削器</template>
-            </el-menu-item>
             <el-menu-item index="/media-tagger">
               <el-icon><CollectionTag /></el-icon>
               <template #title>媒体标签器</template>

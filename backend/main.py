@@ -29,7 +29,6 @@ from episode_role_sync_router import router as episode_role_sync_router
 from actor_avatar_mapper_router import router as actor_avatar_mapper_router
 from chasing_center_router import router as chasing_center_router
 from upcoming_router import router as upcoming_router
-from file_scraper_router import router as file_scraper_router
 from media_tagger_router import router as media_tagger_router
 
 from media_selector import MediaSelector
@@ -103,7 +102,6 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
     task_manager.update_task_progress(task_id, 0, total_items)
     ui_logger.info(f"🔍 已获取到 {total_items} 个媒体项实例，正在批量处理...", task_category=task_cat)
 
-    # --- 核心修改 1: 初始化 id_map ---
     id_map = {}
     processed_count = 0
     skipped_count = 0
@@ -128,20 +126,16 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
                 provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
                 tmdb_id = provider_ids_lower.get("tmdb")
                 
-                # --- 核心修改 2: 获取媒体类型并构建新的带前缀的键 ---
-                item_type = details.get("Type") # "Movie" or "Series"
+                item_type = details.get("Type")
                 
                 if tmdb_id and item_type:
                     prefix = 'tv' if item_type == 'Series' else 'movie'
                     map_key = f"{prefix}-{tmdb_id}"
                     
-                    # 初始化键
                     if map_key not in id_map:
                         id_map[map_key] = []
                     
-                    # 追加 Emby ID
                     id_map[map_key].append(item_id)
-                # --- 修改结束 ---
                 else:
                     item_name = details.get("Name", f"ID {item_id}")
                     reason = "缺少 TMDB ID" if not tmdb_id else "缺少媒体类型信息"
@@ -160,10 +154,8 @@ def generate_id_map_task(cancellation_event: threading.Event, task_id: str, task
         with open(ID_MAP_FILE, 'w', encoding='utf-8') as f:
             json.dump(id_map, f, indent=4)
         
-        # --- 核心修改 3: 更新最终的日志输出 ---
         total_emby_ids_mapped = sum(len(v) for v in id_map.values())
         ui_logger.info(f"✅ 映射表生成完毕。共处理 {total_items} 个媒体项，映射 {len(id_map)} 个唯一的 TMDB-ID-类型 组合，关联 {total_emby_ids_mapped} 个Emby媒体项。跳过: {skipped_count} 项, 失败: {failed_count} 项。", task_category=task_cat)
-        # --- 修改结束 ---
     except IOError as e:
         ui_logger.error(f"❌ 写入映射表文件失败: {e}", task_category=task_cat)
         raise e
@@ -177,7 +169,7 @@ async def id_map_update_scheduler():
     
     while True:
         try:
-            await asyncio.sleep(60) # 调度器检查周期
+            await asyncio.sleep(60)
             
             global id_map_update_request_time
             if id_map_update_request_time is None:
@@ -186,19 +178,16 @@ async def id_map_update_scheduler():
             now = time.time()
             silence_duration = now - id_map_update_request_time
             
-            # 检查是否有ID映射任务正在运行
             is_task_running = any("ID 映射表" in task['name'] for task in task_manager.get_all_tasks())
             if is_task_running:
                 logging.info(f"【{task_cat}】⏱️ 检测到已有ID映射表生成任务正在运行，本次调度跳过，等待其完成后再重新计时。")
                 continue
 
-            if silence_duration >= 300: # 300秒 (5分钟) 静默期
+            if silence_duration >= 300:
                 ui_logger.info(f"➡️【{task_cat}】检测到 Webhook 请求已静默 {silence_duration:.1f} 秒 (>=300s)，开始执行 ID 映射表全量更新...", task_category=task_cat)
                 
-                # 触发任务
                 task_manager.register_task(generate_id_map_task, "Webhook触发-ID映射表更新")
                 
-                # 重置计时器
                 with id_map_update_lock:
                     id_map_update_request_time = None
                 logging.info(f"【{task_cat}】✅ 任务已派发，更新请求计时器已重置。")
@@ -211,9 +200,8 @@ async def id_map_update_scheduler():
             break
         except Exception as e:
             logging.error(f"【{task_cat}】运行时发生未知错误: {e}", exc_info=True)
-            await asyncio.sleep(120) # 发生错误时等待更长时间
+            await asyncio.sleep(120)
 
-# backend/main.py (函数替换)
 
 async def library_scan_scheduler():
     """
@@ -225,7 +213,7 @@ async def library_scan_scheduler():
     
     while True:
         try:
-            await asyncio.sleep(60) # 调度器检查周期
+            await asyncio.sleep(60)
             
             now = time.time()
             ready_to_process_tasks = {}
@@ -241,7 +229,7 @@ async def library_scan_scheduler():
                     last_update_time = entry.get('last_update', 0)
                     silence_duration = now - last_update_time
                     
-                    if silence_duration >= 90: # 90秒静默期
+                    if silence_duration >= 90:
                         logging.info(f"   - ✅ 媒体库 (ID: {lib_id}) 条件满足：静默 {silence_duration:.1f} 秒 (>=90s)。准备处理。")
                         ready_to_process_tasks[lib_id] = entry
                         libs_to_pop.append(lib_id)
@@ -249,11 +237,9 @@ async def library_scan_scheduler():
                         remaining_time = 90 - silence_duration
                         logging.info(f"   - ⏱️ 媒体库 (ID: {lib_id}) 静默时长 {silence_duration:.1f} 秒，等待剩余 {remaining_time:.1f} 秒...")
 
-                # 从主队列中安全地弹出这些媒体库
                 for lib_id in libs_to_pop:
                     scan_and_rename_queue.pop(lib_id, None)
 
-            # 在锁外执行耗时任务
             if ready_to_process_tasks:
                 config = app_config.load_app_config()
                 from movie_renamer_logic import MovieRenamerLogic
@@ -268,10 +254,8 @@ async def library_scan_scheduler():
 
                     items_to_rename = entry.get('items_to_rename')
                     
-                    # --- 核心修改：引入按需扫描逻辑 ---
                     should_scan = False
                     if items_to_rename:
-                        # 场景1: 这是由 Webhook 触发的、带重命名任务的流程
                         ui_logger.info(f"➡️ [扫描前置任务] 检测到媒体库【{lib_name}】有 {len(items_to_rename)} 个电影待重命名，开始处理...", task_category=task_cat)
                         
                         renamed_any_file = False
@@ -288,13 +272,11 @@ async def library_scan_scheduler():
                         else:
                             ui_logger.info(f"✅ [扫描决策] 所有待处理电影的文件名均合格，无需为媒体库【{lib_name}】执行扫描。", task_category=task_cat)
                     else:
-                        # 场景2: 这是“纯扫描”请求
                         logging.info(f"【{task_cat}】媒体库【{lib_name}】收到一个纯扫描请求，将直接执行扫描。")
                         should_scan = True
                     
                     if should_scan:
                         renamer_logic._trigger_library_scan(lib_id, lib_name, task_cat)
-                    # --- 修改结束 ---
 
         except asyncio.CancelledError:
             logging.info(f"【{task_cat}】收到关闭信号，正在退出...")
@@ -312,7 +294,7 @@ async def episode_sync_scheduler():
     
     while True:
         try:
-            await asyncio.sleep(60) # 调度器检查周期
+            await asyncio.sleep(60)
             
             now = time.time()
             series_to_process = {}
@@ -337,17 +319,15 @@ async def episode_sync_scheduler():
                         ready_series_ids.append(series_id)
                     elif is_silent_enough and not is_main_task_done:
                         logging.info(f"   - ⏱️ 剧集《{series_name}》 (ID: {series_id}) 已满足静默条件，但其主流程任务（如演员中文化）尚未完成，继续等待...")
-                    else: # not silent enough
+                    else:
                         remaining_time = 90 - silence_duration
                         logging.info(f"   - ⏱️ 剧集《{series_name}》 (ID: {series_id}) 静默时长 {silence_duration:.1f} 秒，等待剩余 {remaining_time:.1f} 秒...")
 
-                # 从主队列和完成标记中安全地弹出这些剧集的数据
                 for series_id in ready_series_ids:
                     series_to_process[series_id] = episode_sync_queue.pop(series_id)
                     if series_id in main_task_completed_series:
                         main_task_completed_series.remove(series_id)
 
-            # 在锁外执行耗时任务
             if series_to_process:
                 ui_logger.info(f"➡️ {len(series_to_process)} 个剧集已满足所有条件，开始派发精准同步任务...", task_category=task_cat)
                 config = app_config.load_app_config()
@@ -378,7 +358,6 @@ webhook_queue = asyncio.Queue()
 webhook_processing_set = set()
 
 async def webhook_worker():
-    # Webhook 日志已在 webhook_logic.py 中处理，此处保留底层日志
     logging.info("【Webhook工作者】已启动，等待处理任务...")
     while True:
         try:
@@ -567,14 +546,12 @@ def trigger_scheduled_task(task_id: str):
         "episode_renamer": "剧集文件重命名",
         "movie_renamer": "电影文件重命名",
         "episode_role_sync": "剧集角色同步到分集",
-        # --- 新增行 ---
         "id_mapper": "TMDB-Emby ID 映射表"
     }
     task_display_name = task_name_map.get(task_id, task_id)
     task_cat = f"定时任务-{task_display_name}"
     ui_logger.info(f"开始执行定时任务...", task_category=task_cat)
     
-    # --- 核心修改：ID映射任务不依赖通用范围 ---
     if task_id == "id_mapper":
         task_manager.register_task(generate_id_map_task, f"定时任务-{task_display_name}")
         return
@@ -689,7 +666,6 @@ def trigger_upcoming_notification():
     ui_logger.info("开始执行订阅列表通知任务...", task_category=task_cat)
     from upcoming_logic import UpcomingLogic
     logic = UpcomingLogic(config)
-    # 这是一个快速任务，直接在主线程执行，不注册到 task_manager
     logic.check_and_notify()
 
 def trigger_calendar_notification():
@@ -724,9 +700,7 @@ def update_chasing_scheduler():
     ui_logger.info("【调度任务】检测到追更中心配置变更，正在更新调度器...", task_category=task_cat)
     config = app_config.load_app_config()
     
-    # 每日维护任务 (内置，不可配置)
     job_id_workflow = "chasing_workflow_daily"
-    # --- 修改 ---
     if config.chasing_center_config.enabled and config.chasing_center_config.maintenance_cron:
         try:
             scheduler.add_job(
@@ -738,12 +712,10 @@ def update_chasing_scheduler():
             ui_logger.info(f"  - 已更新每日追更维护任务 (CRON: {config.chasing_center_config.maintenance_cron})", task_category=task_cat)
         except Exception as e:
             ui_logger.error(f"  - ❌ 更新每日追更维护任务失败: {e}", task_category=task_cat)
-    # --- 修改结束 ---
     elif scheduler.get_job(job_id_workflow):
         scheduler.remove_job(job_id_workflow)
         ui_logger.info(f"  - 已禁用并移除每日追更维护任务。", task_category=task_cat)
 
-    # 日历通知任务 (可配置)
     job_id_calendar = "chasing_calendar_notification"
     if config.chasing_center_config.enabled and config.chasing_center_config.notification_cron:
         try:
@@ -767,7 +739,6 @@ def update_upcoming_scheduler():
     ui_logger.info("【调度任务】检测到即将上映功能配置变更，正在更新调度器...", task_category=task_cat)
     config = app_config.load_app_config()
     
-    # --- 新增：清理任务的逻辑 ---
     from upcoming_logic import UpcomingLogic
     logic = UpcomingLogic(config)
 
@@ -779,9 +750,7 @@ def update_upcoming_scheduler():
             return
         ui_logger.info("开始执行订阅列表过期项目清理任务...", task_category=task_cat_prune)
         logic.prune_expired_items()
-    # --- 新增结束 ---
 
-    # 订阅通知任务
     job_id_notify = "upcoming_notification"
     if config.upcoming_config.enabled and config.upcoming_config.notification_cron:
         try:
@@ -798,7 +767,6 @@ def update_upcoming_scheduler():
         scheduler.remove_job(job_id_notify)
         ui_logger.info(f"  - 已禁用并移除订阅通知任务。", task_category=task_cat)
 
-    # --- 新增：清理任务的调度 ---
     job_id_prune = "upcoming_pruning"
     if config.upcoming_config.enabled and config.upcoming_config.pruning_cron:
         try:
@@ -814,21 +782,16 @@ def update_upcoming_scheduler():
     elif scheduler.get_job(job_id_prune):
         scheduler.remove_job(job_id_prune)
         ui_logger.info(f"  - 已禁用并移除过期项目清理任务。", task_category=task_cat)
-    # --- 新增结束 ---
 
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global episode_sync_scheduler_task, id_map_update_scheduler_task # 声明我们要修改全局变量
+    global episode_sync_scheduler_task, id_map_update_scheduler_task
     task_cat = "系统启动"
-    # --- 核心修改 1: 初始化日志系统，但不包括 WebSocket 处理器 ---
-    # 这是为了让日志系统在应用启动的最早期就能工作
     from log_manager import setup_logging, WebSocketLogHandler
     setup_logging(add_websocket_handler=False)
     
-    # --- 核心修改 2: 在主线程（lifespan内）创建并添加 WebSocket 处理器 ---
-    # 此时 get_running_loop() 一定能成功
     websocket_handler = WebSocketLogHandler()
     logging.getLogger().addHandler(websocket_handler)
     ui_logger.info("应用启动...", task_category=task_cat)
@@ -838,13 +801,10 @@ async def lifespan(app: FastAPI):
             ui_logger.warning(f"【启动检查】未找到 '{tool}' 命令，视频截图功能将不可用。请确保已在 Docker 环境或主机上安装 ffmpeg。", task_category=task_cat)
     task_manager_consumer = asyncio.create_task(task_manager.broadcast_consumer())
     webhook_worker_task = asyncio.create_task(webhook_worker())
-    # --- 新增 ---
     episode_sync_scheduler_task = asyncio.create_task(episode_sync_scheduler())
-    # --- 新增：启动ID映射表更新调度器 ---
     id_map_update_scheduler_task = asyncio.create_task(id_map_update_scheduler())
 
     library_scan_scheduler_task = asyncio.create_task(library_scan_scheduler())
-    # --- 新增结束 ---
 
     config = app_config.load_app_config()
     
@@ -930,12 +890,10 @@ async def lifespan(app: FastAPI):
 
     webhook_worker_task.cancel()
     task_manager_consumer.cancel()
-    # --- 新增 ---
     if episode_sync_scheduler_task:
         episode_sync_scheduler_task.cancel()
     if id_map_update_scheduler_task:
         id_map_update_scheduler_task.cancel()
-    # --- 新增：取消媒体库扫描调度器 ---
     if library_scan_scheduler_task:
         library_scan_scheduler_task.cancel()
     await asyncio.gather(
@@ -943,10 +901,9 @@ async def lifespan(app: FastAPI):
         task_manager_consumer, 
         episode_sync_scheduler_task, 
         id_map_update_scheduler_task, 
-        library_scan_scheduler_task, # 添加到 gather
+        library_scan_scheduler_task,
         return_exceptions=True
     )
-    # --- 修改结束 ---
     logging.info("所有后台任务已成功取消。")
 
 app = FastAPI(lifespan=lifespan)
@@ -968,7 +925,6 @@ app.include_router(episode_role_sync_router, prefix="/api/episode-role-sync")
 app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper")
 app.include_router(chasing_center_router, prefix="/api/chasing-center")
 app.include_router(upcoming_router, prefix="/api/upcoming")
-app.include_router(file_scraper_router, prefix="/api/file-scraper")
 app.include_router(media_tagger_router, prefix="/api/media-tagger")
 
 from models import TraktConfig
@@ -1003,8 +959,7 @@ def test_trakt_api(config: TraktConfig):
     temp_app_config.trakt_config = config
     trakt_manager = TraktManager(temp_app_config)
     
-    # 使用一个常见的 TMDB ID 进行测试
-    test_tmdb_id = "1399" # Game of Thrones
+    test_tmdb_id = "1399"
     result = trakt_manager.get_show_seasons_with_episodes(test_tmdb_id)
     
     if result is not None:
@@ -1025,7 +980,6 @@ async def image_proxy(url: str):
     try:
         config = app_config.load_app_config()
         proxy_manager = ProxyManager(config)
-        # --- 核心修正：使用 mounts 参数 ---
         mounts = proxy_manager.get_proxies_for_httpx(url)
 
         headers = {
@@ -1036,7 +990,6 @@ async def image_proxy(url: str):
 
         async with httpx.AsyncClient(mounts=mounts or {}, follow_redirects=True) as client:
             req = await client.get(url, headers=headers, timeout=20)
-        # --- 修正结束 ---
             req.raise_for_status()
 
         content_type = req.headers.get('Content-Type', 'image/jpeg')
@@ -1089,12 +1042,10 @@ async def emby_image_proxy(path: str):
         full_url = f"{server_conf.server}/{path_with_auth}"
         
         proxy_manager = ProxyManager(config)
-        # --- 核心修正：使用 mounts 参数 ---
         mounts = proxy_manager.get_proxies_for_httpx(full_url)
 
         async with httpx.AsyncClient(mounts=mounts or {}, follow_redirects=True) as client:
             req = await client.get(full_url, timeout=20)
-        # --- 修正结束 ---
         
         req.raise_for_status()
         
@@ -1138,7 +1089,6 @@ def save_server_config_api(server_config: ServerConfig):
         logging.info("正在测试并保存 Emby 服务器配置...")
         current_app_config = app_config.load_app_config()
         
-        # --- 核心修改：使用新的 ProxyManager ---
         test_url = f"{server_config.server}/Users/{server_config.user_id}"
         proxy_manager = ProxyManager(current_app_config)
         proxies = proxy_manager.get_proxies(test_url)
@@ -1147,7 +1097,6 @@ def save_server_config_api(server_config: ServerConfig):
             logging.info(f"【连接测试】将通过代理 {proxies.get('http')} 连接 Emby 服务器。")
         else:
             logging.info("【连接测试】将直接连接 Emby 服务器。")
-        # --- 结束修改 ---
 
         params = {"api_key": server_config.api_key}
         response = requests.get(test_url, params=params, timeout=15, proxies=proxies)
@@ -1156,10 +1105,8 @@ def save_server_config_api(server_config: ServerConfig):
         if not user_data.get("Name"): raise ValueError("服务器响应异常，未找到有效的用户信息。")
         
         system_info_url = f"{server_config.server}/System/Info"
-        # --- 核心修改：为第二个请求也应用代理逻辑 ---
         proxies_system = proxy_manager.get_proxies(system_info_url)
         response_system = requests.get(system_info_url, params=params, timeout=15, proxies=proxies_system)
-        # --- 结束修改 ---
         
         response_system.raise_for_status()
         system_info = response_system.json()
@@ -1186,9 +1133,7 @@ def save_download_config_api(download_config: DownloadConfig):
 @app.post("/api/config/proxy")
 def save_proxy_config_api(proxy_config: ProxyConfig):
     try:
-        # --- 核心修改：使用 ui_logger 发送中文日志给前端 ---
         ui_logger.info("正在保存网络代理设置...", task_category="系统配置")
-        # --- 使用 logging.debug 记录详细的技术日志到后端 ---
         logging.debug(f"接收到的代理配置原始数据: {proxy_config.model_dump_json()}")
         
         if proxy_config.url and not (proxy_config.url.startswith("http://") or proxy_config.url.startswith("https://")):
@@ -1198,7 +1143,6 @@ def save_proxy_config_api(proxy_config: ProxyConfig):
         current_app_config.proxy_config = proxy_config
         app_config.save_app_config(current_app_config)
         
-        # --- 核心修改：使用 ui_logger 发送中文成功日志给前端 ---
         ui_logger.info("代理设置保存成功！", task_category="系统配置")
         
         return {"success": True, "message": "代理设置已保存！"}
@@ -1208,7 +1152,7 @@ def save_proxy_config_api(proxy_config: ProxyConfig):
 
 @app.post("/api/config/proxy/test")
 def test_proxy_config_api(proxy_config: ProxyConfig):
-    task_cat = "代理测试" # --- 定义任务类别 ---
+    task_cat = "代理测试"
     if not proxy_config.enabled:
         ui_logger.info("代理未启用，跳过测试。", task_category=task_cat)
         return {"success": True, "message": "代理未启用，无需测试。"}
@@ -1367,7 +1311,6 @@ def get_logs_api(
     
 
     if not os.path.exists(log_file_path):
-        # 如果文件不存在，直接返回空结果，避免后续错误
         return {"total": 0, "logs": [], "totalPages": 0, "currentPage": page}
 
     try:
@@ -1396,7 +1339,6 @@ def get_logs_api(
         if current_log_entry:
             parsed_logs.append(current_log_entry)
 
-        # --- 核心修改 2: 过滤逻辑保持不变，但作用于单个日志文件 ---
         filtered_logs = []
         if level != "ALL":
             level_to_match = level.upper()
@@ -1414,12 +1356,9 @@ def get_logs_api(
         total_logs = len(final_filtered_logs)
         total_pages = (total_logs + page_size - 1) // page_size
         
-        # --- 核心修改 3: 分页逻辑保持不变，但现在是倒序分页 ---
-        # 最新的日志在最前面
         start_index = (page - 1) * page_size
         end_index = start_index + page_size
         
-        # 从反转后的列表（最新的在前）中切片
         paginated_logs = final_filtered_logs[::-1][start_index:end_index]
             
         return {"total": total_logs, "logs": paginated_logs, "totalPages": total_pages, "currentPage": page}
@@ -1439,25 +1378,19 @@ def get_log_dates_api():
             logging.warning(f"⚠️ 日志目录 '{LOGS_DIR}' 不存在，无法获取历史日期。")
             return []
 
-        # 检查当天的日志是否存在
         if os.path.exists(os.path.join(LOGS_DIR, "app.log")):
             today_str = datetime.now().strftime('%Y-%m-%d')
             dates.append(today_str)
 
-        # 扫描历史日志文件
         for filename in os.listdir(LOGS_DIR):
             if filename.startswith("app.log."):
-                # 文件名格式为 app.log.YYYY-MM-DD
                 date_part = filename.split('.')[-1]
                 try:
-                    # 验证日期格式是否正确
                     datetime.strptime(date_part, '%Y-%m-%d')
                     dates.append(date_part)
                 except ValueError:
-                    # 忽略格式不正确的文件
                     continue
         
-        # 按日期降序排序，最新的日期在最前面
         dates.sort(reverse=True)
         return dates
     except Exception as e:
@@ -1478,7 +1411,6 @@ def get_log_categories_api():
 
         log_pattern = re.compile(r"-\s+(.+?)\s+→")
 
-        # --- 核心修改：遍历日志目录下的所有 app.log* 文件 ---
         for filename in os.listdir(LOGS_DIR):
             if filename.startswith("app.log"):
                 file_path = os.path.join(LOGS_DIR, filename)
@@ -1487,21 +1419,17 @@ def get_log_categories_api():
                         for line in f:
                             match = log_pattern.search(line)
                             if match:
-                                # strip() 用于去除可能存在的前后空格
                                 categories.add(match.group(1).strip())
                 except Exception as file_error:
                     logging.error(f"❌ 读取日志文件 '{file_path}' 时出错: {file_error}")
-                    # 单个文件读取失败不应中断整个流程
                     continue
         
-        # 返回排序后的列表以保证前端显示顺序稳定
         return sorted(list(categories))
     except Exception as e:
         logging.error(f"❌ 扫描日志类别失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"扫描日志类别失败: {e}")
     
 
-# backend/main.py (函数替换)
 
 @app.delete("/api/logs")
 def clear_logs_api():
@@ -1510,11 +1438,8 @@ def clear_logs_api():
     try:
         root_logger = logging.getLogger()
         
-        # --- 核心修改 1: 只关闭和移除文件处理器 ---
-        # 遍历处理器列表的一个副本，因为我们会在循环中修改原列表
         handlers_to_remove = []
         for handler in root_logger.handlers:
-            # 通过检查 handler 的类型来精确识别文件处理器
             if isinstance(handler, logging.handlers.TimedRotatingFileHandler):
                 handlers_to_remove.append(handler)
 
@@ -1522,9 +1447,7 @@ def clear_logs_api():
             handler.close()
             root_logger.removeHandler(handler)
         
-        # --- 文件删除逻辑保持不变 ---
         if not os.path.exists(LOGS_DIR):
-            # 即使目录不存在，也应该重新添加文件处理器
             pass
         else:
             cleared_count = 0
@@ -1538,8 +1461,6 @@ def clear_logs_api():
                         logging.error(f"❌ 删除日志文件 '{file_path}' 失败: {e}", exc_info=True)
             logging.info(f"✅ 日志已清空，共删除 {cleared_count} 个日志文件。")
 
-        # --- 核心修改 2: 只重新添加文件处理器 ---
-        # 创建一个新的文件处理器并添加到根 logger
         log_file_path = os.path.join(LOGS_DIR, "app.log")
         file_handler = logging.handlers.TimedRotatingFileHandler(
             log_file_path, 
@@ -1548,7 +1469,6 @@ def clear_logs_api():
             backupCount=14, 
             encoding='utf-8'
         )
-        # 需要从 log_manager 导入 CustomLogFormatter
         from log_manager import CustomLogFormatter
         file_handler.setFormatter(CustomLogFormatter())
         root_logger.addHandler(file_handler)
@@ -1560,7 +1480,6 @@ def clear_logs_api():
         ui_logger.error(f"❌ 清空日志文件时发生未知错误: {e}", task_category="日志管理", exc_info=True)
         raise HTTPException(status_code=500, detail=f"清空日志失败: {e}")
     
-# backend/main.py (函数替换)
 
 @app.get("/api/media/libraries")
 def get_libraries_api():
@@ -1578,21 +1497,15 @@ def get_libraries_api():
         response.raise_for_status()
         views = response.json().get("Items", [])
 
-        # --- 核心修改：增加健壮性，并添加调试日志 ---
-        # 临时调试日志，用于观察所有返回的视图及其类型
         for v in views:
             logging.debug(f"【媒体库API调试】找到视图: \"{v.get('Name')}\", CollectionType: \"{v.get('CollectionType')}\", Type: \"{v.get('Type')}\"")
 
-        # 更健壮的媒体库识别逻辑：
-        # 1. CollectionType 在我们的白名单中
-        # 2. 或者，它的 Type 是 'CollectionFolder' (这是媒体库的根本类型)
         valid_collection_types = ["movies", "tvshows", "homevideos", "music", "mixed"]
         libraries = [
             {"id": v["Id"], "name": v["Name"]} 
             for v in views 
             if v.get("CollectionType") in valid_collection_types or v.get("Type") == "CollectionFolder"
         ]
-        # --- 修改结束 ---
         
         logging.info(f"成功获取到 {len(libraries)} 个媒体库。")
         return libraries
@@ -1609,10 +1522,8 @@ def search_media_api(query: MediaSearchQuery):
     url = f"{server_conf.server}/Users/{server_conf.user_id}/Items"
     params = {"api_key": server_conf.api_key, "Recursive": "true", "IncludeItemTypes": "Movie,Series", "SearchTerm": query.query, "Fields": "ProviderIds,ProductionYear,Genres"}
     try:
-        # --- 核心修改：使用新的 ProxyManager ---
         proxy_manager = ProxyManager(config)
         proxies = proxy_manager.get_proxies(url)
-        # --- 结束修改 ---
 
         response = requests.get(url, params=params, timeout=20, proxies=proxies)
         response.raise_for_status()
@@ -1622,10 +1533,8 @@ def search_media_api(query: MediaSearchQuery):
                 item_url = f"{server_conf.server}/Users/{server_conf.user_id}/Items/{query.query}"
                 item_params = { "api_key": server_conf.api_key, "Fields": "ProviderIds,ProductionYear,Genres" }
                 
-                # --- 核心修改：为第二个请求也应用代理逻辑 ---
                 proxies_item = proxy_manager.get_proxies(item_url)
                 item_resp = requests.get(item_url, params=item_params, timeout=10, proxies=proxies_item)
-                # --- 结束修改 ---
 
                 if item_resp.ok: items = [item_resp.json()]
             except Exception: pass
@@ -1644,10 +1553,8 @@ def debug_get_item_details(item_id: str):
     url = f"{server_conf.server}/Users/{server_conf.user_id}/Items/{item_id}"
     params = {"api_key": server_conf.api_key}
     try:
-        # --- 核心修改：使用新的 ProxyManager ---
         proxy_manager = ProxyManager(config)
         proxies = proxy_manager.get_proxies(url)
-        # --- 结束修改 ---
 
         response = requests.get(url, params=params, timeout=20, proxies=proxies)
         response.raise_for_status()
@@ -1807,7 +1714,6 @@ def apply_actor_changes_api(req: ActorLocalizerApplyRequest):
     )
     return {"status": "success", "message": "应用演员中文化任务已启动", "task_id": task_id}
 
-# backend/main.py (修改 apply_actor_changes_directly_api 函数)
 
 @app.post("/api/actor-localizer/apply-directly")
 def apply_actor_changes_directly_api():
@@ -1822,7 +1728,7 @@ def apply_actor_changes_directly_api():
         logic.apply_actor_changes_directly_task,
         task_name,
         config.actor_localizer_config,
-        task_category=task_name # 传递 task_category
+        task_category=task_name
     )
     return {"status": "success", "message": "自动应用任务已启动", "task_id": task_id}
 
@@ -1879,7 +1785,6 @@ def update_roles(req: UpdateRolesRequest):
         config = app_config.load_app_config()
         logic = ActorLocalizerLogic(config)
         
-        # --- 核心修改：先获取旧数据进行对比 ---
         ui_logger.info(f"➡️ 收到对媒体 (ID: {req.item_id}) 的角色更新请求，正在获取当前数据...", task_category=task_cat)
         full_item_json = logic._get_item_details(req.item_id, full_json=True)
         if not full_item_json:
@@ -1887,12 +1792,9 @@ def update_roles(req: UpdateRolesRequest):
         
         original_people = full_item_json.get('People', [])
         
-        # 简单对比：直接比较两个列表是否相等。
-        # 注意：这要求前端发送的 people 对象结构与Emby返回的完全一致。
         if original_people == req.people:
             ui_logger.info(f"✅ 检测到角色列表无任何变更，无需更新。", task_category=task_cat)
             return {"success": True, "message": "角色列表无任何变更，无需更新。"}
-        # --- 修改结束 ---
 
         ui_logger.info(f"🔍 检测到角色列表存在变更，正在应用到 Emby...", task_category=task_cat)
         full_item_json['People'] = req.people
@@ -2019,7 +1921,6 @@ def backup_screenshots_api(req: ScreenshotBackupRequest):
     ui_logger.info(f"收到截图备份请求，范围: {req.scope.mode}", task_category=task_cat)
     
     config = app_config.load_app_config()
-    # 使用请求中临时的配置
     config.episode_refresher_config = req.config
     
     selector = MediaSelector(config)
@@ -2047,7 +1948,6 @@ def backup_screenshots_to_github_api(req: GitHubBackupRequest):
     ui_logger.info(f"收到备份截图到 GitHub 的请求...", task_category=task_cat)
     
     config = app_config.load_app_config()
-    # 使用请求中临时的配置
     config.episode_refresher_config = req.config
     
     logic = EpisodeRefresherLogic(config)
@@ -2093,15 +1993,13 @@ def save_telegram_config_api(config: TelegramConfig):
 @app.post("/api/notification/test-telegram")
 def test_telegram_api(config: TelegramConfig):
     """测试发送一条 Telegram 消息"""
-    # --- 核心修改：加载完整配置，并将临时测试配置覆盖上去 ---
     current_app_config = app_config.load_app_config()
-    current_app_config.telegram_config = config # 使用用户正在测试的配置
+    current_app_config.telegram_config = config
     
     raw_message = "🎉 这是一条来自 Emby-Toolkit 的测试消息！\n如果能看到我，说明您的通知配置正确无误。"
     test_message = escape_markdown(raw_message)
     
     result = notification_manager.send_telegram_message(test_message, current_app_config)
-    # --- 修改结束 ---
     if result["success"]:
         return result
     else:
@@ -2148,7 +2046,6 @@ def precise_upload_from_local_api(req: PreciseScreenshotUpdateRequest):
     ui_logger.info(f"收到对剧集《{req.series_name}》的精准上传请求...", task_category=task_cat)
     
     config = app_config.load_app_config()
-    # 使用请求中临时的配置
     config.episode_refresher_config = req.config
     
     logic = EpisodeRefresherLogic(config)
@@ -2207,7 +2104,6 @@ def cleanup_github_screenshots_api():
     )
     return {"status": "success", "message": "清理任务已启动。", "task_id": task_id}
 
-# backend/main.py (新增路由)
 
 class ScreenshotRestoreRequest(BaseModel):
     scope: ScheduledTasksTargetScope
@@ -2277,7 +2173,6 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
                 if series_id and series_name:
                     ui_logger.info(f"  - [分集流程] 成功找到所属剧集: 【{series_name}】 (ID: {series_id})", task_category=task_cat)
                     
-                    # --- 核心新增：事件收集逻辑 ---
                     with episode_sync_queue_lock:
                         if series_id not in episode_sync_queue:
                             episode_sync_queue[series_id] = {
@@ -2292,9 +2187,7 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
                         
                         queue_size = len(episode_sync_queue[series_id]["episode_ids"])
                         ui_logger.info(f"    - [收集器] 已将分集 {episode_id} 添加到队列。剧集《{series_name}》当前待同步分集数: {queue_size}。静默倒计时已重置。", task_category=task_cat)
-                    # --- 核心新增结束 ---
 
-                    # 主流程依然只处理剧集ID
                     target_item_id = series_id
                     target_item_name = series_name
                 else:

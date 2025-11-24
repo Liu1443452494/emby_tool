@@ -1,4 +1,3 @@
-# backend/actor_avatar_mapper_router.py (新文件)
 
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
@@ -22,7 +21,7 @@ def get_logic() -> ActorAvatarMapperLogic:
 def get_map():
     """获取本地的演员头像映射表内容"""
     if not os.path.exists(ACTOR_AVATAR_MAP_FILE):
-        return {} # 如果文件不存在，返回空对象是正常的
+        return {}
     try:
         with open(ACTOR_AVATAR_MAP_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)

@@ -1,4 +1,3 @@
-# backend/actor_avatar_mapper_logic.py (新文件)
 
 import logging
 import os
@@ -19,11 +18,9 @@ from task_manager import TaskManager
 from media_selector import MediaSelector
 from proxy_manager import ProxyManager
 
-# --- 新增常量 ---
 ACTOR_AVATAR_MAP_FILE = os.path.join('/app/data', 'actor_avatar_map.json')
 ACTOR_AVATAR_MAP_LOCK_FILE = ACTOR_AVATAR_MAP_FILE + ".lock"
 GITHUB_AVATAR_MAP_PATH = "database/actor_avatar_map.json"
-# --- 新增结束 ---
 
 class ActorAvatarMapperLogic:
     def __init__(self, config: AppConfig):
@@ -47,7 +44,6 @@ class ActorAvatarMapperLogic:
         session.mount("http://", adapter)
         return session
 
-    # backend/actor_avatar_mapper_logic.py (函数替换)
 
     def save_avatar_choice_to_map(self, tmdb_person_id: int, image_info: Dict[str, Any]):
         """
@@ -55,9 +51,7 @@ class ActorAvatarMapperLogic:
         这是一个核心的"记忆"功能。
         """
         task_cat = "演员头像映射-保存"
-        # --- 新增 ---
         ui_logger.debug(f"➡️ [调试-后端] 步骤8: 进入最终保存函数。接收到 tmdb_person_id: {tmdb_person_id}", task_category=task_cat)
-        # --- 新增结束 ---
         if not tmdb_person_id:
             ui_logger.warning("⚠️ 缺少 TMDB Person ID，无法保存头像选择。", task_category=task_cat)
             return
@@ -72,7 +66,6 @@ class ActorAvatarMapperLogic:
                 else:
                     full_map = {}
                 
-                # 更新或创建条目
                 full_map[str(tmdb_person_id)] = {
                     "actor_name": image_info.get("actor_name", "未知演员"),
                     "source": image_info.get("source"),
@@ -156,7 +149,7 @@ class ActorAvatarMapperLogic:
         执行 GitHub 写入操作，并增加了针对网络错误的重试逻辑。
         """
         max_retries = 3
-        retry_delay = 5  # seconds
+        retry_delay = 5
         for attempt in range(max_retries):
             try:
                 return self._execute_github_write_request(method, url, pat, payload)
@@ -209,9 +202,7 @@ class ActorAvatarMapperLogic:
             if sha:
                 payload["sha"] = sha
             
-            # --- 核心修改：调用新的基于 curl 的上传方法 ---
             self._execute_github_write_request_with_retry("PUT", api_url, self.github_config.personal_access_token, payload, task_cat=task_cat)
-            # --- 修改结束 ---
             
             ui_logger.info("✅ 上传成功！演员头像映射表已同步到 GitHub 仓库。", task_category=task_cat)
 
@@ -262,7 +253,6 @@ class ActorAvatarMapperLogic:
 
         ui_logger.info(f"🎉 任务启动，准备为演员【{actor_name}】(TMDB ID: {tmdb_id_to_find})恢复头像...", task_category=task_cat)
 
-        # 1. 获取范围内的所有演员
         ui_logger.info("➡️ [阶段1/3] 正在根据范围获取媒体列表...", task_category=task_cat)
         selector = MediaSelector(self.config)
         media_ids_in_scope = selector.get_item_ids(scope)
@@ -282,7 +272,6 @@ class ActorAvatarMapperLogic:
                     people = future.result().get("People", [])
                     for person in people:
                         if person.get('Type') == 'Actor':
-                            # 为每个演员获取其 ProviderIds
                             person_details = selector._get_emby_item_details(person['Id'], "ProviderIds")
                             provider_ids = person_details.get("ProviderIds", {})
                             provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
@@ -302,7 +291,6 @@ class ActorAvatarMapperLogic:
             ui_logger.error(f"❌ 在指定范围内未能找到 TMDB ID 为 {tmdb_id_to_find} 的演员【{actor_name}】。", task_category=task_cat)
             return
 
-        # 3. 执行恢复
         ui_logger.info("➡️ [阶段3/3] 演员已定位，开始执行恢复...", task_category=task_cat)
         from actor_gallery_logic import ActorGalleryLogic
         from tmdb_logic import TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES
@@ -326,7 +314,6 @@ class ActorAvatarMapperLogic:
         task_cat = "演员头像映射-批量恢复"
         ui_logger.info(f"🎉 任务启动，范围: {scope.mode}，开始批量恢复演员头像...", task_category=task_cat)
 
-        # 1. 加载本地映射表
         ui_logger.info("➡️ [阶段1/5] 正在加载本地头像映射表...", task_category=task_cat)
         if not os.path.exists(ACTOR_AVATAR_MAP_FILE):
             raise FileNotFoundError("本地演员头像映射表文件 actor_avatar_map.json 不存在。")
@@ -338,7 +325,6 @@ class ActorAvatarMapperLogic:
             ui_logger.warning("⚠️ 本地头像映射表为空，任务中止。", task_category=task_cat)
             return
 
-        # 2. 获取目标媒体项
         ui_logger.info("➡️ [阶段2/5] 正在根据范围获取媒体列表...", task_category=task_cat)
         selector = MediaSelector(self.config)
         media_ids_in_scope = selector.get_item_ids(scope)
@@ -346,7 +332,6 @@ class ActorAvatarMapperLogic:
             ui_logger.info("✅ 在指定范围内未找到任何媒体项，任务完成。", task_category=task_cat)
             return
 
-        # 3. 获取所有媒体项下的所有演员
         ui_logger.info(f"➡️ [阶段3/5] 已获取 {len(media_ids_in_scope)} 个媒体项，开始并发获取所有演员信息...", task_category=task_cat)
         
         all_actors_to_check = []
@@ -379,7 +364,6 @@ class ActorAvatarMapperLogic:
         
         ui_logger.info(f"   - 演员详细信息获取完毕，共成功获取 {len(unique_actors_with_details)} 位演员的详情。", task_category=task_cat)
 
-        # 5. 匹配并执行恢复
         ui_logger.info("➡️ [阶段5/5] 开始匹配映射表并恢复头像...", task_category=task_cat)
         total_actors = len(unique_actors_with_details)
         task_manager.update_task_progress(task_id, 0, total_actors)
@@ -417,7 +401,7 @@ class ActorAvatarMapperLogic:
 
                     if image_source == 'tmdb':
                         image_url = f"{TMDB_IMAGE_BASE_URL}{TMDB_IMAGE_SIZES['original']}{image_path}"
-                    else: # douban
+                    else:
                         image_url = image_path
                     
                     if gallery_logic.upload_image_from_url(actor['Id'], image_url, source=image_source):

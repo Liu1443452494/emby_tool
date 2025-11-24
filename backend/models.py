@@ -1,7 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Literal, List, Optional, Dict, Any
 
-# --- 基础配置模型 ---
 
 class ProxyRule(BaseModel):
     """单条自定义代理规则"""
@@ -16,15 +15,12 @@ class ProxyConfig(BaseModel):
     
     mode: Literal['whitelist', 'blacklist'] = Field(default='blacklist', description="代理模式：whitelist-仅代理勾选的, blacklist-代理所有但排除勾选的")
     
-    # 内置规则的启用状态
     target_tmdb: bool = Field(default=False, description="内置规则：TMDB")
     target_douban: bool = Field(default=True, description="内置规则：豆瓣")
     target_emby: bool = Field(default=True, description="内置规则：Emby")
     
-    # 自定义规则列表
     custom_rules: List[ProxyRule] = Field(default_factory=list, description="用户自定义代理规则列表")
     
-    # 高级排除列表
     exclude: str = Field(default="", description="代理排除列表，逗号分隔 (高级)")
 
 DownloadBehavior = Literal["skip", "overwrite"]
@@ -167,12 +163,10 @@ class EpisodeRefresherConfig(BaseModel):
         description="当TMDB和Emby均无图片时，是否尝试从视频文件截图"
     )
     
-    # 新增：截图缓存模式
     screenshot_cache_mode: Literal['none', 'local', 'remote'] = Field(
         default='local',
         description="截图与缓存模式: 'none'-无缓存, 'local'-本地缓存, 'remote'-远程图床"
     )
-    # 兼容旧版，后续在 config.py 中迁移
     local_screenshot_caching_enabled: Optional[bool] = Field(
         default=None, 
         description="[已废弃] 是否启用本地截图缓存"
@@ -220,10 +214,8 @@ class EpisodeRefresherConfig(BaseModel):
         description="从Emby备份截图到本地时，是否覆盖本地已有的同名文件"
     )
     
-    # 新增：GitHub 配置
     github_config: GitHubCacheConfig = Field(default_factory=GitHubCacheConfig)
 
-# --- 核心修改结束 ---
 
 
 class EpisodeRenamerConfig(BaseModel):
@@ -235,9 +227,7 @@ class EpisodeRenamerConfig(BaseModel):
 
 class GitHubRepoState(BaseModel):
     """记录单个GitHub仓库的状态"""
-    # --- 修改 ---
     size_bytes: int = Field(default=0, description="该仓库已用空间大小，单位Bytes")
-    # --- 修改结束 ---
     last_checked: str = Field(default="", description="上次更新此状态的ISO 8601格式时间戳")
 
 class GitHubRepo(BaseModel):
@@ -258,7 +248,6 @@ class PosterManagerConfig(BaseModel):
     overwrite_on_restore: bool = Field(default=False, description="全局开关，决定恢复时是否覆盖Emby上已存在的图片")
     restore_mode: Literal['standard', 'from_remote'] = Field(default='standard', description="恢复模式: 'standard' - 标准模式, 'from_remote' - 从远程备份反向恢复")
     github_repos: List[GitHubRepo] = Field(default_factory=list, description="仓库列表，顺序即代表优先级")
-# --- 结束新增 ---
     
 
 class ScheduledTaskItem(BaseModel):
@@ -357,13 +346,6 @@ class EpisodeRoleSyncConfig(BaseModel):
     actor_limit: int = Field(default=50, description="每个分集处理的演员数量上限", ge=1, le=200)
     fallback_to_actor_string: bool = Field(default=True, description="当所有匹配失败时，是否将分集英文角色名替换为'演员'")
 
-class FileScraperConfig(BaseModel):
-    """文件刮削器功能的配置"""
-    scan_directory: str = Field(default="", description="扫描目录")
-    file_extensions: List[str] = Field(default_factory=lambda: ['.mp4', '.mkv', '.strm'], description="要扫描的文件后缀名列表")
-    overwrite_existing: bool = Field(default=False, description="是否覆盖现有元数据")
-    batch_cooldown: float = Field(default=2.0, description="批量刮削时每个文件之间的冷却时间（秒）", ge=0)
-    source_priority: List[str] = Field(default_factory=lambda: ['xchina.co', 'javday.app', 'madou.club', 'madouqu.com', 'taiav.com', 'kanav.info'], description="刮削源域名优先级列表")
 
 class MediaTaggerTargetLibraries(BaseModel):
     mode: Literal['all', 'include', 'exclude'] = Field(default='all', description="媒体库筛选模式")
@@ -418,7 +400,6 @@ class AppConfig(BaseModel):
     upcoming_config: UpcomingConfig = Field(default_factory=UpcomingConfig)
     actor_role_mapper_config: ActorRoleMapperConfig = Field(default_factory=ActorRoleMapperConfig)
     episode_role_sync_config: EpisodeRoleSyncConfig = Field(default_factory=EpisodeRoleSyncConfig)
-    file_scraper_config: FileScraperConfig = Field(default_factory=FileScraperConfig)
     media_tagger_config: MediaTaggerConfig = Field(default_factory=MediaTaggerConfig)
 
 class TargetScope(BaseModel):
@@ -586,7 +567,7 @@ class PreciseScreenshotUpdateRequest(BaseModel):
     """精准截图更新请求模型"""
     series_tmdb_id: str
     series_name: str
-    episodes: List[Dict[str, Any]] # 包含 season_number, episode_number 的字典列表
+    episodes: List[Dict[str, Any]]
     config: "EpisodeRefresherConfig"
 
 class EmbyWebhookPayload(BaseModel):

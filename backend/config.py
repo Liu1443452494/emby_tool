@@ -183,9 +183,6 @@ def load_app_config() -> AppConfig:
         config_data["poster_manager_config"]["overwrite_on_restore"] = False
         migration_needed = True
 
-    if "file_scraper_config" not in config_data:
-        config_data["file_scraper_config"] = {}
-        migration_needed = True
 
     if "media_tagger_config" not in config_data:
         config_data["media_tagger_config"] = {}

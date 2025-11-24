@@ -70,11 +70,6 @@ const router = createRouter({
       component: () => import('../views/EpisodeRenamerView.vue')
     },
     {
-      path: '/file-scraper',
-      name: 'file-scraper',
-      component: () => import('../views/FileScraperView.vue')
-    },
-    {
       path: '/media-tagger',
       name: 'media-tagger',
       component: () => import('../views/MediaTaggerView.vue')
