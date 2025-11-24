@@ -314,10 +314,34 @@ class ActorLocalizerLogic:
                 latin_name_lower = latin_name.lower()
                 douban_actor_map[latin_name_lower] = info_package
                 
-                parts = latin_name.split()
+                # --- 修改：增强 Latin Name 匹配 (去符号 + 语序调整) ---
+                parts = latin_name_lower.split()
+                
+                # 1. 基础反转 (现有逻辑)
                 if len(parts) == 2:
-                    reversed_latin_name_lower = f"{parts[1]} {parts[0]}".lower()
+                    reversed_latin_name_lower = f"{parts[1]} {parts[0]}"
                     douban_actor_map[reversed_latin_name_lower] = info_package
+                
+                # 辅助函数：去除空格、连字符和点号
+                def _normalize_key(text):
+                    return text.replace(' ', '').replace('-', '').replace('.', '')
+
+                # 2. 生成去符号的 Key (解决 "Helena Bonham-Carter" vs "Helena Bonham Carter")
+                no_symbol_name = _normalize_key(latin_name_lower)
+                douban_actor_map[no_symbol_name] = info_package
+                
+                # 3. 针对 2 部分名字，生成反转去符号 Key (解决 "Qianguo Wang" vs "Wang Qian Guo")
+                if len(parts) == 2:
+                    # A B -> BA (e.g., "qianguo wang" -> "wangqianguo")
+                    reversed_no_symbol = _normalize_key(f"{parts[1]}{parts[0]}")
+                    douban_actor_map[reversed_no_symbol] = info_package
+                
+                # 4. 针对 3 部分名字，生成姓氏提前去符号 Key (解决 "Jian Guo Wang" vs "Wang Jian Guo")
+                if len(parts) == 3:
+                    # A B C -> CAB (e.g., "jian guo wang" -> "wangjianguo")
+                    reordered_no_symbol = _normalize_key(f"{parts[2]}{parts[0]}{parts[1]}")
+                    douban_actor_map[reordered_no_symbol] = info_package
+                # --- 修改结束 ---
 
         all_actors = [p for p in people if p.get('Type') == 'Actor']
         
@@ -345,6 +369,13 @@ class ActorLocalizerLogic:
             matched_douban_actor = douban_actor_map.get(emby_actor_name)
             if not matched_douban_actor:
                 matched_douban_actor = douban_actor_map.get(emby_actor_name.lower())
+
+            if not matched_douban_actor:
+                # 将 Emby 名字转小写并去除空格、连字符、点号后尝试匹配
+                emby_name_normalized = emby_actor_name.lower().replace(' ', '').replace('-', '').replace('.', '')
+                matched_douban_actor = douban_actor_map.get(emby_name_normalized)
+                if matched_douban_actor:
+                    logging.debug(f"     -- [归一化匹配成功] Emby: '{emby_actor_name}' -> Key: '{emby_name_normalized}' -> 豆瓣: '{matched_douban_actor.get('name')}'")
 
             if matched_douban_actor:
                 correct_chinese_name = matched_douban_actor.get('name')
