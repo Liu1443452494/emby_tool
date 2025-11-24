@@ -29,7 +29,7 @@ def get_map():
         raise HTTPException(status_code=500, detail=f"读取头像映射表文件失败: {e}")
 
 class TaskRequest(BaseModel):
-    scope: ScheduledTasksTargetScope
+    cooldown: float = 0.0
 
 @router.post("/restore")
 def restore_avatars(req: TaskRequest):
@@ -38,7 +38,7 @@ def restore_avatars(req: TaskRequest):
     task_id = task_manager.register_task(
         logic.restore_avatars_task,
         "批量恢复演员头像",
-        scope=req.scope
+        cooldown=req.cooldown
     )
     return {"status": "success", "message": "批量恢复演员头像任务已启动。", "task_id": task_id}
 
@@ -64,7 +64,6 @@ def download_map():
 
 class SingleRestoreRequest(BaseModel):
     actor_info: Dict[str, Any]
-    scope: ScheduledTasksTargetScope
 
 @router.post("/restore-single")
 def restore_single_avatar(req: SingleRestoreRequest):
@@ -74,7 +73,6 @@ def restore_single_avatar(req: SingleRestoreRequest):
     task_id = task_manager.register_task(
         logic.restore_single_avatar_task,
         f"演员头像映射-恢复-{actor_name}",
-        actor_info=req.actor_info,
-        scope=req.scope
+        actor_info=req.actor_info
     )
     return {"status": "success", "message": f"为演员【{actor_name}】恢复头像的任务已启动。", "task_id": task_id}

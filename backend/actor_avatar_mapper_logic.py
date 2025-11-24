@@ -243,55 +243,53 @@ class ActorAvatarMapperLogic:
             ui_logger.error(f"❌ 从 GitHub 下载失败: {e}", task_category=task_cat, exc_info=True)
             raise e
         
-    def restore_single_avatar_task(self, actor_info: Dict[str, Any], scope: ScheduledTasksTargetScope, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def restore_single_avatar_task(self, actor_info: Dict[str, Any], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
-        根据指定的演员信息和范围，恢复单个演员的头像。
+        恢复单个演员的头像。
+        优化版：利用 Emby 的 AnyProviderIdEquals 参数进行精准查找，无需扫描范围。
         """
         actor_name = actor_info.get("actor_name", "未知")
         tmdb_id_to_find = actor_info.get("tmdb_id")
         task_cat = f"演员头像映射-恢复-{actor_name}"
 
+        if not tmdb_id_to_find:
+            ui_logger.error(f"❌ 无法恢复演员【{actor_name}】，因为缺少 TMDB ID。", task_category=task_cat)
+            return
+
         ui_logger.info(f"🎉 任务启动，准备为演员【{actor_name}】(TMDB ID: {tmdb_id_to_find})恢复头像...", task_category=task_cat)
 
-        ui_logger.info("➡️ [阶段1/3] 正在根据范围获取媒体列表...", task_category=task_cat)
-        selector = MediaSelector(self.config)
-        media_ids_in_scope = selector.get_item_ids(scope)
-        if not media_ids_in_scope:
-            ui_logger.warning("⚠️ 在指定范围内未找到任何媒体项，无法找到该演员。", task_category=task_cat)
+        # 1. 精准查找 Emby 演员实体
+        ui_logger.info("➡️ [阶段1/2] 正在向 Emby 查询该演员...", task_category=task_cat)
+        try:
+            url = f"{self.server_config.server}/Items"
+            params = {
+                "api_key": self.server_config.api_key,
+                "Recursive": "true",
+                "IncludeItemTypes": "Person",
+                "AnyProviderIdEquals": f"tmdb.{tmdb_id_to_find}",
+                "Fields": "Id,Name"
+            }
+            response = self.session.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            items = data.get("Items", [])
+            
+            if not items:
+                ui_logger.warning(f"⚠️ 在 Emby 中未找到 TMDB ID 为 {tmdb_id_to_find} 的演员，无法恢复。", task_category=task_cat)
+                return
+            
+            emby_actor = items[0]
+            emby_id = emby_actor['Id']
+            ui_logger.info(f"   - ✅ 找到演员实体：{emby_actor.get('Name')} (Emby ID: {emby_id})", task_category=task_cat)
+
+        except Exception as e:
+            ui_logger.error(f"❌ 查询 Emby 失败: {e}", task_category=task_cat)
             return
 
-        ui_logger.info(f"➡️ [阶段2/3] 已获取 {len(media_ids_in_scope)} 个媒体项，开始并发查找演员...", task_category=task_cat)
-        
-        emby_actor_to_update = None
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_id = {executor.submit(selector._get_emby_item_details, item_id, "People"): item_id for item_id in media_ids_in_scope}
-            for future in as_completed(future_to_id):
-                if cancellation_event.is_set() or emby_actor_to_update:
-                    break
-                try:
-                    people = future.result().get("People", [])
-                    for person in people:
-                        if person.get('Type') == 'Actor':
-                            person_details = selector._get_emby_item_details(person['Id'], "ProviderIds")
-                            provider_ids = person_details.get("ProviderIds", {})
-                            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
-                            person_tmdb_id = provider_ids_lower.get("tmdb")
-                            if str(person_tmdb_id) == str(tmdb_id_to_find):
-                                emby_actor_to_update = person_details
-                                ui_logger.info(f"   - ✅ 在媒体项 {future_to_id[future]} 中找到了目标演员【{actor_name}】(Emby ID: {emby_actor_to_update['Id']})。", task_category=task_cat)
-                                break
-                except Exception as e:
-                    logging.error(f"【调试】查找演员时出错: {e}")
-        
-        if cancellation_event.is_set():
-            ui_logger.warning("⚠️ 任务在查找演员阶段被用户取消。", task_category=task_cat)
-            return
+        if cancellation_event.is_set(): return
 
-        if not emby_actor_to_update:
-            ui_logger.error(f"❌ 在指定范围内未能找到 TMDB ID 为 {tmdb_id_to_find} 的演员【{actor_name}】。", task_category=task_cat)
-            return
-
-        ui_logger.info("➡️ [阶段3/3] 演员已定位，开始执行恢复...", task_category=task_cat)
+        # 2. 执行恢复
+        ui_logger.info("➡️ [阶段2/2] 开始上传图片...", task_category=task_cat)
         from actor_gallery_logic import ActorGalleryLogic
         from tmdb_logic import TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES
 
@@ -305,16 +303,23 @@ class ActorAvatarMapperLogic:
         else:
             image_url = image_path
 
-        if gallery_logic.upload_image_from_url(emby_actor_to_update['Id'], image_url, source=image_source):
+        if gallery_logic.upload_image_from_url(emby_id, image_url, source=image_source):
             ui_logger.info(f"🎉 成功为演员【{actor_name}】恢复了头像！", task_category=task_cat)
         else:
             ui_logger.error(f"❌ 为演员【{actor_name}】恢复头像失败。", task_category=task_cat)
 
-    def restore_avatars_task(self, scope: ScheduledTasksTargetScope, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def restore_avatars_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager, cooldown: float = 0.0):
+        """
+        批量恢复演员头像。
+        优化版：先一次性拉取 Emby 全量演员数据构建内存索引，再进行匹配恢复。
+        """
         task_cat = "演员头像映射-批量恢复"
-        ui_logger.info(f"🎉 任务启动，范围: {scope.mode}，开始批量恢复演员头像...", task_category=task_cat)
+        ui_logger.info(f"🎉 任务启动，开始批量恢复演员头像 (极速模式)...", task_category=task_cat)
+        if cooldown > 0:
+            ui_logger.info(f"ℹ️ 已启用任务冷却，每个请求间隔 {cooldown} 秒。", task_category=task_cat)
 
-        ui_logger.info("➡️ [阶段1/5] 正在加载本地头像映射表...", task_category=task_cat)
+        # 1. 加载本地映射表
+        ui_logger.info("➡️ [阶段1/4] 正在加载本地头像映射表...", task_category=task_cat)
         if not os.path.exists(ACTOR_AVATAR_MAP_FILE):
             raise FileNotFoundError("本地演员头像映射表文件 actor_avatar_map.json 不存在。")
         
@@ -324,94 +329,105 @@ class ActorAvatarMapperLogic:
         if not avatar_map:
             ui_logger.warning("⚠️ 本地头像映射表为空，任务中止。", task_category=task_cat)
             return
+        
+        ui_logger.info(f"   - 本地映射表共包含 {len(avatar_map)} 条记录。", task_category=task_cat)
 
-        ui_logger.info("➡️ [阶段2/5] 正在根据范围获取媒体列表...", task_category=task_cat)
-        selector = MediaSelector(self.config)
-        media_ids_in_scope = selector.get_item_ids(scope)
-        if not media_ids_in_scope:
-            ui_logger.info("✅ 在指定范围内未找到任何媒体项，任务完成。", task_category=task_cat)
+        # 2. 构建内存索引
+        ui_logger.info("➡️ [阶段2/4] 正在从 Emby 拉取全量演员数据以构建索引...", task_category=task_cat)
+        tmdb_to_emby_map = {}
+        try:
+            start_time = time.time()
+            url = f"{self.server_config.server}/Items"
+            params = {
+                "api_key": self.server_config.api_key,
+                "Recursive": "true",
+                "IncludeItemTypes": "Person",
+                "Fields": "ProviderIds"
+            }
+            response = self.session.get(url, params=params, timeout=120) # 增加超时时间以应对大数据量
+            response.raise_for_status()
+            items = response.json().get("Items", [])
+            
+            for item in items:
+                provider_ids = item.get("ProviderIds", {})
+                # 查找 tmdb id (忽略大小写)
+                tmdb_id = None
+                for k, v in provider_ids.items():
+                    if k.lower() == 'tmdb':
+                        tmdb_id = str(v)
+                        break
+                
+                if tmdb_id:
+                    tmdb_to_emby_map[tmdb_id] = item['Id']
+            
+            duration = time.time() - start_time
+            ui_logger.info(f"   - ✅ 索引构建完成！耗时 {duration:.2f} 秒。共获取 {len(items)} 个演员，其中 {len(tmdb_to_emby_map)} 个包含 TMDB ID。", task_category=task_cat)
+
+        except Exception as e:
+            ui_logger.error(f"❌ 拉取 Emby 数据失败: {e}", task_category=task_cat)
             return
 
-        ui_logger.info(f"➡️ [阶段3/5] 已获取 {len(media_ids_in_scope)} 个媒体项，开始并发获取所有演员信息...", task_category=task_cat)
-        
-        all_actors_to_check = []
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_id = {executor.submit(selector._get_emby_item_details, item_id, "People"): item_id for item_id in media_ids_in_scope}
-            for future in as_completed(future_to_id):
-                if cancellation_event.is_set(): return
-                try:
-                    people = future.result().get("People", [])
-                    actors = [p for p in people if p.get('Type') == 'Actor']
-                    all_actors_to_check.extend(actors)
-                except Exception as e:
-                    logging.error(f"【调试】获取媒体 {future_to_id[future]} 的演员列表失败: {e}")
+        if cancellation_event.is_set(): return
 
-        unique_actors_base_info = {actor['Id']: actor for actor in all_actors_to_check}.values()
-        ui_logger.info(f"   - 演员信息获取完毕，共找到 {len(unique_actors_base_info)} 个不重复的演员需要检查。", task_category=task_cat)
-
-        ui_logger.info(f"➡️ [阶段4/5] 开始为 {len(unique_actors_base_info)} 个独立演员并发获取详细信息 (ProviderIds)...", task_category=task_cat)
-        unique_actors_with_details = []
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_actor = {executor.submit(selector._get_emby_item_details, actor['Id'], "ProviderIds,Name"): actor for actor in unique_actors_base_info}
-            for future in as_completed(future_to_actor):
-                if cancellation_event.is_set(): return
-                try:
-                    full_actor_details = future.result()
-                    unique_actors_with_details.append(full_actor_details)
-                except Exception as e:
-                    actor_info = future_to_actor[future]
-                    logging.error(f"【调试】获取演员【{actor_info.get('Name')}】(ID: {actor_info.get('Id')})的详情失败: {e}")
-        
-        ui_logger.info(f"   - 演员详细信息获取完毕，共成功获取 {len(unique_actors_with_details)} 位演员的详情。", task_category=task_cat)
-
-        ui_logger.info("➡️ [阶段5/5] 开始匹配映射表并恢复头像...", task_category=task_cat)
-        total_actors = len(unique_actors_with_details)
-        task_manager.update_task_progress(task_id, 0, total_actors)
+        # 3. 匹配与恢复
+        ui_logger.info("➡️ [阶段3/4] 开始匹配并恢复头像...", task_category=task_cat)
         
         from actor_gallery_logic import ActorGalleryLogic
         from tmdb_logic import TMDB_IMAGE_BASE_URL, TMDB_IMAGE_SIZES
-
         gallery_logic = ActorGalleryLogic(self.config)
-        updated_count = 0
 
-        for i, actor in enumerate(unique_actors_with_details):
-            if cancellation_event.is_set():
-                ui_logger.warning("⚠️ 任务在恢复阶段被用户取消。", task_category=task_cat)
-                return
-
-            try:
-                provider_ids = actor.get("ProviderIds", {})
-                provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
-                tmdb_id = provider_ids_lower.get("tmdb")
-                
-                if not tmdb_id:
-                    continue
-
-                if str(tmdb_id) in avatar_map:
-                    map_entry = avatar_map[str(tmdb_id)]
-                    actor_name = actor.get("Name")
-                    ui_logger.info(f"  - [命中] 演员【{actor_name}】(TMDB ID: {tmdb_id}) 在映射表中，准备恢复...", task_category=task_cat)
-
-                    image_source = map_entry.get("source")
-                    image_path = map_entry.get("image_path")
-                    
-                    if not image_source or not image_path:
-                        ui_logger.warning(f"    - [跳过] 演员【{actor_name}】的映射信息不完整。", task_category=task_cat)
-                        continue
-
-                    if image_source == 'tmdb':
-                        image_url = f"{TMDB_IMAGE_BASE_URL}{TMDB_IMAGE_SIZES['original']}{image_path}"
-                    else:
-                        image_url = image_path
-                    
-                    if gallery_logic.upload_image_from_url(actor['Id'], image_url, source=image_source):
-                        ui_logger.info(f"    - ✅ 成功为演员【{actor_name}】恢复头像。", task_category=task_cat)
-                        updated_count += 1
-                    else:
-                        ui_logger.error(f"    - ❌ 为演员【{actor_name}】恢复头像失败。", task_category=task_cat)
-            except Exception as e:
-                ui_logger.error(f"  - ❌ 处理演员 {actor.get('Name')} (ID: {actor.get('Id')}) 时发生错误: {e}", task_category=task_cat, exc_info=True)
-            finally:
-                task_manager.update_task_progress(task_id, i + 1, total_actors)
+        total_tasks = len(avatar_map)
+        task_manager.update_task_progress(task_id, 0, total_tasks)
         
-        ui_logger.info(f"🎉 批量恢复演员头像任务执行完毕，共成功恢复了 {updated_count} 个演员的头像。", task_category=task_cat)
+        success_count = 0
+        skip_count = 0
+        fail_count = 0
+        processed_count = 0
+
+        for tmdb_id, map_entry in avatar_map.items():
+            if cancellation_event.is_set():
+                ui_logger.warning("⚠️ 任务被用户取消。", task_category=task_cat)
+                break
+
+            processed_count += 1
+            actor_name = map_entry.get("actor_name", "未知")
+
+            # 检查该演员是否在当前 Emby 库中
+            if tmdb_id not in tmdb_to_emby_map:
+                # ui_logger.debug(f"   - [跳过] 演员【{actor_name}】(TMDB: {tmdb_id}) 不在当前 Emby 库中。", task_category=task_cat)
+                skip_count += 1
+                task_manager.update_task_progress(task_id, processed_count, total_tasks)
+                continue
+
+            emby_id = tmdb_to_emby_map[tmdb_id]
+            image_source = map_entry.get("source")
+            image_path = map_entry.get("image_path")
+
+            if not image_source or not image_path:
+                skip_count += 1
+                continue
+
+            if image_source == 'tmdb':
+                image_url = f"{TMDB_IMAGE_BASE_URL}{TMDB_IMAGE_SIZES['original']}{image_path}"
+            else:
+                image_url = image_path
+            
+            try:
+                if gallery_logic.upload_image_from_url(emby_id, image_url, source=image_source):
+                    ui_logger.info(f"   - ✅ 恢复成功：{actor_name}", task_category=task_cat)
+                    success_count += 1
+                else:
+                    ui_logger.error(f"   - ❌ 恢复失败：{actor_name}", task_category=task_cat)
+                    fail_count += 1
+                
+                # 执行冷却
+                if cooldown > 0:
+                    time.sleep(cooldown)
+
+            except Exception as e:
+                ui_logger.error(f"   - ❌ 处理演员 {actor_name} 时出错: {e}", task_category=task_cat)
+                fail_count += 1
+            
+            task_manager.update_task_progress(task_id, processed_count, total_tasks)
+
+        ui_logger.info(f"🎉 批量恢复完成！成功: {success_count}, 跳过(不在库中): {skip_count}, 失败: {fail_count}。", task_category=task_cat)

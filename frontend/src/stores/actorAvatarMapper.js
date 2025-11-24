@@ -117,10 +117,10 @@ export const useActorAvatarMapperStore = defineStore('actorAvatarMapper', () => 
     return `${API_BASE_URL}/api/image-proxy?url=${encodeURIComponent(item.image_path)}`;
   }
 
-  async function startSingleRestore(actorInfo, scope) {
+  async function startSingleRestore(actorInfo) {
     try {
       await ElMessageBox.confirm(
-        `即将为演员【${actorInfo.actor_name}】恢复头像。此操作会扫描您在左侧选择的范围来寻找该演员，然后进行恢复。是否继续？`,
+        `即将为演员【${actorInfo.actor_name}】恢复头像。系统将直接在 Emby 中查找该演员并进行恢复。是否继续？`,
         '确认单体恢复',
         {
           confirmButtonText: '确定',
@@ -129,8 +129,7 @@ export const useActorAvatarMapperStore = defineStore('actorAvatarMapper', () => 
         }
       );
       const payload = {
-        actor_info: actorInfo,
-        scope: scope
+        actor_info: actorInfo
       };
       const response = await fetch(`${API_BASE_URL}/api/actor-avatar-mapper/restore-single`, {
         method: 'POST',
