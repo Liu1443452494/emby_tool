@@ -314,12 +314,11 @@ class ActorRoleMapperLogic:
             raise e
         
 
-    def generate_map_for_single_item(self, item_id: str, task_category: str):
+    def generate_map_for_single_item(self, item_id: str, task_category: str, overwrite: bool = False):
         """为单个媒体项生成角色映射，并以增量模式更新到本地文件。"""
         ui_logger.info(f"➡️ [单体模式] 开始为媒体 (ID: {item_id}) 生成角色映射...", task_category=task_category)
         
         try:
-            # --- 修改 1: 请求字段增加 Type ---
             item_details = self._get_emby_item_details(item_id, "ProviderIds,Name,People,Type")
             item_name = item_details.get("Name", f"ID {item_id}")
             provider_ids_lower = {k.lower(): v for k, v in item_details.get("ProviderIds", {}).items()}
@@ -330,7 +329,6 @@ class ActorRoleMapperLogic:
                 ui_logger.warning(f"   - ⚠️ 媒体【{item_name}】缺少 TMDB ID 或媒体类型，无法生成映射。", task_category=task_category)
                 return
 
-            # --- 修改 2: 构建带前缀的 map_key ---
             type_prefix = 'tv' if item_type == 'Series' else 'movie'
             map_key = f"{type_prefix}-{tmdb_id}"
 
@@ -343,10 +341,12 @@ class ActorRoleMapperLogic:
                     except (json.JSONDecodeError, IOError):
                         pass
 
-                # --- 修改 3: 使用新的 map_key 进行判断和写入 ---
                 if map_key in actor_role_map:
-                    ui_logger.info(f"   - ✅ 媒体【{item_name}】的映射已存在于本地文件中，跳过本次生成。", task_category=task_category)
-                    return
+                    if not overwrite:
+                        ui_logger.info(f"   - ✅ 媒体【{item_name}】的映射已存在于本地文件中，跳过本次生成。", task_category=task_category)
+                        return
+                    else:
+                        ui_logger.info(f"   - 🔄 媒体【{item_name}】的映射已存在，强制覆盖模式已开启，将执行更新。", task_category=task_category)
 
                 actor_limit = self.config.actor_role_mapper_config.actor_limit
                 people = item_details.get("People", [])
@@ -390,10 +390,10 @@ class ActorRoleMapperLogic:
                 with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
                     json.dump(actor_role_map, f, ensure_ascii=False, indent=2)
                 
-                ui_logger.info(f"   - ✅ 成功将新映射追加到本地文件。", task_category=task_category)
+                ui_logger.info(f"   - ✅ 成功将新映射追加或更新到本地文件。", task_category=task_cat)
 
         except Timeout:
-            ui_logger.error(f"   - ❌ 获取文件锁超时，另一个进程可能正在访问该文件。", task_category=task_category)
+            ui_logger.error(f"   - ❌ 获取文件锁超时，另一个进程可能正在访问该文件。", task_category=task_cat)
         except Exception as e:
             ui_logger.error(f"   - ❌ 为媒体 {item_id} 生成单体映射时发生错误: {e}", task_category=task_category, exc_info=True)
 

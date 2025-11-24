@@ -75,17 +75,17 @@
           <el-form :model="localConfig" label-position="top">
             <el-row :gutter="20">
               <el-col :span="8">
-                <el-form-item label="项目间隔时间 (秒)">
+                <el-form-item label="项目之间间隔时间 (秒)">
                   <el-input-number v-model="localConfig.item_interval_seconds" :min="0" :step="0.5" controls-position="right" />
                 </el-form-item>
               </el-col>
               <el-col :span="8">
-                <el-form-item label="删除ID后等待 (秒)">
+                <el-form-item label="删除豆瓣ID后等待 (秒)">
                   <el-input-number v-model="localConfig.delete_id_wait_seconds" :min="1" controls-position="right" />
                 </el-form-item>
               </el-col>
               <el-col :span="8">
-                <el-form-item label="写回ID后等待 (秒)">
+                <el-form-item label="写回豆瓣ID后等待 (秒)">
                   <el-input-number v-model="localConfig.readd_id_wait_seconds" :min="10" controls-position="right" />
                 </el-form-item>
               </el-col>

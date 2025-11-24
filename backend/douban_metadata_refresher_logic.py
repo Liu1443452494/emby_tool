@@ -30,7 +30,7 @@ class DoubanMetadataRefresherLogic:
         self.params = {"api_key": self.api_key}
         self.session = requests.Session()
 
-    def _get_item_details(self, item_id: str, fields: str = "ProviderIds,Name,Type,Path") -> Optional[Dict]:
+    def _get_item_details(self, item_id: str, fields: str = "ProviderIds,Name,Type,Path,Locked") -> Optional[Dict]:
         try:
             url = f"{self.base_url}/Users/{self.user_id}/Items/{item_id}"
             params = {**self.params, "Fields": fields}
@@ -58,22 +58,55 @@ class DoubanMetadataRefresherLogic:
         except Exception as e:
             logging.error(f"【豆瓣元数据刷新】更新媒体 (ID: {item_id}) 的 ProviderIds 时失败: {e}")
             return False
+        
+    def _unlock_item(self, item_id: str, task_cat: str) -> bool:
+        """解锁媒体项，以便可以刷新元数据"""
+        try:
+            # 请求Locked字段即可，减少数据量
+            item_details = self._get_item_details(item_id, fields="Locked")
+            if not item_details:
+                return False
+            
+            if not item_details.get("Locked", False):
+                ui_logger.debug(f"     - [解锁] 媒体项 (ID: {item_id}) 未被锁定，无需操作。", task_category=task_cat)
+                return True
+
+            # 仅修改Locked字段，避免动到其他数据
+            item_details["Locked"] = False
+            
+            update_url = f"{self.base_url}/Items/{item_id}"
+            headers = {'Content-Type': 'application/json'}
+            response = self.session.post(update_url, params=self.params, json=item_details, headers=headers, timeout=20)
+            response.raise_for_status()
+            ui_logger.info(f"     - [解锁] 成功发送解锁请求。", task_category=task_cat)
+            return True
+        except Exception as e:
+            ui_logger.error(f"     - [解锁] ❌ 解锁媒体项 (ID: {item_id}) 时失败: {e}", task_category=task_cat)
+            return False
 
     def _trigger_emby_refresh(self, item_id: str, task_cat: str) -> bool:
         try:
+            if not self._unlock_item(item_id, task_cat):
+                ui_logger.warning(f"     - ⚠️ 解锁媒体项 (ID: {item_id}) 失败，但仍将继续尝试刷新...", task_category=task_cat)
+
             url = f"{self.base_url}/Items/{item_id}/Refresh"
             params = {
-                "api_key": self.api_key,
-                "Recursive": "false",
-                "ImageRefreshMode": "None",
+                **self.params,
+                "Recursive": "true",
                 "MetadataRefreshMode": "FullRefresh",
-                "ReplaceAllImages": "false",
-                "ReplaceAllMetadata": "true"
+                "ImageRefreshMode": "Default",
+                "ReplaceAllMetadata": "true",
+                "ReplaceAllImages": "false"
             }
             response = self.session.post(url, params=params, timeout=30)
             response.raise_for_status()
-            ui_logger.info(f"       - ✅ 已成功向 Emby 发送元数据刷新指令 (不替换图片)。", task_category=task_cat)
-            return True
+            
+            if response.status_code == 204:
+                ui_logger.info(f"       - ✅ 已成功向 Emby 发送元数据刷新指令 (不替换图片)。", task_category=task_cat)
+                return True
+            else:
+                ui_logger.warning(f"       - ⚠️ Emby 服务器返回异常状态码 {response.status_code}，刷新可能未成功。", task_category=task_cat)
+                return False
         except Exception as e:
             ui_logger.error(f"       - ❌ 向 Emby 发送元数据刷新指令时失败: {e}", task_category=task_cat)
             return False
@@ -360,7 +393,7 @@ class DoubanMetadataRefresherLogic:
             # 3. 角色映射更新
             try:
                 role_mapper_logic = ActorRoleMapperLogic(self.app_config)
-                role_mapper_logic.generate_map_for_single_item(item_id, task_cat)
+                role_mapper_logic.generate_map_for_single_item(item_id, task_category=task_cat, overwrite=True)
             except Exception as e:
                 ui_logger.error(f"     - ❌ 角色映射更新步骤失败: {e}", task_category=task_cat)
 
