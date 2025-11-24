@@ -25,6 +25,7 @@ from models import EpisodeRenamerConfig
 from episode_renamer_router import router as episode_renamer_router
 from poster_manager_router import router as poster_manager_router
 from actor_role_mapper_router import router as actor_role_mapper_router
+from douban_metadata_refresher_router import router as douban_metadata_refresher_router
 from episode_role_sync_router import router as episode_role_sync_router
 from actor_avatar_mapper_router import router as actor_avatar_mapper_router
 from chasing_center_router import router as chasing_center_router
@@ -921,6 +922,7 @@ app.include_router(douban_fixer_router, prefix="/api/douban-fixer")
 app.include_router(episode_renamer_router, prefix="/api/episode-renamer")
 app.include_router(poster_manager_router, prefix="/api/poster-manager")
 app.include_router(actor_role_mapper_router, prefix="/api/actor-role-mapper")
+app.include_router(douban_metadata_refresher_router, prefix="/api/douban-metadata-refresher")
 app.include_router(episode_role_sync_router, prefix="/api/episode-role-sync")
 app.include_router(actor_avatar_mapper_router, prefix="/api/actor-avatar-mapper")
 app.include_router(chasing_center_router, prefix="/api/chasing-center")

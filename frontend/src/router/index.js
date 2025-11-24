@@ -75,6 +75,11 @@ const router = createRouter({
       component: () => import('../views/MediaTaggerView.vue')
     },
     {
+      path: '/douban-metadata-refresher',
+      name: 'douban-metadata-refresher',
+      component: () => import('../views/DoubanMetadataRefresherView.vue')
+    },
+    {
       path: '/scheduled-tasks',
       name: 'scheduled-tasks',
       component: () => import('../views/ScheduledTasksView.vue')

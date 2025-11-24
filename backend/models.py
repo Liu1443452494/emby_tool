@@ -377,6 +377,14 @@ class MediaTaggerConfig(BaseModel):
     cron: str = Field(default="0 2 * * *", description="定时任务的CRON表达式")
     rules: List[MediaTaggerRule] = Field(default_factory=list, description="所有标签规则列表")
 
+class DoubanMetadataRefresherConfig(BaseModel):
+    """豆瓣元数据刷新器配置"""
+    item_interval_seconds: float = Field(default=2.0, description="每个项目处理完后的等待时间", ge=0)
+    delete_id_wait_seconds: float = Field(default=2.0, description="删除豆瓣ID后，写回前的等待时间", ge=0)
+    readd_id_wait_seconds: float = Field(default=60.0, description="写回豆瓣ID后，等待插件下载元数据的时间", ge=10)
+    enable_post_refresh_actions: bool = Field(default=False, description="是否在元数据更新后，自动触发后续的Emby元数据刷新、演员中文化和角色映射更新")
+    emby_refresh_wait_seconds: float = Field(default=10.0, description="触发Emby元数据刷新后，执行演员中文化前的等待时间", ge=5)
+
 class AppConfig(BaseModel):
     """应用的主配置模型，聚合所有子配置"""
     server_config: ServerConfig = Field(default_factory=ServerConfig)
@@ -401,6 +409,7 @@ class AppConfig(BaseModel):
     actor_role_mapper_config: ActorRoleMapperConfig = Field(default_factory=ActorRoleMapperConfig)
     episode_role_sync_config: EpisodeRoleSyncConfig = Field(default_factory=EpisodeRoleSyncConfig)
     media_tagger_config: MediaTaggerConfig = Field(default_factory=MediaTaggerConfig)
+    douban_metadata_refresher_config: DoubanMetadataRefresherConfig = Field(default_factory=DoubanMetadataRefresherConfig)
 
 class TargetScope(BaseModel):
     scope: Literal["media_type", "library", "all_libraries", "search"]

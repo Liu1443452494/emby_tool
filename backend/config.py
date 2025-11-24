@@ -188,6 +188,10 @@ def load_app_config() -> AppConfig:
         config_data["media_tagger_config"] = {}
         migration_needed = True
 
+    if "douban_metadata_refresher_config" not in config_data:
+        config_data["douban_metadata_refresher_config"] = {}
+        migration_needed = True
+
     if "subtitle_processor_config" in config_data:
         del config_data["subtitle_processor_config"]
 

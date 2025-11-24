@@ -119,6 +119,13 @@ export const useConfigStore = defineStore('config', () => {
       cron: '',
       actor_limit: 50,
       fallback_to_actor_string: true
+    },
+    douban_metadata_refresher_config: {
+      item_interval_seconds: 2.0,
+      delete_id_wait_seconds: 2.0,
+      readd_id_wait_seconds: 60.0,
+      enable_post_refresh_actions: false,
+      emby_refresh_wait_seconds: 10.0
     }
   })
   const isConnected = ref(false)
@@ -219,6 +226,16 @@ export const useConfigStore = defineStore('config', () => {
             cron: '', 
             actor_limit: 50, 
             fallback_to_actor_string: true 
+          };
+        }
+
+        if (!fullConfig.douban_metadata_refresher_config) {
+          fullConfig.douban_metadata_refresher_config = {
+            item_interval_seconds: 2.0,
+            delete_id_wait_seconds: 2.0,
+            readd_id_wait_seconds: 60.0,
+            enable_post_refresh_actions: false,
+            emby_refresh_wait_seconds: 10.0
           };
         }
         
@@ -519,6 +536,23 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function saveDoubanMetadataRefresherConfig(newConfig) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/douban-metadata-refresher/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '未知错误');
+      
+      appConfig.value.douban_metadata_refresher_config = newConfig;
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
   async function saveTraktConfig(newConfig) {
     try {
       const response = await fetch(`${API_BASE_URL}/api/config/trakt`, {
@@ -574,6 +608,7 @@ export const useConfigStore = defineStore('config', () => {
     saveTraktConfig,
     testTraktConfig,
     saveActorRoleMapperConfig,
-    saveEpisodeRoleSyncConfig
+    saveEpisodeRoleSyncConfig,
+    saveDoubanMetadataRefresherConfig
   }
 })
