@@ -316,6 +316,8 @@ class ActorRoleMapperLogic:
 
     # backend/actor_role_mapper_logic.py (函数替换)
 
+    # backend/actor_role_mapper_logic.py (函数替换)
+
     def generate_map_for_single_item(self, item_id: str, task_category: str, overwrite: bool = False):
         """为单个媒体项生成角色映射，并以增量模式更新到本地文件。"""
         ui_logger.info(f"➡️ [单体模式] 开始为媒体 (ID: {item_id}) 生成角色映射...", task_category=task_category)
@@ -384,24 +386,24 @@ class ActorRoleMapperLogic:
                     else:
                         old_work_map = actor_role_map[map_key].get('map', {})
                         if old_work_map == new_work_map:
-                            ui_logger.info(f"   - [跳过写入] 媒体【{item_name}】的新角色数据与现有映射一致，无需更新文件。", task_category=task_cat)
+                            ui_logger.info(f"   - [跳过写入] 媒体【{item_name}】的新角色数据与现有映射一致，无需更新文件。", task_category=task_category)
                             return
-                        ui_logger.info(f"   - 🔄 媒体【{item_name}】的映射已存在且内容有变化，将执行覆盖更新。", task_category=task_cat)
+                        ui_logger.info(f"   - 🔄 媒体【{item_name}】的映射已存在且内容有变化，将执行覆盖更新。", task_category=task_category)
                 
                 if new_work_map:
                     actor_role_map[map_key] = {
                         "title": item_name,
                         "map": new_work_map
                     }
-                    ui_logger.info(f"   - 🔍 已为【{item_name}】成功生成 {len(new_work_map)} 条演员角色映射。", task_category=task_cat)
+                    ui_logger.info(f"   - 🔍 已为【{item_name}】成功生成 {len(new_work_map)} 条演员角色映射。", task_category=task_category)
                 
                 with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
                     json.dump(actor_role_map, f, ensure_ascii=False, indent=2)
                 
-                ui_logger.info(f"   - ✅ 成功将新映射追加或更新到本地文件。", task_category=task_cat)
+                ui_logger.info(f"   - ✅ 成功将新映射追加或更新到本地文件。", task_category=task_category)
 
         except Timeout:
-            ui_logger.error(f"   - ❌ 获取文件锁超时，另一个进程可能正在访问该文件。", task_category=task_cat)
+            ui_logger.error(f"   - ❌ 获取文件锁超时，另一个进程可能正在访问该文件。", task_category=task_category)
         except Exception as e:
             ui_logger.error(f"   - ❌ 为媒体 {item_id} 生成单体映射时发生错误: {e}", task_category=task_category, exc_info=True)
 
