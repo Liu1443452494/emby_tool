@@ -376,9 +376,17 @@ class ActorLocalizerLogic:
                         source_text = "(来自豆瓣)"
                 
                 if not source_text and config.enhance_english_role_with_douban and douban_role and not self._contains_chinese(douban_role):
-                    if douban_role.strip() != original_role.strip():
-                         current_role = douban_role
-                         source_text = "(来自豆瓣英文优化)"
+                    clean_douban_role = douban_role.strip()
+                    clean_original_role = original_role.strip()
+
+                    if clean_douban_role != clean_original_role:
+                        # 核心判断：只有当豆瓣角色名更长时才进行替换
+                        if len(clean_douban_role) > len(clean_original_role):
+                            current_role = douban_role  # 使用原始的 douban_role 以保留可能存在的内部空格
+                            source_text = "(来自豆瓣英文优化)"
+                            logging.debug(f"     -- [英文优化] 采纳豆瓣角色: '{douban_role}' (长度 {len(clean_douban_role)}) > '{original_role}' (长度 {len(clean_original_role)})")
+                        else:
+                            logging.debug(f"     -- [英文优化] 放弃豆瓣角色: '{douban_role}' (长度 {len(clean_douban_role)}) <= '{original_role}' (长度 {len(clean_original_role)})")
 
             if source_text != "(来自豆瓣)" and self._contains_chinese(current_role):
                 SUFFIX_MAP = {"(voice)": "配 "}

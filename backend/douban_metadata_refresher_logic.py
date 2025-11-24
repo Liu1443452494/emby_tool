@@ -398,3 +398,80 @@ class DoubanMetadataRefresherLogic:
                 ui_logger.error(f"     - ❌ 角色映射更新步骤失败: {e}", task_category=task_cat)
 
         ui_logger.info("🎉 所有流程执行完毕！", task_category=task_cat)
+
+
+    def run_metadata_fix_task(self, scope: ScheduledTasksTargetScope, config: DoubanMetadataRefresherConfig, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        task_cat = "元数据修复"
+        ui_logger.info(f"🎉 任务启动，范围: {scope.mode}", task_category=task_cat)
+
+        # 阶段一：准备与强制过滤
+        ui_logger.info("➡️ [阶段 1/3] 正在获取并强制过滤媒体项 (必须包含豆瓣ID)...", task_category=task_cat)
+        selector = MediaSelector(self.app_config)
+        all_item_ids = selector.get_item_ids(scope)
+        if not all_item_ids:
+            ui_logger.info("✅ 在指定范围内未找到任何媒体项，任务完成。", task_category=task_cat)
+            return
+
+        items_to_process = []
+        skipped_count = 0
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_id = {executor.submit(self._get_item_details, item_id): item_id for item_id in all_item_ids}
+            for future in as_completed(future_to_id):
+                if cancellation_event.is_set(): return
+                try:
+                    details = future.result()
+                    if details:
+                        provider_ids = details.get("ProviderIds", {})
+                        provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                        if 'douban' in provider_ids_lower and provider_ids_lower['douban']:
+                            items_to_process.append(details)
+                        else:
+                            skipped_count += 1
+                            logging.info(f"【{task_cat}-跳过】媒体《{details.get('Name')}》因缺少豆瓣ID而被跳过。")
+                    else:
+                        skipped_count += 1
+                except Exception:
+                    skipped_count += 1
+        
+        if not items_to_process:
+            ui_logger.warning(f"⚠️ 在指定范围内的所有媒体项均缺少豆瓣ID或获取失败，任务中止。共跳过 {skipped_count} 项。", task_category=task_cat)
+            return
+        
+        total_items = len(items_to_process)
+        ui_logger.info(f"✅ 过滤完成，共 {total_items} 个项目将执行修复。(已跳过 {skipped_count} 个无ID或获取失败的项目)", task_category=task_cat)
+        task_manager.update_task_progress(task_id, 0, total_items)
+
+        # 阶段二：核心修复循环
+        ui_logger.info("➡️ [阶段 2/3] 开始对每个项目执行修复链条...", task_category=task_cat)
+        for i, item in enumerate(items_to_process):
+            if cancellation_event.is_set():
+                ui_logger.warning("⚠️ 任务被用户取消。", task_category=task_cat)
+                break
+            
+            item_id = item['Id']
+            item_name = item['Name']
+            ui_logger.info(f"  - ({i+1}/{total_items}) 正在处理《{item_name}》...", task_category=task_cat)
+            task_manager.update_task_progress(task_id, i + 1, total_items)
+
+            try:
+                # 1. 触发Emby刷新
+                self._trigger_emby_refresh(item_id, task_cat)
+                ui_logger.info(f"     - ⏱️ 等待 {config.emby_refresh_wait_seconds} 秒让 Emby 应用元数据...", task_category=task_cat)
+                time.sleep(config.emby_refresh_wait_seconds)
+
+                # 2. 演员中文化
+                localizer_logic = ActorLocalizerLogic(self.app_config)
+                localizer_logic._process_single_item_for_localization(item_id, self.app_config.actor_localizer_config, task_cat)
+
+                # 3. 角色映射覆盖更新
+                role_mapper_logic = ActorRoleMapperLogic(self.app_config)
+                role_mapper_logic.generate_map_for_single_item(item_id, task_category=task_cat, overwrite=True)
+
+            except Exception as e:
+                ui_logger.error(f"     - ❌ 处理《{item_name}》时发生未知错误: {e}", task_category=task_cat, exc_info=True)
+
+            if i < total_items - 1:
+                ui_logger.info(f"     - ⏱️ [间隔] 等待 {config.item_interval_seconds} 秒...", task_category=task_cat)
+                time.sleep(config.item_interval_seconds)
+
+        ui_logger.info("➡️ [阶段 3/3] 🎉 所有选定项目修复流程执行完毕！", task_category=task_cat)

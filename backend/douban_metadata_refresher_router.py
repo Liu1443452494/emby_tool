@@ -47,3 +47,15 @@ def run_refresh_task(req: TaskRequest):
         config=req.config
     )
     return {"status": "success", "message": "豆瓣元数据刷新任务已启动。", "task_id": task_id}
+
+@router.post("/run-fix")
+def run_fix_task(req: TaskRequest):
+    """启动一个任务，修复媒体元数据（不更新豆瓣文件）"""
+    logic = get_logic()
+    task_id = task_manager.register_task(
+        logic.run_metadata_fix_task,
+        "修复媒体元数据",
+        scope=req.scope,
+        config=req.config
+    )
+    return {"status": "success", "message": "修复媒体元数据任务已启动。", "task_id": task_id}

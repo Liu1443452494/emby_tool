@@ -314,6 +314,8 @@ class ActorRoleMapperLogic:
             raise e
         
 
+    # backend/actor_role_mapper_logic.py (函数替换)
+
     def generate_map_for_single_item(self, item_id: str, task_category: str, overwrite: bool = False):
         """为单个媒体项生成角色映射，并以增量模式更新到本地文件。"""
         ui_logger.info(f"➡️ [单体模式] 开始为媒体 (ID: {item_id}) 生成角色映射...", task_category=task_category)
@@ -341,23 +343,17 @@ class ActorRoleMapperLogic:
                     except (json.JSONDecodeError, IOError):
                         pass
 
-                if map_key in actor_role_map:
-                    if not overwrite:
-                        ui_logger.info(f"   - ✅ 媒体【{item_name}】的映射已存在于本地文件中，跳过本次生成。", task_category=task_category)
-                        return
-                    else:
-                        ui_logger.info(f"   - 🔄 媒体【{item_name}】的映射已存在，强制覆盖模式已开启，将执行更新。", task_category=task_category)
-
+                # 计算新的 work_map
                 actor_limit = self.config.actor_role_mapper_config.actor_limit
                 people = item_details.get("People", [])
                 actors = [p for p in people if p.get('Type') == 'Actor']
                 people_to_process = actors[:actor_limit]
 
                 if not people_to_process:
-                    ui_logger.info(f"   - [跳过] 媒体【{item_name}】没有演员信息。", task_category=task_category)
+                    ui_logger.info(f"   - [跳过] 媒体【{item_name}】没有演员信息，无法生成映射。", task_category=task_category)
                     return
 
-                work_map = {}
+                new_work_map = {}
                 with ThreadPoolExecutor(max_workers=5) as executor:
                     future_to_person = {executor.submit(self._get_emby_item_details, p['Id'], "ProviderIds"): p for p in people_to_process}
                     for future in as_completed(future_to_person):
@@ -375,17 +371,29 @@ class ActorRoleMapperLogic:
                         except Exception:
                             pass
 
-                        work_map[actor_name] = {
+                        new_work_map[actor_name] = {
                             "tmdb_id": person_tmdb_id,
                             "role": person.get("Role", "")
                         }
+
+                # 核心判断逻辑
+                if map_key in actor_role_map:
+                    if not overwrite:
+                        ui_logger.info(f"   - ✅ 媒体【{item_name}】的映射已存在于本地文件中，跳过本次生成。", task_category=task_category)
+                        return
+                    else:
+                        old_work_map = actor_role_map[map_key].get('map', {})
+                        if old_work_map == new_work_map:
+                            ui_logger.info(f"   - [跳过写入] 媒体【{item_name}】的新角色数据与现有映射一致，无需更新文件。", task_category=task_cat)
+                            return
+                        ui_logger.info(f"   - 🔄 媒体【{item_name}】的映射已存在且内容有变化，将执行覆盖更新。", task_category=task_cat)
                 
-                if work_map:
+                if new_work_map:
                     actor_role_map[map_key] = {
                         "title": item_name,
-                        "map": work_map
+                        "map": new_work_map
                     }
-                    ui_logger.info(f"   - 🔍 已为【{item_name}】成功生成 {len(work_map)} 条演员角色映射。", task_category=task_category)
+                    ui_logger.info(f"   - 🔍 已为【{item_name}】成功生成 {len(new_work_map)} 条演员角色映射。", task_category=task_cat)
                 
                 with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
                     json.dump(actor_role_map, f, ensure_ascii=False, indent=2)

@@ -2,7 +2,14 @@
 <template>
   <div class="douban-refresher-page">
     <div class="page-header">
-      <h2>豆瓣元数据刷新器</h2>
+      <!-- --- 修改 --- -->
+      <div class="header-title-with-help">
+        <h2>豆瓣元数据刷新器</h2>
+        <el-tooltip content="查看功能说明" placement="right">
+          <el-icon class="help-icon" @click="isHelpVisible = true"><QuestionFilled /></el-icon>
+        </el-tooltip>
+      </div>
+      <!-- --- 修改结束 --- -->
       <p>通过模拟“删除再添加”操作，强制 Emby 的豆瓣插件重新下载指定媒体的元数据，以获取最新的演员角色信息。</p>
     </div>
 
@@ -117,7 +124,30 @@
         <!-- --- 修改 --- -->
         <div class="action-footer">
           <el-button type="primary" @click="handleSaveConfig" :loading="isSaving" size="large">保存设置</el-button>
-          <el-button type="success" @click="handleRunTask" :loading="isRunning" size="large">立即执行</el-button>
+          <el-tooltip placement="top" effect="dark">
+            <template #content>
+              <div>对选定范围内的媒体执行以下完整流程：</div>
+              <ul style="padding-left: 20px; margin: 5px 0 0 0;">
+                <li>删除本地豆瓣数据文件</li>
+                <li>触发Emby插件重新下载</li>
+                <li>(可选) 触发后续自动化修复</li>
+              </ul>
+            </template>
+            <el-button type="success" @click="handleRunTask" :loading="isRunning" size="large">刷新豆瓣数据并自动化流程</el-button>
+          </el-tooltip>
+          <!-- --- 新增 --- -->
+          <el-tooltip placement="top" effect="dark">
+            <template #content>
+              <div>跳过豆瓣文件刷新，直接对选定媒体执行修复：</div>
+              <ul style="padding-left: 20px; margin: 5px 0 0 0;">
+                <li>重置Emby元数据</li>
+                <li>重新执行演员中文化</li>
+                <li>强制覆盖更新角色映射表</li>
+              </ul>
+            </template>
+            <el-button type="warning" @click="handleRunFixTask" :loading="isFixing" size="large">不刷新豆瓣数据之间自动化流程</el-button>
+          </el-tooltip>
+          <!-- --- 新增结束 --- -->
         </div>
         <!-- --- 修改结束 --- -->
       </div>
@@ -150,6 +180,46 @@
         </span>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="isHelpVisible"
+      title="功能说明"
+      width="750px"
+    >
+      <div class="help-content">
+        <p>本页面提供两种核心功能，用于维护和修复媒体的豆瓣元数据及其衍生数据（如演员角色名）。</p>
+        
+        <el-divider />
+
+        <h4><el-tag type="success" effect="dark" size="large" style="padding: 0 15px;">刷新豆瓣数据</el-tag></h4>
+        <p><strong>目标：</strong>获取最新的豆瓣官方元数据，解决因早期刮削信息不全（如缺少角色名）导致的问题。</p>
+        <p><strong>核心原理：</strong>通过“删除本地文件 -> 擦除Emby豆瓣ID -> 写回Emby豆瓣ID”的连招，欺骗 Emby 的豆瓣刮削插件，使其认为这是一个新项目，从而触发一次全新的元数据下载。</p>
+        <h5>执行流程：</h5>
+        <ol>
+          <li><strong>[清理]</strong> 删除本地由 Emby 插件下载的旧豆瓣元数据文件夹。</li>
+          <li><strong>[触发]</strong> 通过 API 暂时移除 Emby 中该媒体的豆瓣ID，稍等片刻后再重新添加回去。</li>
+          <li><strong>[等待]</strong> 等待一段时间（可在页面配置），让 Emby 插件有足够的时间完成新数据的下载。</li>
+          <li><strong>[更新缓存]</strong> 将新下载的元数据文件解析并覆盖更新到工具的 `douban_data.json` 主缓存中。</li>
+          <li><strong>[可选自动化]</strong> 如果开启，将对比新旧元数据。若演员/角色信息有变化，则会自动触发后续的“修复元数据”流程（见下文）。</li>
+        </ol>
+
+        <el-divider />
+
+        <h4><el-tag type="warning" effect="dark" size="large" style="padding: 0 15px;">修复元数据</el-tag></h4>
+        <p><strong>目标：</strong>当您对现有的“演员中文化”结果不满意时（例如，翻译引擎配置错误、自定义规则不完善），提供一个快速重新处理的通道。</p>
+        <p><strong>核心原理：</strong>此功能会跳过耗时的豆瓣文件刷新，直接对 Emby 中的数据进行重置和再加工。</p>
+        <h5>执行流程：</h5>
+        <ol>
+          <li><strong>[重置]</strong> 调用 Emby 的刷新 API，将媒体的元数据（特别是演员角色名）恢复到刮削器提供的原始状态（通常是英文）。</li>
+          <li><strong>[等待]</strong> 等待片刻，确保 Emby 已应用上述重置。</li>
+          <li><strong>[重新中文化]</strong> 调用“演员中文化”模块，使用您当前的最新配置，对这个媒体重新进行一次完整的处理。</li>
+          <li><strong>[强制更新映射]</strong> 将新生成的中文化结果，强制性地覆盖写入到 `actor_role_map.json` 映射表中，确保下次能直接应用正确的结果。</li>
+        </ol>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="isHelpVisible = false">我明白了</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -161,6 +231,7 @@ import { useTaskStore } from '@/stores/task';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import _ from 'lodash';
 import { API_BASE_URL } from '@/config/apiConfig';
+import { QuestionFilled } from '@element-plus/icons-vue';
 
 const configStore = useConfigStore();
 const mediaStore = useMediaStore();
@@ -170,8 +241,10 @@ const scope = ref({});
 const localConfig = ref({});
 const isSaving = ref(false);
 const isRunning = ref(false);
+const isFixing = ref(false);
 // --- 新增 ---
 const isSavingScope = ref(false);
+const isHelpVisible = ref(false);
 // --- 新增结束 ---
 
 const isSearchDialogVisible = ref(false);
@@ -269,6 +342,40 @@ const handleRunTask = async () => {
     isRunning.value = false;
   }
 };
+
+const handleRunFixTask = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '即将开始修复元数据。此流程会重置Emby元数据、重新进行演员中文化并强制覆盖角色映射表，用于修复不满意的中文化结果。是否继续？',
+      '确认修复操作',
+      {
+        confirmButtonText: '确定修复',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    );
+
+    isFixing.value = true;
+    const payload = {
+      scope: scope.value,
+      config: localConfig.value
+    };
+    const response = await fetch(`${API_BASE_URL}/api/douban-metadata-refresher/run-fix`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || '启动修复任务失败');
+    ElMessage.success(data.message);
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(`操作失败: ${error.message}`);
+    }
+  } finally {
+    isFixing.value = false;
+  }
+};
 </script>
 
 <style scoped>
@@ -283,6 +390,20 @@ const handleRunTask = async () => {
   border-bottom: 1px solid var(--el-border-color-light);
   flex-shrink: 0;
   margin-bottom: 20px;
+}
+.header-title-with-help {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.help-icon {
+  font-size: 1.2rem;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.help-icon:hover {
+  color: var(--el-color-primary);
 }
 .page-header h2 { margin: 0 0 8px 0; }
 .page-header p { margin: 0; color: var(--el-text-color-secondary); }
@@ -386,6 +507,31 @@ const handleRunTask = async () => {
 }
 .save-scope-button-container .el-button {
   width: 100%;
+}
+.help-content h4 {
+  margin-top: 20px;
+  margin-bottom: 10px;
+  color: var(--el-text-color-primary);
+  display: flex;
+  align-items: center;
+}
+.help-content h5 {
+  margin-top: 15px;
+  margin-bottom: 8px;
+  color: var(--el-text-color-regular);
+}
+.help-content p, .help-content li {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+  line-height: 1.8;
+  margin-bottom: 8px;
+}
+.help-content ol {
+  padding-left: 20px;
+  margin: 10px 0;
+}
+.help-content strong {
+  color: var(--el-text-color-primary);
 }
 /* --- 新增结束 --- */
 </style>
