@@ -849,7 +849,7 @@ class EpisodeRefresherLogic:
 
     
 
-    def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str, remote_db: Optional[Dict]) -> int:
+    def _refresh_season_by_toolbox(self, series_tmdb_id: str, season_number: int, emby_episodes: List[Dict], config: EpisodeRefresherConfig, task_category: str, remote_db: Optional[Dict], series_tags: List[str]) -> int:
         updated_count = 0
         try:
             series_name_for_log = emby_episodes[0].get("SeriesName", f"剧集 {series_tmdb_id}")
@@ -861,6 +861,11 @@ class EpisodeRefresherLogic:
                 return 0
             
             tmdb_episodes_map = {ep.get("episode_number"): ep for ep in tmdb_season_details["episodes"]}
+
+            force_refresh_tag = "ForceImageRefresh"
+            has_force_tag = any(t.lower() == force_refresh_tag.lower() for t in series_tags)
+            if has_force_tag:
+                ui_logger.info(f"     - ⚡ [强制模式] 检测到剧集标签 '{force_refresh_tag}'，将优先使用本地/远程缓存覆盖现有图片。", task_category=task_category)
 
             for emby_episode in emby_episodes:
                 episode_num = emby_episode.get("IndexNumber")
@@ -914,8 +919,13 @@ class EpisodeRefresherLogic:
                 tmdb_still_path = tmdb_episode.get("still_path") if tmdb_episode else None
 
                 ui_logger.debug(f"{log_prefix} [决策] 检查外部数据源...")
-                if tmdb_still_path:
-                    if not emby_has_image or current_image_source == "screenshot":
+                is_toolbox_image = current_image_source in ["local", "remote", "screenshot"]
+                
+                if has_force_tag and not is_toolbox_image and config.screenshot_enabled:
+                    image_update_action = "screenshot"
+                    comparison_log['图片'] = "强制刷新(标签触发) → 本地/远程/截图"
+                elif tmdb_still_path:
+                    if not emby_has_image or (current_image_source == "screenshot" and not has_force_tag):
                         image_update_action = "tmdb"
                         comparison_log['图片'] = "Emby(无/截图) → TMDB(有)"
                     else:
@@ -1077,7 +1087,33 @@ class EpisodeRefresherLogic:
         episodes_to_process = []
         if config.skip_if_complete:
             ui_logger.info("智能跳过已开启，正在逐一分析分集完整性...", task_category=task_category)
+
+            series_ids_to_check = list(set(ep.get("SeriesId") for ep in all_episode_details if ep.get("SeriesId")))
+            series_force_map = {}
+            
+            if series_ids_to_check:
+                ui_logger.info(f"正在检查 {len(series_ids_to_check)} 部剧集的强制刷新标签...", task_category=task_category)
+                def check_series_tag(sid):
+                    try:
+                        s_details = self._get_emby_item_details(sid, "Tags")
+                        tags = s_details.get("Tags", [])
+                        return sid, any(t.lower() == "forceimagerefresh" for t in tags)
+                    except:
+                        return sid, False
+
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    futures = [executor.submit(check_series_tag, sid) for sid in series_ids_to_check]
+                    for f in as_completed(futures):
+                        sid, is_forced = f.result()
+                        series_force_map[sid] = is_forced
+
             for ep in all_episode_details:
+
+                sid = ep.get("SeriesId")
+                if series_force_map.get(sid, False):
+                    episodes_to_process.append(ep)
+                    continue
+
                 is_title_ok = bool(ep.get("Name")) and not self._is_generic_episode_title(ep.get("Name"))
                 is_overview_ok = bool(ep.get("Overview"))
                 
@@ -1135,8 +1171,12 @@ class EpisodeRefresherLogic:
                 if cancellation_event.is_set(): break
                 
                 series_tmdb_id = series_tmdb_id_cache.get(series_id)
+
+
+                series_details = self.tmdb_logic._get_emby_item_details(series_id, fields="ProviderIds,Tags")
+                series_tags = series_details.get("Tags", [])
+
                 if not series_tmdb_id:
-                    series_details = self.tmdb_logic._get_emby_item_details(series_id, fields="ProviderIds")
                     series_tmdb_id = next((v for k, v in series_details.get("ProviderIds", {}).items() if k.lower() == 'tmdb'), None)
                     if series_tmdb_id:
                         series_tmdb_id_cache[series_id] = series_tmdb_id
@@ -1150,7 +1190,7 @@ class EpisodeRefresherLogic:
                 for season_number, emby_episodes in seasons.items():
                     if cancellation_event.is_set(): break
                     # --- 新增/修改：将 remote_db 传递下去 ---
-                    refreshed_count += self._refresh_season_by_toolbox(series_tmdb_id, season_number, emby_episodes, config, task_category, remote_db)
+                    refreshed_count += self._refresh_season_by_toolbox(series_tmdb_id, season_number, emby_episodes, config, task_category, remote_db, series_tags)
                     # --- 新增/修改结束 ---
                     processed_ep_count += len(emby_episodes)
                     if task_manager and task_id:

@@ -314,6 +314,23 @@
                 </el-form-item>
                 
                 <el-alert
+                  title="高级技巧：定向强制刷新"
+                  type="info"
+                  show-icon
+                  :closable="false"
+                  style="margin-bottom: 20px;"
+                >
+                  <p>
+                    如果您只想对特定的剧集强制替换图片（例如 TMDB 官方图质量差），请在 Emby 中为该剧集添加标签 
+                    <el-tag size="small" effect="dark">ForceImageRefresh</el-tag>。
+                  </p>
+                  <p>
+                    工具箱检测到此标签后，会自动无视“智能跳过”和“保护现有图片”规则，优先使用本地/远程缓存或实时截图来覆盖现有图片。
+                    一旦覆盖成功，工具箱会写入标记，防止下次重复刷新。
+                  </p>
+                </el-alert>
+                
+                <el-alert
                   v-if="localRefresherConfig.force_overwrite_screenshots"
                   title="强制覆盖模式已激活"
                   type="warning"
