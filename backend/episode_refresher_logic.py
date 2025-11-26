@@ -863,9 +863,19 @@ class EpisodeRefresherLogic:
             tmdb_episodes_map = {ep.get("episode_number"): ep for ep in tmdb_season_details["episodes"]}
 
             force_refresh_tag = "ForceImageRefresh"
-            has_force_tag = any(t.lower() == force_refresh_tag.lower() for t in series_tags)
-            if has_force_tag:
-                ui_logger.info(f"     - ⚡ [强制模式] 检测到剧集标签 '{force_refresh_tag}'，将优先使用本地/远程缓存覆盖现有图片。", task_category=task_category)
+            typo_tag = "ForcelmageRefresh" # 容错：小写 l
+            
+            has_force_tag = False
+            for t in series_tags:
+                t_lower = str(t).lower()
+                if t_lower == force_refresh_tag.lower():
+                    has_force_tag = True
+                    ui_logger.info(f"     - ⚡ [强制模式] 检测到剧集标签 '{t}'，将优先使用本地/远程缓存覆盖现有图片。", task_category=task_category)
+                    break
+                elif t_lower == typo_tag.lower():
+                    has_force_tag = True
+                    ui_logger.warning(f"     - ⚡ [强制模式] 检测到标签 '{t}' (注意：包含拼写错误 'l' 而非 'I')，已自动容错并激活强制模式。", task_category=task_category)
+                    break
 
             for emby_episode in emby_episodes:
                 episode_num = emby_episode.get("IndexNumber")
@@ -1095,9 +1105,24 @@ class EpisodeRefresherLogic:
                 ui_logger.info(f"正在检查 {len(series_ids_to_check)} 部剧集的强制刷新标签...", task_category=task_category)
                 def check_series_tag(sid):
                     try:
-                        s_details = self._get_emby_item_details(sid, "Tags")
-                        tags = s_details.get("Tags", [])
-                        return sid, any(t.lower() == "forceimagerefresh" for t in tags)
+                        # 1. 请求字段增加 TagItems
+                        s_details = self._get_emby_item_details(sid, "Tags,TagItems")
+                        
+                        # 2. 健壮的解析逻辑 (优先 TagItems)
+                        tags = []
+                        if 'TagItems' in s_details and isinstance(s_details['TagItems'], list):
+                            tags = [t.get('Name') for t in s_details.get('TagItems', []) if isinstance(t, dict)]
+                        elif 'Tags' in s_details and isinstance(s_details['Tags'], list):
+                            tags = s_details.get("Tags", [])
+                        
+                        # 3. 匹配逻辑 (含容错)
+                        for t in tags:
+                            t_lower = str(t).lower()
+                            if t_lower == "forceimagerefresh": 
+                                return sid, True
+                            if t_lower == "forcelmagerefresh": # 容错
+                                return sid, True
+                        return sid, False
                     except:
                         return sid, False
 
@@ -1173,8 +1198,14 @@ class EpisodeRefresherLogic:
                 series_tmdb_id = series_tmdb_id_cache.get(series_id)
 
 
-                series_details = self.tmdb_logic._get_emby_item_details(series_id, fields="ProviderIds,Tags")
-                series_tags = series_details.get("Tags", [])
+                series_details = self.tmdb_logic._get_emby_item_details(series_id, fields="ProviderIds,Tags,TagItems")
+                
+                # 2. 健壮的解析逻辑
+                series_tags = []
+                if 'TagItems' in series_details and isinstance(series_details['TagItems'], list):
+                    series_tags = [t.get('Name') for t in series_details.get('TagItems', []) if isinstance(t, dict)]
+                elif 'Tags' in series_details and isinstance(series_details['Tags'], list):
+                    series_tags = series_details.get("Tags", [])
 
                 if not series_tmdb_id:
                     series_tmdb_id = next((v for k, v in series_details.get("ProviderIds", {}).items() if k.lower() == 'tmdb'), None)
