@@ -11,31 +11,73 @@
       <div class="controls-panel">
         <div class="control-section">
           <h3>1. 选择扫描范围</h3>
-          <el-radio-group v-model="scanScope" class="scope-radio-group">
-            <el-radio value="all">所有媒体库</el-radio>
-            <el-radio value="media_type">按媒体类型</el-radio>
-            <el-radio value="library">按媒体库</el-radio>
-          </el-radio-group>
-          <div class="sub-options">
-            <div v-if="scanScope === 'media_type'">
-              <el-radio-group v-model="selectedMediaType">
-                <el-radio value="Movie">仅电影</el-radio>
-                <el-radio value="Series">仅电视剧</el-radio>
-              </el-radio-group>
-            </div>
-            <div v-if="scanScope === 'library'">
-              <el-select 
-                v-model="selectedLibraryIds" 
-                multiple 
-                placeholder="请选择媒体库" 
-                style="width: 100%;" 
-                filterable
-                :loading="mediaStore.isLoading"
-              >
-                <el-option v-for="item in mediaStore.libraries" :key="item.id" :label="item.name" :value="item.id" />
+          <el-form label-position="top" size="small">
+            <el-form-item label="模式">
+              <el-select v-model="targetScope.mode" style="width: 100%">
+                <el-option label="最新入库" value="latest" />
+                <el-option label="所有媒体库" value="all" />
+                <el-option label="按媒体类型" value="by_type" />
+                <el-option label="按媒体库" value="by_library" />
+                <el-option label="指定ID (高级)" value="by_search" />
+                <el-option label="仅收藏" value="favorites" />
               </el-select>
+            </el-form-item>
+
+            <!-- 动态选项区域 -->
+            <div v-if="targetScope.mode === 'latest'" class="dynamic-options">
+              <el-form-item label="最近天数">
+                <el-input-number v-model="targetScope.days" :min="1" :max="365" style="width: 100%" />
+              </el-form-item>
+              <el-form-item label="数量限制">
+                <el-input-number v-model="targetScope.limit" :min="1" :max="10000" style="width: 100%" />
+              </el-form-item>
             </div>
-          </div>
+
+            <div v-if="targetScope.mode === 'by_type'" class="dynamic-options">
+              <el-form-item label="媒体类型">
+                <el-radio-group v-model="targetScope.media_type">
+                  <el-radio value="Movie">仅电影</el-radio>
+                  <el-radio value="Series">仅电视剧</el-radio>
+                </el-radio-group>
+              </el-form-item>
+            </div>
+
+            <div v-if="targetScope.mode === 'by_library'" class="dynamic-options">
+              <el-form-item label="选择媒体库">
+                <el-select 
+                  v-model="targetScope.library_ids" 
+                  multiple 
+                  placeholder="请选择" 
+                  style="width: 100%"
+                  :loading="mediaStore.isLoading"
+                >
+                  <el-option 
+                    v-for="lib in mediaStore.libraries" 
+                    :key="lib.id" 
+                    :label="lib.name" 
+                    :value="lib.id" 
+                  />
+                </el-select>
+              </el-form-item>
+            </div>
+
+            <div v-if="targetScope.mode === 'by_search'" class="dynamic-options">
+              <el-form-item label="Emby Item ID 列表">
+                <el-input 
+                  v-model="itemIdsInput" 
+                  type="textarea" 
+                  :rows="4" 
+                  placeholder="输入 Emby Item ID，多个ID请换行或用逗号分隔" 
+                />
+              </el-form-item>
+            </div>
+            
+            <div v-if="targetScope.mode === 'all'" class="dynamic-options">
+               <el-form-item label="排除库 (可选)">
+                 <el-input v-model="targetScope.library_blacklist" placeholder="输入库名，逗号分隔" />
+               </el-form-item>
+            </div>
+          </el-form>
         </div>
 
         <div class="control-section">
@@ -184,9 +226,25 @@ const dialogVisible = ref(false)
 const activeItem = ref(null)
 const dialogSearchQuery = ref('')
 
-const scanScope = useStorage('doubanfixer-scan-scope', 'all')
-const selectedMediaType = useStorage('doubanfixer-media-type', 'Movie')
-const selectedLibraryIds = useStorage('doubanfixer-library-ids', [])
+const targetScope = useStorage('doubanfixer-target-scope', {
+  mode: 'latest', // latest, all, by_type, by_library, by_search, favorites
+  days: 7,
+  limit: 100,
+  media_type: 'Movie',
+  library_ids: [],
+  library_blacklist: '',
+  item_ids: [] // 用于存储指定ID列表
+})
+
+// 用于 by_search 模式下输入 ID 的临时字符串
+const itemIdsInput = ref('')
+
+// 初始化时将 item_ids 数组转为字符串显示
+onMounted(() => {
+  if (targetScope.value.item_ids && targetScope.value.item_ids.length > 0) {
+    itemIdsInput.value = targetScope.value.item_ids.join('\n')
+  }
+})
 
 const runningTask = computed(() => 
   taskStore.tasks.find(task => task.name.startsWith('豆瓣ID修复') && task.status === 'running')
@@ -214,16 +272,32 @@ const handleFullScan = () => {
     return
   }
 
-  if (scanScope.value === 'library' && selectedLibraryIds.value.length === 0) {
+  // 校验逻辑
+  if (targetScope.value.mode === 'by_library' && targetScope.value.library_ids.length === 0) {
     ElMessage.warning('请至少选择一个媒体库。')
     return
   }
-
-  const payload = {
-    scope: scanScope.value,
-    media_type: scanScope.value === 'media_type' ? selectedMediaType.value : null,
-    library_ids: scanScope.value === 'library' ? selectedLibraryIds.value : null,
+  
+  // 处理 by_search 模式下的 ID 输入
+  if (targetScope.value.mode === 'by_search') {
+    if (!itemIdsInput.value.trim()) {
+      ElMessage.warning('请输入至少一个 Emby Item ID。')
+      return
+    }
+    // 将字符串分割为数组
+    targetScope.value.item_ids = itemIdsInput.value
+      .split(/[\n,]/)
+      .map(id => id.trim())
+      .filter(id => id.length > 0)
+  } else {
+    targetScope.value.item_ids = []
   }
+
+  // 构造请求 Payload
+  const payload = {
+    scope: targetScope.value
+  }
+  
   store.startFullScan(payload)
 }
 

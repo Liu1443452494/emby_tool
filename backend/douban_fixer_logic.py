@@ -253,20 +253,37 @@ class DoubanFixerLogic:
         ui_logger.info(f"任务执行完毕，共成功修复了 {fixed_count} 个项目。", task_category=task_category)
         return {"fixed_count": fixed_count}
 
-    def scan_and_match_task(self, scan_scope: str, media_type: Optional[str], library_ids: Optional[List[str]], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-        """(旧的全库扫描任务，现在作为包装器)"""
-        task_cat = f"豆瓣修复器({scan_scope})"
-        ui_logger.info(f"开始执行扫描，范围: {scan_scope}...", task_category=task_cat)
+    def scan_and_match_task(self, scope: ScheduledTasksTargetScope, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        """执行豆瓣ID修复扫描任务"""
+        task_cat = f"豆瓣修复器({scope.mode})"
+        
+        # 详细的范围日志
+        scope_desc = f"模式: {scope.mode}"
+        if scope.mode == 'by_library':
+            scope_desc += f", 库ID: {scope.library_ids}"
+        elif scope.mode == 'by_type':
+            scope_desc += f", 类型: {scope.media_type}"
+        elif scope.mode == 'latest':
+            scope_desc += f", 最近 {scope.days} 天, 限制 {scope.limit} 条"
+        elif scope.mode == 'by_search':
+            scope_desc += f", 搜索词: {scope.item_ids[0] if scope.item_ids else '无'}"
+            
+        ui_logger.info(f"🚀 开始执行扫描任务，范围配置 -> {scope_desc}", task_category=task_cat)
         
         from media_selector import MediaSelector
         
-        scope_config = ScheduledTasksTargetScope(
-            mode='all' if scan_scope == 'all' else ('by_type' if scan_scope == 'media_type' else 'by_library'),
-            media_type=media_type,
-            library_ids=library_ids or []
-        )
+        try:
+            selector = MediaSelector(self.app_config)
+            # 直接使用传入的 scope 对象获取 ID 列表
+            item_ids_to_process = selector.get_item_ids(scope)
+            
+            if not item_ids_to_process:
+                ui_logger.warning(f"⚠️ 根据当前范围配置，未找到任何需要处理的媒体项。任务结束。", task_category=task_cat)
+                return
 
-        selector = MediaSelector(self.app_config)
-        item_ids_to_process = selector.get_item_ids(scope_config)
-
-        self.run_fixer_for_items(item_ids_to_process, cancellation_event, task_id, task_manager, task_cat)
+            ui_logger.info(f"✅ 范围筛选完成，共获取到 {len(item_ids_to_process)} 个媒体项，准备开始修复...", task_category=task_cat)
+            
+            self.run_fixer_for_items(item_ids_to_process, cancellation_event, task_id, task_manager, task_cat)
+            
+        except Exception as e:
+            ui_logger.error(f"❌ 扫描任务执行过程中发生未捕获异常: {e}", task_category=task_cat, exc_info=True)

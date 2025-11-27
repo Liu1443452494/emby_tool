@@ -7,7 +7,8 @@ from typing import List, Dict
 from bs4 import BeautifulSoup
 import re
 
-
+from pydantic import BaseModel
+from models import AppConfig, ScheduledTasksTargetScope
 from log_manager import ui_logger
 from models import AppConfig
 from douban_fixer_logic import DoubanFixerLogic
@@ -73,19 +74,19 @@ def test_douban_cookie(payload: Dict):
         raise HTTPException(status_code=500, detail=f"连接豆瓣失败，请检查网络或代理设置。错误: {e}")
 
 
+class FixerTaskRequest(BaseModel):
+    scope: ScheduledTasksTargetScope
+
 @router.post("/scan-all")
-def start_full_scan(payload: Dict):
+def start_full_scan(req: FixerTaskRequest):
     logic = get_logic()
     for task in task_manager.get_all_tasks():
         if task['name'].startswith("豆瓣ID修复"):
             raise HTTPException(status_code=409, detail=f"已有豆瓣ID修复任务(ID: {task['id']})正在运行，请勿重复启动。")
             
-    scan_scope = payload.get("scope", "all")
-    media_type = payload.get("media_type")
-    library_ids = payload.get("library_ids")
-    
-    task_name = f"豆瓣ID修复-{scan_scope}"
-    task_id = task_manager.register_task(logic.scan_and_match_task, task_name, scan_scope, media_type, library_ids)
+    task_name = f"豆瓣ID修复-{req.scope.mode}"
+    # 直接传递 scope 对象给逻辑层
+    task_id = task_manager.register_task(logic.scan_and_match_task, task_name, req.scope)
     return {"status": "success", "message": "扫描任务已启动，请在“运行任务”页面查看进度。", "task_id": task_id}
 
 @router.get("/cache")
