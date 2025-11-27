@@ -2,6 +2,7 @@
 import logging
 import threading
 import time
+import random
 import requests
 import json
 import os
@@ -81,9 +82,12 @@ class DoubanFixerLogic:
     def _search_douban(self, title: str, task_cat: str) -> Optional[List[Dict]]:
         try:
             
-            cooldown = self.fixer_config.api_cooldown
-            ui_logger.info(f"➡️ [豆瓣搜索] 准备为【{title}】搜索，将等待 {cooldown:.1f} 秒冷却时间...", task_category=task_cat)
-            time.sleep(cooldown)
+            base_cooldown = self.fixer_config.api_cooldown
+            jitter = random.uniform(0, 5) # 增加 0-5 秒的随机抖动
+            actual_wait = base_cooldown + jitter
+            
+            ui_logger.info(f"➡️ [豆瓣搜索] 准备为【{title}】搜索，将等待 {actual_wait:.1f} 秒 (含随机延迟)...", task_category=task_cat)
+            time.sleep(actual_wait)
             
             search_url = f"https://search.douban.com/movie/subject_search?search_text={quote(title)}&cat=1002"
             response = self.session.get(search_url, timeout=20)
