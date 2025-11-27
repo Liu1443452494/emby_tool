@@ -588,11 +588,19 @@ class ActorRoleMapperLogic:
             ui_logger.error(f"❌ 从 GitHub 下载失败: {e}", task_category=task_cat, exc_info=True)
             raise e
         
-    # backend/actor_role_mapper_logic.py (函数替换)
-
     def _fetch_all_persons_index(self) -> Dict[str, Dict]:
         """
-        一次性拉取全库演员数据，构建 {EmbyID: {ProviderIds, Name}} 的索引。
+        一次性拉取全库演员数据，构建索引。
+        返回结构:
+        {
+            "by_id": {
+                "EmbyId": { "Name": "张三", "ProviderIds": {...} }
+            },
+            "name_count": {
+                "张三": 2,
+                "李四": 1
+            }
+        }
         """
         ui_logger.info("➡️ [索引构建] 正在拉取全库演员数据以加速匹配...", task_category="演员角色映射-索引")
         start_time = time.time()
@@ -609,16 +617,25 @@ class ActorRoleMapperLogic:
             response.raise_for_status()
             items = response.json().get("Items", [])
             
-            index = {}
+            by_id_index = {}
+            name_count_index = {}
+
             for item in items:
-                index[item['Id']] = {
-                    "Name": item.get("Name"),
+                name = item.get("Name")
+                by_id_index[item['Id']] = {
+                    "Name": name,
                     "ProviderIds": item.get("ProviderIds", {})
                 }
+                if name:
+                    name_count_index[name] = name_count_index.get(name, 0) + 1
             
             duration = time.time() - start_time
-            ui_logger.info(f"✅ [索引构建] 完成！耗时 {duration:.2f} 秒，共索引 {len(index)} 位演员。", task_category="演员角色映射-索引")
-            return index
+            ui_logger.info(f"✅ [索引构建] 完成！耗时 {duration:.2f} 秒，共索引 {len(by_id_index)} 位演员。", task_category="演员角色映射-索引")
+            
+            return {
+                "by_id": by_id_index,
+                "name_count": name_count_index
+            }
         except Exception as e:
             ui_logger.error(f"❌ [索引构建] 失败: {e}，后续将回退到慢速模式。", task_category="演员角色映射-索引")
             return {}
@@ -627,8 +644,9 @@ class ActorRoleMapperLogic:
     def restore_single_map_task(self, item_ids: List[str], role_map: Dict, title: str, cancellation_event: threading.Event, task_id: str, task_manager: Optional[TaskManager] = None, task_category: Optional[str] = None, person_index: Optional[Dict] = None):
         """
         根据映射关系，恢复指定 Emby 媒体项列表的演员角色名。
-        采用【反向锁定】策略，融合【演员名修正】逻辑，并使用最终优化的日志风格。
-        优化版：支持传入 person_index 进行极速查找。
+        采用【智能隔离】策略：
+        - 如果传入了 person_index，则根据全库重名情况决定是否隔离（直连 vs 隔离）。
+        - 如果未传入 person_index，则默认采用全隔离模式（安全但慢）。
         """
         task_cat = task_category if task_category else "演员角色映射-恢复"
         
@@ -640,6 +658,19 @@ class ActorRoleMapperLogic:
         if task_manager:
             pass
         ui_logger.info(f"  ➡️ 开始为作品《{title}》恢复演员角色，共涉及 {total_items} 个Emby媒体项。", task_category=task_cat)
+
+        # 解析索引
+        index_by_id = {}
+        index_name_count = {}
+        if person_index:
+            index_by_id = person_index.get("by_id", {})
+            index_name_count = person_index.get("name_count", {})
+            # 兼容旧格式（如果 person_index 直接是 by_id 字典）
+            if not index_by_id and not index_name_count and person_index:
+                 first_val = next(iter(person_index.values()), {})
+                 if 'Name' in first_val:
+                     index_by_id = person_index
+                     logging.warning("【调试】传入的索引为旧格式，缺少 name_count，将无法使用智能直连优化。")
 
         for i, item_id in enumerate(item_ids):
             if cancellation_event.is_set():
@@ -661,28 +692,24 @@ class ActorRoleMapperLogic:
                 emby_actors_by_id = {}
                 emby_actors_by_name = {}
                 
-                # --- 核心优化：优先使用 person_index，如果没有则回退到 API 请求 ---
-                if person_index:
+                # --- 步骤 1: 构建当前媒体项的演员查找表 ---
+                if index_by_id:
                     # 极速模式：直接查表
                     for actor in emby_actors_base:
                         actor_id = actor['Id']
-                        # 从索引中获取详细信息
-                        indexed_info = person_index.get(actor_id)
+                        indexed_info = index_by_id.get(actor_id)
                         
-                        # 构建包含 ProviderIds 的完整对象
                         full_actor_info = actor.copy()
                         if indexed_info:
                             full_actor_info['ProviderIds'] = indexed_info['ProviderIds']
-                            # 注意：这里不覆盖 Name，因为电影里的 Name 可能是特定于电影的（虽然 Emby 通常是一致的）
                         
-                        # 建立索引
                         provider_ids_lower = {k.lower(): v for k, v in full_actor_info.get("ProviderIds", {}).items()}
                         person_tmdb_id = provider_ids_lower.get("tmdb")
                         if person_tmdb_id:
                             emby_actors_by_id[str(person_tmdb_id)] = full_actor_info
                         emby_actors_by_name[full_actor_info.get("Name")] = full_actor_info
                 else:
-                    # 慢速模式：并发请求 (保留原有逻辑作为兜底)
+                    # 慢速模式：并发请求
                     with ThreadPoolExecutor(max_workers=10) as executor:
                         future_to_person = {executor.submit(self._get_emby_item_details, p['Id'], "ProviderIds"): p for p in emby_actors_base}
                         for future in as_completed(future_to_person):
@@ -698,6 +725,7 @@ class ActorRoleMapperLogic:
                             except Exception:
                                 emby_actors_by_name[original_person.get("Name")] = original_person
 
+                # --- 步骤 2: 计算差异 ---
                 actors_to_update_map = {}
                 for map_actor_name, map_actor_data in role_map.items():
                     map_tmdb_id = map_actor_data.get("tmdb_id")
@@ -730,21 +758,65 @@ class ActorRoleMapperLogic:
 
                 ui_logger.info(f"       - 🔍 扫描发现 {len(actors_to_update_map)} 位演员信息需要更新。", task_category=task_cat)
                 
-                ui_logger.info(f"       - [隔离] 正在为 {len(actors_to_update_map)} 个待更新演员进行临时改名...", task_category=task_cat)
+                # --- 步骤 3: 智能隔离判断与执行 ---
                 for person_id, update_info in actors_to_update_map.items():
                     current_name = update_info['current_name']
-                    unique_name = f"{current_name}_embytoolkit_update_{person_id}"
+                    target_name = update_info['target_name']
                     
-                    logging.debug(f"【调试】隔离: {current_name} (ID: {person_id}) -> {unique_name}")
-                    if self._rename_person_by_id(person_id, unique_name, task_cat):
-                        isolated_persons[person_id] = (current_name, update_info['target_name'])
-                        person_in_list = next((p for p in current_people_base if p.get("Id") == person_id), None)
-                        if person_in_list:
-                            person_in_list["Name"] = unique_name
-                    else:
-                        raise Exception(f"隔离演员 {current_name} (ID: {person_id}) 失败，中止操作。")
+                    # 默认必须隔离（安全兜底）
+                    need_isolation = True
+                    
+                    # 如果有姓名统计索引，尝试进行智能判断
+                    if index_name_count:
+                        is_rename = current_name != target_name
+                        
+                        # 规则 1: 起点安全检查 (当前名字是否唯一)
+                        current_name_count = index_name_count.get(current_name, 0)
+                        is_start_safe = (current_name_count == 1)
+                        
+                        # 规则 2: 终点安全检查
+                        if not is_rename:
+                            # 没改名，终点即起点，起点安全则终点安全
+                            is_end_safe = is_start_safe
+                        else:
+                            # 改名了，检查目标名字是否存在
+                            target_name_count = index_name_count.get(target_name, 0)
+                            is_end_safe = (target_name_count == 0)
+                        
+                        if is_start_safe and is_end_safe:
+                            need_isolation = False
+                            logging.debug(f"       - [智能直连] 演员 {current_name} -> {target_name} 判定为安全，跳过隔离。")
+                        else:
+                            reason = []
+                            if not is_start_safe: reason.append(f"起点重名({current_name}:{current_name_count})")
+                            if not is_end_safe: reason.append(f"终点重名({target_name}:{index_name_count.get(target_name, 0)})")
+                            logging.debug(f"       - [智能隔离] 演员 {current_name} -> {target_name} 判定为风险: {', '.join(reason)}。")
 
-                ui_logger.info(f"       - [更新] 隔离完成，开始将变更写入 Emby...", task_category=task_cat)
+                    if need_isolation:
+                        unique_name = f"{current_name}_embytoolkit_update_{person_id}"
+                        
+                        logging.debug(f"【调试】隔离: {current_name} (ID: {person_id}) -> {unique_name}")
+                        if self._rename_person_by_id(person_id, unique_name, task_cat):
+                            isolated_persons[person_id] = (current_name, update_info['target_name'])
+                            person_in_list = next((p for p in current_people_base if p.get("Id") == person_id), None)
+                            if person_in_list:
+                                person_in_list["Name"] = unique_name
+                        else:
+                            raise Exception(f"隔离演员 {current_name} (ID: {person_id}) 失败，中止操作。")
+                    else:
+                        # 直连模式：如果需要改名，直接改名
+                        if current_name != target_name:
+                            if self._rename_person_by_id(person_id, target_name, task_cat):
+                                person_in_list = next((p for p in current_people_base if p.get("Id") == person_id), None)
+                                if person_in_list:
+                                    person_in_list["Name"] = target_name
+                                # 更新索引计数
+                                index_name_count[current_name] = max(0, index_name_count.get(current_name, 1) - 1)
+                                index_name_count[target_name] = index_name_count.get(target_name, 0) + 1
+                            else:
+                                raise Exception(f"直连改名 {current_name} -> {target_name} 失败。")
+
+                ui_logger.info(f"       - [更新] 准备就绪，开始将变更写入 Emby...", task_category=task_cat)
                 for person in current_people_base:
                     person_id = person.get("Id")
                     if person_id in actors_to_update_map:
@@ -781,14 +853,19 @@ class ActorRoleMapperLogic:
             
             finally:
                 if isolated_persons:
-                    ui_logger.info(f"       - [恢复] 开始将 {len(isolated_persons)} 个演员恢复到目标名称...", task_category=task_cat)
+                    ui_logger.info(f"       - [恢复] 开始将 {len(isolated_persons)} 个隔离演员恢复到目标名称...", task_category=task_cat)
                     for person_id, (original_name, target_name) in isolated_persons.items():
                         log_msg = f"         - 🔓 恢复: (ID: {person_id}) -> {target_name}"
                         if original_name != target_name:
                             log_msg += f" (原名: '{original_name}')"
                         logging.debug(log_msg)
                         
-                        if not self._rename_person_by_id(person_id, target_name, task_cat):
+                        if self._rename_person_by_id(person_id, target_name, task_cat):
+                            # 更新索引计数
+                            if index_name_count:
+                                index_name_count[original_name] = max(0, index_name_count.get(original_name, 1) - 1)
+                                index_name_count[target_name] = index_name_count.get(target_name, 0) + 1
+                        else:
                             ui_logger.error(f"         - ❌ 恢复演员 (ID: {person_id}) 名称失败！请手动将其名称修改为 `{target_name}`。", task_category=task_cat)
                 
                 ui_logger.info(f"     - 🎉 作品《{title}》处理完毕。", task_category=task_cat)

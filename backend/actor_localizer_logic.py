@@ -272,9 +272,7 @@ class ActorLocalizerLogic:
         return None
     
 
-    # backend/actor_localizer_logic.py (函数替换)
-
-    def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig, task_category: str, preview_mode: bool = False) -> Dict[str, Any]:
+    def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig, task_category: str, preview_mode: bool = False, person_index: Optional[Dict] = None) -> Dict[str, Any]:
         details = self._get_item_details(item_id)
         if not details: return {"has_changes": False}
         
@@ -314,34 +312,25 @@ class ActorLocalizerLogic:
                 latin_name_lower = latin_name.lower()
                 douban_actor_map[latin_name_lower] = info_package
                 
-                # --- 修改：增强 Latin Name 匹配 (去符号 + 语序调整) ---
                 parts = latin_name_lower.split()
                 
-                # 1. 基础反转 (现有逻辑)
                 if len(parts) == 2:
                     reversed_latin_name_lower = f"{parts[1]} {parts[0]}"
                     douban_actor_map[reversed_latin_name_lower] = info_package
                 
-                # 辅助函数：去除空格、连字符和点号
                 def _normalize_key(text):
                     return text.replace(' ', '').replace('-', '').replace('.', '')
 
-                # 2. 生成去符号的 Key (解决 "Helena Bonham-Carter" vs "Helena Bonham Carter")
                 no_symbol_name = _normalize_key(latin_name_lower)
                 douban_actor_map[no_symbol_name] = info_package
                 
-                # 3. 针对 2 部分名字，生成反转去符号 Key (解决 "Qianguo Wang" vs "Wang Qian Guo")
                 if len(parts) == 2:
-                    # A B -> BA (e.g., "qianguo wang" -> "wangqianguo")
                     reversed_no_symbol = _normalize_key(f"{parts[1]}{parts[0]}")
                     douban_actor_map[reversed_no_symbol] = info_package
                 
-                # 4. 针对 3 部分名字，生成姓氏提前去符号 Key (解决 "Jian Guo Wang" vs "Wang Jian Guo")
                 if len(parts) == 3:
-                    # A B C -> CAB (e.g., "jian guo wang" -> "wangjianguo")
                     reordered_no_symbol = _normalize_key(f"{parts[2]}{parts[0]}{parts[1]}")
                     douban_actor_map[reordered_no_symbol] = info_package
-                # --- 修改结束 ---
 
         all_actors = [p for p in people if p.get('Type') == 'Actor']
         
@@ -371,7 +360,6 @@ class ActorLocalizerLogic:
                 matched_douban_actor = douban_actor_map.get(emby_actor_name.lower())
 
             if not matched_douban_actor:
-                # 将 Emby 名字转小写并去除空格、连字符、点号后尝试匹配
                 emby_name_normalized = emby_actor_name.lower().replace(' ', '').replace('-', '').replace('.', '')
                 matched_douban_actor = douban_actor_map.get(emby_name_normalized)
                 if matched_douban_actor:
@@ -411,9 +399,8 @@ class ActorLocalizerLogic:
                     clean_original_role = original_role.strip()
 
                     if clean_douban_role != clean_original_role:
-                        # 核心判断：只有当豆瓣角色名更长时才进行替换
                         if len(clean_douban_role) > len(clean_original_role):
-                            current_role = douban_role  # 使用原始的 douban_role 以保留可能存在的内部空格
+                            current_role = douban_role
                             source_text = "(来自豆瓣英文优化)"
                             logging.debug(f"     -- [英文优化] 采纳豆瓣角色: '{douban_role}' (长度 {len(clean_douban_role)}) > '{original_role}' (长度 {len(clean_original_role)})")
                         else:
@@ -439,7 +426,6 @@ class ActorLocalizerLogic:
                 if not preview_mode: ui_logger.info(f"     -- 角色名更新: {current_actor_name_for_log}: '{original_role}' -> '{current_role}' {source_text}", task_category=task_category)
                 person['Role'] = current_role
                 has_changes = True
-                # --- 核心修正：预览时也存入完整的日志字符串 ---
                 item_changes_log[current_actor_name_for_log] = {'old': original_role, 'new': current_role, 'source': source_text}
                 actor_source_map[current_actor_name_for_log] = source_text
 
@@ -511,7 +497,7 @@ class ActorLocalizerLogic:
         if config.custom_role_suffix_map:
             final_suffix_map.update(config.custom_role_suffix_map)
 
-        if any(final_suffix_map): # 仅当有规则时才执行
+        if any(final_suffix_map):
             if not preview_mode:
                 ui_logger.info("     --  aplicando regras de formatação final...", task_category=task_category)
             
@@ -523,24 +509,19 @@ class ActorLocalizerLogic:
                 if formatted_role != original_role_before_format:
                     person['Role'] = formatted_role
                     
-                    # 同步更新状态和日志
                     if not has_changes: has_changes = True
 
-                    # 如果之前已有变更日志，则更新 new 值；否则创建新的日志条目
                     if actor_name_for_log in item_changes_log:
-                        # 记录格式化前的角色名，以便日志更清晰
                         role_before_format_in_log = item_changes_log[actor_name_for_log]['new']
                         item_changes_log[actor_name_for_log]['new'] = formatted_role
                         if not preview_mode:
                              ui_logger.info(f"       - [格式化] {actor_name_for_log}: '{role_before_format_in_log}' -> '{formatted_role}'")
                     else:
-                        # 这种情况发生在原始角色名本身就匹配了格式化规则
                         original_role_from_emby = next((p.get('Role', '') for p in actors_to_process if p.get('Id') == person.get('Id')), '')
                         item_changes_log[actor_name_for_log] = {'old': original_role_from_emby, 'new': formatted_role, 'source': '(来自后缀格式化)'}
                         if not preview_mode:
                             ui_logger.info(f"     -- 角色名更新: {actor_name_for_log}: '{original_role_from_emby}' -> '{formatted_role}' (来自后缀格式化)", task_category=task_category)
 
-                    # 更新来源信息
                     actor_source_map[actor_name_for_log] = '(来自后缀格式化)'
 
 
@@ -605,7 +586,8 @@ class ActorLocalizerLogic:
                         cancellation_event=threading.Event(),
                         task_id=None,
                         task_manager=None,
-                        task_category=task_category
+                        task_category=task_category,
+                        person_index=person_index
                     )
                     return {"has_changes": True}
                 except Exception as e:
@@ -630,16 +612,26 @@ class ActorLocalizerLogic:
         if total_items == 0:
             ui_logger.info("没有需要处理的媒体项，任务结束。", task_category=task_category)
             return
+        
+        # --- 新增：拉取全库索引以加速批量处理 ---
+        full_app_config = AppConfig(server_config=self.server_config)
+        role_mapper_logic = ActorRoleMapperLogic(full_app_config)
+        ui_logger.info(f"【索引构建】正在拉取全库演员索引，以启用智能直连优化...", task_category=task_category)
+        person_index = role_mapper_logic._fetch_all_persons_index()
+        # --- 新增结束 ---
+
         updated_count = 0
         for index, item_id in enumerate(item_ids_list):
             if cancellation_event.is_set():
                 ui_logger.warning("任务被用户取消。", task_category=task_category)
                 break
             task_manager.update_task_progress(task_id, index + 1, total_items)
-            # --- 修改 ---
-            result = self._process_single_item_for_localization(item_id, config, task_category)
-            if result.get("has_changes"):
+            
+            # --- 修改：传入索引 ---
+            result = self._process_single_item_for_localization(item_id, config, task_category, person_index=person_index)
             # --- 修改结束 ---
+            
+            if result.get("has_changes"):
                 updated_count += 1
         ui_logger.info(f"【步骤 2/2】任务执行完毕，共更新了 {updated_count} 个项目的演员角色。", task_category=task_category)
         return {"updated_count": updated_count}
@@ -886,6 +878,8 @@ class ActorLocalizerLogic:
 
     # backend/actor_localizer_logic.py (函数替换)
 
+    # backend/actor_localizer_logic.py (函数替换)
+
     def apply_actor_changes_task(self, items: List[Dict], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员中文化应用"
         total_items = len(items)
@@ -895,6 +889,11 @@ class ActorLocalizerLogic:
         
         full_app_config = AppConfig(server_config=self.server_config)
         role_mapper_logic = ActorRoleMapperLogic(full_app_config)
+
+        # --- 新增：拉取全库索引以加速批量处理 ---
+        ui_logger.info(f"【索引构建】正在拉取全库演员索引，以启用智能直连优化...", task_category=task_cat)
+        person_index = role_mapper_logic._fetch_all_persons_index()
+        # --- 新增结束 ---
 
         for index, item_info in enumerate(items):
             if cancellation_event.is_set(): break
@@ -926,7 +925,6 @@ class ActorLocalizerLogic:
                 actor_name = person.get("Name")
                 if not actor_name: continue
                 
-                # --- 核心修正：直接从 changes_log 中获取 source ---
                 source_text = None
                 
                 change_info_by_new_name = next((v for k, v in changes_log.items() if v.get('new_name') == actor_name), None)
@@ -935,7 +933,6 @@ class ActorLocalizerLogic:
 
                 if change_info:
                     source_text = change_info.get('source')
-                # --- 修正结束 ---
 
                 work_map[actor_name] = {
                     "tmdb_id": None,
@@ -951,7 +948,8 @@ class ActorLocalizerLogic:
                     cancellation_event=cancellation_event,
                     task_id=task_id,
                     task_manager=task_manager,
-                    task_category=task_cat
+                    task_category=task_cat,
+                    person_index=person_index # --- 新增：传入索引 ---
                 )
                 updated_count += 1
             except Exception as e:
@@ -977,14 +975,18 @@ class ActorLocalizerLogic:
         if total_items == 0:
             ui_logger.info("没有需要处理的媒体项，任务结束。", task_category=task_category)
             return
+        
+        full_app_config = AppConfig(server_config=self.server_config)
+        role_mapper_logic = ActorRoleMapperLogic(full_app_config)
+        ui_logger.info(f"【索引构建】正在拉取全库演员索引，以启用智能直连优化...", task_category=task_category)
+        person_index = role_mapper_logic._fetch_all_persons_index()
+
         updated_count = 0
         for index, item_id in enumerate(item_ids_to_process):
             if cancellation_event.is_set(): break
             task_manager.update_task_progress(task_id, index + 1, total_items)
-            # --- 修改 ---
-            result = self._process_single_item_for_localization(item_id, config, task_category)
+            result = self._process_single_item_for_localization(item_id, config, task_category, person_index=person_index)
             if result.get("has_changes"):
-            # --- 修改结束 ---
                 updated_count += 1
         ui_logger.info(f"【步骤 2/2】自动应用任务执行完毕，共更新了 {updated_count} 个项目的演员角色。", task_category=task_category)
         return {"updated_count": updated_count}
