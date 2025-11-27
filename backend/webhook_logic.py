@@ -350,10 +350,14 @@ class WebhookLogic:
 
         if not actor_localization_skipped:
             ui_logger.info(f"【步骤 6/9 | 演员中文化】开始...", task_category=task_cat)
+
+            role_mapper_logic_for_index = ActorRoleMapperLogic(self.config)
+            ui_logger.info(f"   - [索引构建] 正在拉取全库演员数据以加速匹配 (Webhook模式)...", task_category=task_cat)
+            person_index = role_mapper_logic_for_index._fetch_all_persons_index()
             actor_localization_success = False
             try:
                 localizer_logic = ActorLocalizerLogic(self.config)
-                localizer_logic._process_single_item_for_localization(item_id, self.config.actor_localizer_config, task_category=task_cat)
+                localizer_logic._process_single_item_for_localization(item_id, self.config.actor_localizer_config, task_category=task_cat, person_index=person_index)
                 actor_localization_success = True
             except Exception as e:
                 ui_logger.error(f"【演员中文化】步骤执行失败，但将继续后续任务。错误: {e}", task_category=task_cat, exc_info=True)

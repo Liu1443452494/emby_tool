@@ -340,6 +340,11 @@ class DoubanMetadataRefresherLogic:
             return
 
         ui_logger.info("➡️ [阶段 4/5] 后续自动化已启用，开始比对元数据变更...", task_category=task_cat)
+
+        full_app_config = AppConfig(server_config=self.server_config)
+        role_mapper_logic = ActorRoleMapperLogic(full_app_config)
+        ui_logger.info(f"【索引构建】正在拉取全库演员索引，以启用智能直连优化...", task_category=task_cat)
+        person_index = role_mapper_logic._fetch_all_persons_index()
         items_to_deep_process = []
         try:
             with open(DOUBAN_CACHE_FILE, 'r', encoding='utf-8') as f:
@@ -385,7 +390,7 @@ class DoubanMetadataRefresherLogic:
             # 2. 演员中文化
             try:
                 localizer_logic = ActorLocalizerLogic(self.app_config)
-                localizer_logic._process_single_item_for_localization(item_id, self.app_config.actor_localizer_config, task_cat)
+                localizer_logic._process_single_item_for_localization(item_id, self.app_config.actor_localizer_config, task_cat, person_index=person_index)
             except Exception as e:
                 ui_logger.error(f"     - ❌ 演员中文化步骤失败: {e}", task_category=task_cat)
 
@@ -440,6 +445,11 @@ class DoubanMetadataRefresherLogic:
         ui_logger.info(f"✅ 过滤完成，共 {total_items} 个项目将执行修复。(已跳过 {skipped_count} 个无ID或获取失败的项目)", task_category=task_cat)
         task_manager.update_task_progress(task_id, 0, total_items)
 
+        full_app_config = AppConfig(server_config=self.server_config)
+        role_mapper_logic = ActorRoleMapperLogic(full_app_config)
+        ui_logger.info(f"【索引构建】正在拉取全库演员索引，以启用智能直连优化...", task_category=task_cat)
+        person_index = role_mapper_logic._fetch_all_persons_index()
+
         # 阶段二：核心修复循环
         ui_logger.info("➡️ [阶段 2/3] 开始对每个项目执行修复链条...", task_category=task_cat)
         for i, item in enumerate(items_to_process):
@@ -460,7 +470,7 @@ class DoubanMetadataRefresherLogic:
 
                 # 2. 演员中文化
                 localizer_logic = ActorLocalizerLogic(self.app_config)
-                localizer_logic._process_single_item_for_localization(item_id, self.app_config.actor_localizer_config, task_cat)
+                localizer_logic._process_single_item_for_localization(item_id, self.app_config.actor_localizer_config, task_cat, person_index=person_index)
 
                 # 3. 角色映射覆盖更新
                 role_mapper_logic = ActorRoleMapperLogic(self.app_config)
