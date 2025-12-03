@@ -51,6 +51,12 @@ def _format_role_with_rules(role: str, final_rules: Dict[str, str]) -> str:
         if normalized_role.endswith(suffix):
             # 从原始role字符串中截取，以保留原始的大小写等信息
             base_role = role[:-len(suffix)].strip()
+            
+            # --- 新增：如果截取后主体为空（即角色名仅包含后缀），则不进行格式化，保持原样 ---
+            if not base_role:
+                continue
+            # --- 新增结束 ---
+
             # --- 修改结束 ---
             formatted_role = f"{prefix}{base_role}"
             logging.debug(f"【角色格式化】规则匹配: '{role}' -> '{formatted_role}' (规则: {suffix} -> {prefix})")
@@ -876,9 +882,6 @@ class ActorLocalizerLogic:
         
         return items_to_update
 
-    # backend/actor_localizer_logic.py (函数替换)
-
-    # backend/actor_localizer_logic.py (函数替换)
 
     def apply_actor_changes_task(self, items: List[Dict], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         task_cat = "演员中文化应用"
