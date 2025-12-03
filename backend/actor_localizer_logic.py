@@ -93,7 +93,7 @@ class ActorLocalizerLogic:
 
     def _is_pure_english(self, text: str) -> bool:
         if not text: return False
-        return bool(re.match(r'^[a-zA-Z0-9\s\.,\'\-!&\(\)]+$', text))
+        return bool(re.match(r'^[a-zA-Z0-9\s\.,\'\-!&\(\)/]+$', text))
     
     def _is_functional_chinese_only(self, text: str) -> bool:
         """
@@ -432,7 +432,12 @@ class ActorLocalizerLogic:
                 SUFFIX_MAP = {"(voice)": "配 "}
                 for suffix, prefix in SUFFIX_MAP.items():
                     if current_role.endswith(suffix):
-                        current_role = prefix + current_role[:-len(suffix)].strip()
+                        # --- 修改代码：检查是否已包含前缀，避免重复 ---
+                        base_role = current_role[:-len(suffix)].strip()
+                        if base_role.startswith(prefix.strip()):
+                            current_role = base_role
+                        else:
+                            current_role = prefix + base_role
                         if not source_text:
                             source_text = "(来自后缀格式化)"
                         break
