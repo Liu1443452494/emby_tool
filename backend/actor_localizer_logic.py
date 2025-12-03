@@ -94,6 +94,17 @@ class ActorLocalizerLogic:
     def _is_pure_english(self, text: str) -> bool:
         if not text: return False
         return bool(re.match(r'^[a-zA-Z0-9\s\.,\'\-!&\(\)]+$', text))
+    
+    def _is_functional_chinese_only(self, text: str) -> bool:
+        """
+        判断字符串是否仅包含特定的功能性中文字符（仅限'配'、'音'）加上英文。
+        例如: '配 Conan', '配音 Batman', 'Joker (配音)' 返回 True。
+        """
+        if not text: return False
+        # 仅移除 '配'、'音'、括号和空格，不处理 '饰'、'演'
+        cleaned = re.sub(r'[配音（）\(\)\s]', '', text)
+        # 如果移除后只剩下英文，说明是“伪中文”
+        return self._is_pure_english(cleaned)
 
     def _clean_douban_character(self, character: str) -> str:
         if not character: return ""
@@ -398,7 +409,12 @@ class ActorLocalizerLogic:
                         if not preview_mode: ui_logger.debug(f"     -- 忽略豆瓣通用角色名: {current_actor_name_for_log}: '{douban_role}' (在黑名单中)", task_category=task_category)
                     else:
                         current_role = douban_role
-                        source_text = "(来自豆瓣)"
+                        # --- 修改代码 ---
+                        # 如果豆瓣给的是“配 Conan”这种伪中文，我们采纳它（保留前缀），但不标记为终结状态
+                        if not self._is_functional_chinese_only(douban_role):
+                            source_text = "(来自豆瓣)"
+                        else:
+                            logging.debug(f"     -- [伪中文检测] 豆瓣角色 '{douban_role}' 被判定为伪中文，将继续进入翻译流程。")
                 
                 if not source_text and config.enhance_english_role_with_douban and douban_role and not self._contains_chinese(douban_role):
                     clean_douban_role = douban_role.strip()
@@ -421,7 +437,7 @@ class ActorLocalizerLogic:
                             source_text = "(来自后缀格式化)"
                         break
             
-            if not self._contains_chinese(current_role):
+            if not self._contains_chinese(current_role) or self._is_functional_chinese_only(current_role):
                 if config.translation_enabled and current_role:
                     actors_to_translate.append({'name': current_actor_name_for_log, 'role': current_role})
                 elif config.replace_english_role and self._is_pure_english(current_role):
