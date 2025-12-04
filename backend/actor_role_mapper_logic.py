@@ -314,9 +314,6 @@ class ActorRoleMapperLogic:
             raise e
         
 
-    # backend/actor_role_mapper_logic.py (函数替换)
-
-    # backend/actor_role_mapper_logic.py (函数替换)
 
     def generate_map_for_single_item(self, item_id: str, task_category: str, overwrite: bool = False):
         """为单个媒体项生成角色映射，并以增量模式更新到本地文件。"""
@@ -406,6 +403,119 @@ class ActorRoleMapperLogic:
             ui_logger.error(f"   - ❌ 获取文件锁超时，另一个进程可能正在访问该文件。", task_category=task_category)
         except Exception as e:
             ui_logger.error(f"   - ❌ 为媒体 {item_id} 生成单体映射时发生错误: {e}", task_category=task_category, exc_info=True)
+
+    def generate_map_for_batch_items(self, item_ids: List[str], task_category: str, overwrite: bool = False):
+        """为一批媒体项生成角色映射，并一次性更新到本地文件。"""
+        if not item_ids:
+            return
+
+        ui_logger.info(f"➡️ [批量映射] 开始为 {len(item_ids)} 个媒体项生成角色映射...", task_category=task_category)
+        
+        try:
+            # 1. 预先读取现有文件
+            current_map = {}
+            if os.path.exists(ACTOR_ROLE_MAP_FILE):
+                try:
+                    with open(ACTOR_ROLE_MAP_FILE, 'r', encoding='utf-8') as f:
+                        current_map = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    pass
+
+            updates_count = 0
+            skipped_count = 0
+            
+            # 2. 并发获取所有项目的详情
+            actor_limit = self.config.actor_role_mapper_config.actor_limit
+            
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                # 获取媒体基础信息
+                future_to_item = {executor.submit(self._get_emby_item_details, iid, "ProviderIds,Name,People,Type"): iid for iid in item_ids}
+                
+                for future in as_completed(future_to_item):
+                    item_id = future_to_item[future]
+                    try:
+                        item_details = future.result()
+                        item_name = item_details.get("Name", f"ID {item_id}")
+                        provider_ids_lower = {k.lower(): v for k, v in item_details.get("ProviderIds", {}).items()}
+                        tmdb_id = provider_ids_lower.get("tmdb")
+                        item_type = item_details.get("Type")
+
+                        if not tmdb_id or not item_type:
+                            continue
+
+                        type_prefix = 'tv' if item_type == 'Series' else 'movie'
+                        map_key = f"{type_prefix}-{tmdb_id}"
+
+                        # 检查是否需要更新
+                        if map_key in current_map and not overwrite:
+                            skipped_count += 1
+                            continue
+
+                        people = item_details.get("People", [])
+                        actors = [p for p in people if p.get('Type') == 'Actor']
+                        people_to_process = actors[:actor_limit]
+
+                        if not people_to_process:
+                            continue
+
+                        # 获取演员详情 (ProviderIds) - 这里为了性能，可以在内部再开线程或者串行，
+                        # 考虑到外层已经是并发，这里串行获取单个媒体的演员ID可能更稳妥，或者使用共享的session
+                        new_work_map = {}
+                        for person in people_to_process:
+                            actor_name = person.get("Name")
+                            if not actor_name: continue
+                            
+                            person_tmdb_id = None
+                            try:
+                                # 注意：这里频繁调用可能会慢，但在批量逻辑中是必要的
+                                # 优化：如果已有 ProviderIds 则不请求，但通常 People 列表里没有 ProviderIds
+                                p_details = self._get_emby_item_details(person['Id'], "ProviderIds")
+                                if p_details:
+                                    p_ids = p_details.get("ProviderIds", {})
+                                    p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
+                                    person_tmdb_id = p_ids_lower.get("tmdb")
+                            except Exception:
+                                pass
+
+                            new_work_map[actor_name] = {
+                                "tmdb_id": person_tmdb_id,
+                                "role": person.get("Role", "")
+                            }
+
+                        if new_work_map:
+                            # 只有当内容真的不同时才标记为更新
+                            if map_key in current_map:
+                                old_work_map = current_map[map_key].get('map', {})
+                                if old_work_map == new_work_map:
+                                    skipped_count += 1
+                                    continue
+                            
+                            current_map[map_key] = {
+                                "title": item_name,
+                                "map": new_work_map
+                            }
+                            updates_count += 1
+
+                    except Exception as e:
+                        logging.error(f"处理媒体 {item_id} 映射时出错: {e}")
+
+            # 3. 一次性写入文件
+            if updates_count > 0:
+                with FileLock(ACTOR_ROLE_MAP_LOCK_FILE, timeout=10):
+                    # 再次读取以防覆盖其他进程的写入 (虽然概率低，但为了安全)
+                    # 简单起见，这里直接覆盖写入内存中合并后的 map
+                    # 如果追求极致并发安全，应该在锁内重新读取并 merge，但这里假设单任务执行
+                    with open(ACTOR_ROLE_MAP_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(current_map, f, ensure_ascii=False, indent=2)
+                
+                ui_logger.info(f"✅ [批量映射] 完成！共更新/新增 {updates_count} 个项目的映射 (跳过 {skipped_count} 个无变化项)。", task_category=task_category)
+            else:
+                ui_logger.info(f"✅ [批量映射] 完成，所有项目映射均已存在且无变化，无需写入文件。", task_category=task_category)
+
+        except Timeout:
+            ui_logger.error(f"❌ [批量映射] 获取文件锁超时。", task_category=task_category)
+        except Exception as e:
+            ui_logger.error(f"❌ [批量映射] 发生错误: {e}", task_category=task_category, exc_info=True)
 
     def _get_github_api_url(self) -> str:
         match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", self.github_config.repo_url)

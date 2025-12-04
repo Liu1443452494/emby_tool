@@ -373,6 +373,9 @@ class DoubanMetadataRefresherLogic:
             return
 
         ui_logger.info(f"➡️ [阶段 5/5] 开始对 {len(items_to_deep_process)} 个变更项目执行深度处理...", task_category=task_cat)
+        items_for_map_update = []
+        # --- 新增结束 ---
+
         for i, item in enumerate(items_to_deep_process):
             if cancellation_event.is_set():
                 ui_logger.warning("⚠️ 任务在深度处理阶段被用户取消。", task_category=task_cat)
@@ -382,10 +385,15 @@ class DoubanMetadataRefresherLogic:
             item_name = item['Name']
             ui_logger.info(f"  - ({i+1}/{len(items_to_deep_process)}) 正在深度处理《{item_name}》...", task_category=task_cat)
             
-            # 1. 触发Emby刷新
-            self._trigger_emby_refresh(item_id, task_cat)
-            ui_logger.info(f"     - ⏱️ 等待 {config.emby_refresh_wait_seconds} 秒让 Emby 应用元数据...", task_category=task_cat)
-            time.sleep(config.emby_refresh_wait_seconds)
+            # 1. 触发Emby刷新 (根据配置开关)
+            # --- 修改开始 ---
+            if config.enable_emby_refresh:
+                self._trigger_emby_refresh(item_id, task_cat)
+                ui_logger.info(f"     - ⏱️ 等待 {config.emby_refresh_wait_seconds} 秒让 Emby 应用元数据...", task_category=task_cat)
+                time.sleep(config.emby_refresh_wait_seconds)
+            else:
+                ui_logger.info(f"     - [跳过] 根据配置，跳过 Emby 元数据刷新及等待。", task_category=task_cat)
+            # --- 修改结束 ---
 
             # 2. 演员中文化
             try:
@@ -394,12 +402,20 @@ class DoubanMetadataRefresherLogic:
             except Exception as e:
                 ui_logger.error(f"     - ❌ 演员中文化步骤失败: {e}", task_category=task_cat)
 
-            # 3. 角色映射更新
+            # 3. 收集 ID 用于批量角色映射更新
+            # --- 修改开始 ---
+            items_for_map_update.append(item_id)
+            # 原来的单体调用已移除: role_mapper_logic.generate_map_for_single_item(...)
+            # --- 修改结束 ---
+
+        # --- 新增：批量执行角色映射更新 ---
+        if items_for_map_update:
             try:
                 role_mapper_logic = ActorRoleMapperLogic(self.app_config)
-                role_mapper_logic.generate_map_for_single_item(item_id, task_category=task_cat, overwrite=True)
+                role_mapper_logic.generate_map_for_batch_items(items_for_map_update, task_category=task_cat, overwrite=True)
             except Exception as e:
-                ui_logger.error(f"     - ❌ 角色映射更新步骤失败: {e}", task_category=task_cat)
+                ui_logger.error(f"❌ 批量更新角色映射表失败: {e}", task_category=task_cat)
+        # --- 新增结束 ---
 
         ui_logger.info("🎉 所有流程执行完毕！", task_category=task_cat)
 

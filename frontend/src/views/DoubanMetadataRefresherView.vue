@@ -112,12 +112,29 @@
                 开启后，对于元数据有变更的项目，将自动触发 <b>Emby元数据刷新 → 演员中文化 → 角色映射更新</b> 的完整修复链条。
               </div>
             </el-form-item>
-            <el-form-item label="Emby刷新后等待 (秒)" v-if="localConfig.enable_post_refresh_actions">
-              <el-input-number v-model="localConfig.emby_refresh_wait_seconds" :min="5" controls-position="right" />
-              <div class="form-item-description">
-                在触发Emby元数据刷新后，等待多久再执行演员中文化，以确保Emby已应用新数据。
-              </div>
-            </el-form-item>
+
+            <template v-if="localConfig.enable_post_refresh_actions">
+              <el-form-item>
+                <template #label>
+                  <div class="label-with-switch">
+                    <span>触发 Emby 元数据刷新</span>
+                    <el-switch v-model="localConfig.enable_emby_refresh" />
+                  </div>
+                </template>
+                <div class="form-item-description">
+                  如果关闭，流程将跳过调用 Emby 刷新 API 和等待时间，直接进行演员中文化。适用于您已手动在 Emby 网页端点击了刷新的情况。
+                </div>
+              </el-form-item>
+
+              <el-form-item label="Emby刷新后等待 (秒)" v-if="localConfig.enable_emby_refresh">
+                <el-input-number v-model="localConfig.emby_refresh_wait_seconds" :min="5" controls-position="right" />
+                <div class="form-item-description">
+                  在触发Emby元数据刷新后，等待多久再执行演员中文化，以确保Emby已应用新数据。
+                </div>
+              </el-form-item>
+            </template>
+
+
           </el-form>
         </el-card>
 
@@ -420,10 +437,11 @@ const handleRunFixTask = async () => {
   flex-direction: column;
   gap: 20px;
   overflow-y: auto;
-  padding-bottom: 20px;
+  padding-bottom: 40px; /* 增加底部内边距，防止内容贴底 */
 }
 .box-card {
   border: 1px solid var(--el-border-color-lighter);
+  flex-shrink: 0; /* 防止卡片被压缩 */
 }
 .card-header {
   display: flex;
@@ -473,15 +491,15 @@ const handleRunFixTask = async () => {
   align-items: center;
   gap: 10px;
 }
-/* --- 修改 --- */
+
 .action-footer {
-  margin-top: auto;
-  padding-bottom: 20%; /* 将按钮组向上推 */
+  margin-top: 20px; /* 固定顶部间距 */
   display: flex;
   justify-content: center;
   gap: 20px;
+  flex-shrink: 0; /* 防止按钮组被压缩 */
 }
-/* --- 修改结束 --- */
+
 .search-dialog-content {
   display: flex;
   flex-direction: column;
@@ -499,7 +517,7 @@ const handleRunFixTask = async () => {
   border-radius: 4px;
   overflow: hidden;
 }
-/* --- 新增 --- */
+
 .save-scope-button-container {
   margin-top: 10px;
   border-top: 1px solid var(--el-border-color-lighter);
@@ -533,5 +551,4 @@ const handleRunFixTask = async () => {
 .help-content strong {
   color: var(--el-text-color-primary);
 }
-/* --- 新增结束 --- */
 </style>
