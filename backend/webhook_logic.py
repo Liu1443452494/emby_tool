@@ -367,7 +367,7 @@ class WebhookLogic:
             if actor_localization_success:
                 try:
                     role_mapper_logic = ActorRoleMapperLogic(self.config)
-                    role_mapper_logic.generate_map_for_single_item(item_id, task_category=task_cat)
+                    role_mapper_logic.generate_map_for_single_item(item_id, task_category=task_cat, person_index=person_index)
                 except Exception as e:
                     ui_logger.error(f"【演员角色映射】步骤执行失败。错误: {e}", task_category=task_cat, exc_info=True)
             else:

@@ -408,14 +408,14 @@ class DoubanMetadataRefresherLogic:
             # 原来的单体调用已移除: role_mapper_logic.generate_map_for_single_item(...)
             # --- 修改结束 ---
 
-        # --- 新增：批量执行角色映射更新 ---
         if items_for_map_update:
             try:
                 role_mapper_logic = ActorRoleMapperLogic(self.app_config)
-                role_mapper_logic.generate_map_for_batch_items(items_for_map_update, task_category=task_cat, overwrite=True)
+                # --- 修改：传入 person_index ---
+                role_mapper_logic.generate_map_for_batch_items(items_for_map_update, task_category=task_cat, overwrite=True, person_index=person_index)
+                # --- 修改结束 ---
             except Exception as e:
                 ui_logger.error(f"❌ 批量更新角色映射表失败: {e}", task_category=task_cat)
-        # --- 新增结束 ---
 
         ui_logger.info("🎉 所有流程执行完毕！", task_category=task_cat)
 
@@ -468,6 +468,9 @@ class DoubanMetadataRefresherLogic:
 
         # 阶段二：核心修复循环
         ui_logger.info("➡️ [阶段 2/3] 开始对每个项目执行修复链条...", task_category=task_cat)
+        items_for_map_update = []
+        # --- 新增结束 ---
+
         for i, item in enumerate(items_to_process):
             if cancellation_event.is_set():
                 ui_logger.warning("⚠️ 任务被用户取消。", task_category=task_cat)
@@ -479,18 +482,23 @@ class DoubanMetadataRefresherLogic:
             task_manager.update_task_progress(task_id, i + 1, total_items)
 
             try:
-                # 1. 触发Emby刷新
-                self._trigger_emby_refresh(item_id, task_cat)
-                ui_logger.info(f"     - ⏱️ 等待 {config.emby_refresh_wait_seconds} 秒让 Emby 应用元数据...", task_category=task_cat)
-                time.sleep(config.emby_refresh_wait_seconds)
+                # 1. 触发Emby刷新 (根据配置开关)
+                if config.enable_emby_refresh:
+                    self._trigger_emby_refresh(item_id, task_cat)
+                    ui_logger.info(f"     - ⏱️ 等待 {config.emby_refresh_wait_seconds} 秒让 Emby 应用元数据...", task_category=task_cat)
+                    time.sleep(config.emby_refresh_wait_seconds)
+                else:
+                    ui_logger.info(f"     - [跳过] 根据配置，跳过 Emby 元数据刷新及等待。", task_category=task_cat)
 
                 # 2. 演员中文化
                 localizer_logic = ActorLocalizerLogic(self.app_config)
                 localizer_logic._process_single_item_for_localization(item_id, self.app_config.actor_localizer_config, task_cat, person_index=person_index)
 
-                # 3. 角色映射覆盖更新
-                role_mapper_logic = ActorRoleMapperLogic(self.app_config)
-                role_mapper_logic.generate_map_for_single_item(item_id, task_category=task_cat, overwrite=True)
+                # 3. 收集 ID 用于批量角色映射更新
+                # --- 修改开始 ---
+                items_for_map_update.append(item_id)
+                # 原来的单体调用已移除: role_mapper_logic.generate_map_for_single_item(...)
+                # --- 修改结束 ---
 
             except Exception as e:
                 ui_logger.error(f"     - ❌ 处理《{item_name}》时发生未知错误: {e}", task_category=task_cat, exc_info=True)
@@ -499,4 +507,16 @@ class DoubanMetadataRefresherLogic:
                 ui_logger.info(f"     - ⏱️ [间隔] 等待 {config.item_interval_seconds} 秒...", task_category=task_cat)
                 time.sleep(config.item_interval_seconds)
 
-        ui_logger.info("➡️ [阶段 3/3] 🎉 所有选定项目修复流程执行完毕！", task_category=task_cat)
+        # --- 新增：批量执行角色映射更新 ---
+        if items_for_map_update:
+            ui_logger.info("➡️ [阶段 3/3] 正在批量更新角色映射表...", task_category=task_cat)
+            try:
+                role_mapper_logic = ActorRoleMapperLogic(self.app_config)
+                role_mapper_logic.generate_map_for_batch_items(items_for_map_update, task_category=task_cat, overwrite=True, person_index=person_index)
+            except Exception as e:
+                ui_logger.error(f"❌ 批量更新角色映射表失败: {e}", task_category=task_cat)
+        else:
+            ui_logger.info("➡️ [阶段 3/3] 没有需要更新映射的项目。", task_category=task_cat)
+        # --- 新增结束 ---
+
+        ui_logger.info("🎉 所有选定项目修复流程执行完毕！", task_category=task_cat)

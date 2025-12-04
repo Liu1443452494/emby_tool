@@ -155,6 +155,10 @@ class ActorRoleMapperLogic:
             
             ui_logger.info(f"🔍 已获取 {len(media_ids)} 个媒体项，开始预处理...", task_category=task_cat)
 
+            ui_logger.info("➡️ [阶段2.5/6] 正在构建全库演员索引以加速生成...", task_category=task_cat)
+            person_index = self._fetch_all_persons_index()
+            index_by_id = person_index.get("by_id", {}) if person_index else {}
+
             media_ids_to_process = []
             # --- 修改 1: 重命名 map，使其更清晰 ---
             tmdb_key_to_item_id_map = {}
@@ -233,18 +237,38 @@ class ActorRoleMapperLogic:
                 if cancellation_event.is_set(): return
                 
                 unique_actors_to_fetch_details = {actor['Id']: actor for actor in all_actors_to_fetch_details}.values()
-                ui_logger.info(f"➡️ [阶段5/6] 媒体详情获取完毕，开始为 {len(unique_actors_to_fetch_details)} 个唯一演员并发获取 ProviderIds...", task_category=task_cat)
                 
-                person_details_map = {}
-                future_to_person_id = {executor.submit(self._get_emby_item_details, person['Id'], "ProviderIds"): person for person in unique_actors_to_fetch_details}
+                # --- 修改：实现双重降级逻辑 ---
+                # 1. 筛选出真正需要请求 API 的演员 (无索引 或 索引未命中)
+                persons_to_fetch_via_api = []
+                if not index_by_id:
+                    # 一级降级：无索引，全量请求
+                    persons_to_fetch_via_api = list(unique_actors_to_fetch_details)
+                    ui_logger.info(f"➡️ [阶段5/6] 未构建索引，将为 {len(persons_to_fetch_via_api)} 个演员并发获取详情...", task_category=task_cat)
+                else:
+                    # 二级降级：有索引，只请求未命中的
+                    for person in unique_actors_to_fetch_details:
+                        if person['Id'] not in index_by_id:
+                            persons_to_fetch_via_api.append(person)
+                    
+                    if persons_to_fetch_via_api:
+                        ui_logger.info(f"➡️ [阶段5/6] 索引未覆盖 {len(persons_to_fetch_via_api)} 个演员，正在补充获取...", task_category=task_cat)
+                    else:
+                        ui_logger.info(f"➡️ [阶段5/6] 所有演员均命中索引，跳过 API 请求。", task_category=task_cat)
 
-                for future in as_completed(future_to_person_id):
-                    if cancellation_event.is_set(): return
-                    person = future_to_person_id[future]
-                    try:
-                        person_details_map[person['Id']] = future.result()
-                    except Exception as e:
-                        logging.debug(f"【调试】获取演员 {person.get('Name')} (ID: {person.get('Id')}) 的 ProviderIds 失败: {e}")
+                # 2. 执行并发请求 (如果有需要)
+                person_details_map = {}
+                if persons_to_fetch_via_api:
+                    future_to_person_id = {executor.submit(self._get_emby_item_details, person['Id'], "ProviderIds"): person for person in persons_to_fetch_via_api}
+
+                    for future in as_completed(future_to_person_id):
+                        if cancellation_event.is_set(): return
+                        person = future_to_person_id[future]
+                        try:
+                            person_details_map[person['Id']] = future.result()
+                        except Exception as e:
+                            logging.debug(f"【调试】获取演员 {person.get('Name')} (ID: {person.get('Id')}) 的 ProviderIds 失败: {e}")
+                # --- 修改结束 ---
 
                 if cancellation_event.is_set(): return
 
@@ -269,12 +293,23 @@ class ActorRoleMapperLogic:
                         if not actor_name:
                             continue
 
-                        person_full_details = person_details_map.get(person.get("Id"))
                         person_tmdb_id = None
-                        if person_full_details:
-                            provider_ids = person_full_details.get("ProviderIds", {})
-                            provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
-                            person_tmdb_id = provider_ids_lower.get("tmdb")
+                        person_id = person.get("Id")
+                        
+                        # 1. 尝试从索引获取
+                        if index_by_id and person_id in index_by_id:
+                            indexed_info = index_by_id[person_id]
+                            p_ids = indexed_info.get("ProviderIds", {})
+                            p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
+                            person_tmdb_id = p_ids_lower.get("tmdb")
+                        else:
+                            # 2. 降级：无索引或未命中 -> 查 person_details_map (之前并发获取的结果)
+                            # 注意：generate_map_task 原逻辑中有并发获取 person_details_map 的步骤，这里复用它
+                            person_full_details = person_details_map.get(person_id)
+                            if person_full_details:
+                                provider_ids = person_full_details.get("ProviderIds", {})
+                                provider_ids_lower = {k.lower(): v for k, v in provider_ids.items()}
+                                person_tmdb_id = provider_ids_lower.get("tmdb")
                         
                         role = person.get("Role", "")
                         logging.debug(f"【调试-最终数据】演员: {actor_name}, 角色: {role}, TMDB ID: {person_tmdb_id}")
@@ -315,7 +350,7 @@ class ActorRoleMapperLogic:
         
 
 
-    def generate_map_for_single_item(self, item_id: str, task_category: str, overwrite: bool = False):
+    def generate_map_for_single_item(self, item_id: str, task_category: str, overwrite: bool = False, person_index: Optional[Dict] = None):
         """为单个媒体项生成角色映射，并以增量模式更新到本地文件。"""
         ui_logger.info(f"➡️ [单体模式] 开始为媒体 (ID: {item_id}) 生成角色映射...", task_category=task_category)
         
@@ -352,28 +387,50 @@ class ActorRoleMapperLogic:
                     ui_logger.info(f"   - [跳过] 媒体【{item_name}】没有演员信息，无法生成映射。", task_category=task_category)
                     return
 
+                index_by_id = person_index.get("by_id", {}) if person_index else {}
                 new_work_map = {}
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    future_to_person = {executor.submit(self._get_emby_item_details, p['Id'], "ProviderIds"): p for p in people_to_process}
-                    for future in as_completed(future_to_person):
-                        person = future_to_person[future]
-                        actor_name = person.get("Name")
-                        if not actor_name: continue
-                        
-                        person_tmdb_id = None
-                        try:
-                            person_details = future.result()
-                            if person_details:
-                                p_ids = person_details.get("ProviderIds", {})
-                                p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
-                                person_tmdb_id = p_ids_lower.get("tmdb")
-                        except Exception:
-                            pass
+                
+                # 收集需要降级请求的演员
+                persons_to_fetch = []
+                for p in people_to_process:
+                    if not (index_by_id and p['Id'] in index_by_id):
+                        persons_to_fetch.append(p)
+                
+                fetched_details_map = {}
+                if persons_to_fetch:
+                    with ThreadPoolExecutor(max_workers=5) as executor:
+                        future_to_person = {executor.submit(self._get_emby_item_details, p['Id'], "ProviderIds"): p for p in persons_to_fetch}
+                        for future in as_completed(future_to_person):
+                            try:
+                                p_details = future.result()
+                                fetched_details_map[future_to_person[future]['Id']] = p_details
+                            except Exception:
+                                pass
 
-                        new_work_map[actor_name] = {
-                            "tmdb_id": person_tmdb_id,
-                            "role": person.get("Role", "")
-                        }
+                for person in people_to_process:
+                    actor_name = person.get("Name")
+                    if not actor_name: continue
+                    
+                    person_tmdb_id = None
+                    person_id = person.get("Id")
+
+                    if index_by_id and person_id in index_by_id:
+                        # 命中索引
+                        p_ids = index_by_id[person_id].get("ProviderIds", {})
+                        p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
+                        person_tmdb_id = p_ids_lower.get("tmdb")
+                    else:
+                        # 降级结果
+                        details = fetched_details_map.get(person_id)
+                        if details:
+                            p_ids = details.get("ProviderIds", {})
+                            p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
+                            person_tmdb_id = p_ids_lower.get("tmdb")
+
+                    new_work_map[actor_name] = {
+                        "tmdb_id": person_tmdb_id,
+                        "role": person.get("Role", "")
+                    }
 
                 # 核心判断逻辑
                 if map_key in actor_role_map:
@@ -404,7 +461,7 @@ class ActorRoleMapperLogic:
         except Exception as e:
             ui_logger.error(f"   - ❌ 为媒体 {item_id} 生成单体映射时发生错误: {e}", task_category=task_category, exc_info=True)
 
-    def generate_map_for_batch_items(self, item_ids: List[str], task_category: str, overwrite: bool = False):
+    def generate_map_for_batch_items(self, item_ids: List[str], task_category: str, overwrite: bool = False, person_index: Optional[Dict] = None):
         """为一批媒体项生成角色映射，并一次性更新到本地文件。"""
         if not item_ids:
             return
@@ -426,7 +483,8 @@ class ActorRoleMapperLogic:
             
             # 2. 并发获取所有项目的详情
             actor_limit = self.config.actor_role_mapper_config.actor_limit
-            
+            index_by_id = person_index.get("by_id", {}) if person_index else {}
+
             with ThreadPoolExecutor(max_workers=10) as executor:
                 # 获取媒体基础信息
                 future_to_item = {executor.submit(self._get_emby_item_details, iid, "ProviderIds,Name,People,Type"): iid for iid in item_ids}
@@ -458,24 +516,40 @@ class ActorRoleMapperLogic:
                         if not people_to_process:
                             continue
 
-                        # 获取演员详情 (ProviderIds) - 这里为了性能，可以在内部再开线程或者串行，
-                        # 考虑到外层已经是并发，这里串行获取单个媒体的演员ID可能更稳妥，或者使用共享的session
+                        # --- 修改：使用索引加速 + 降级请求 ---
                         new_work_map = {}
+                        
+                        # 收集需要降级请求的演员 (当前媒体项内)
+                        persons_to_fetch_ids = []
+                        for p in people_to_process:
+                            if not (index_by_id and p['Id'] in index_by_id):
+                                persons_to_fetch_ids.append(p['Id'])
+                        
+                        # 简单的串行降级 (因为外层已经是并发，且通常索引能命中大部分)
+                        fetched_details_map = {}
+                        for pid in persons_to_fetch_ids:
+                            try:
+                                fetched_details_map[pid] = self._get_emby_item_details(pid, "ProviderIds")
+                            except:
+                                pass
+
                         for person in people_to_process:
                             actor_name = person.get("Name")
                             if not actor_name: continue
                             
                             person_tmdb_id = None
-                            try:
-                                # 注意：这里频繁调用可能会慢，但在批量逻辑中是必要的
-                                # 优化：如果已有 ProviderIds 则不请求，但通常 People 列表里没有 ProviderIds
-                                p_details = self._get_emby_item_details(person['Id'], "ProviderIds")
-                                if p_details:
-                                    p_ids = p_details.get("ProviderIds", {})
+                            person_id = person.get("Id")
+
+                            if index_by_id and person_id in index_by_id:
+                                p_ids = index_by_id[person_id].get("ProviderIds", {})
+                                p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
+                                person_tmdb_id = p_ids_lower.get("tmdb")
+                            else:
+                                details = fetched_details_map.get(person_id)
+                                if details:
+                                    p_ids = details.get("ProviderIds", {})
                                     p_ids_lower = {k.lower(): v for k, v in p_ids.items()}
                                     person_tmdb_id = p_ids_lower.get("tmdb")
-                            except Exception:
-                                pass
 
                             new_work_map[actor_name] = {
                                 "tmdb_id": person_tmdb_id,
