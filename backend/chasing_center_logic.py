@@ -435,9 +435,20 @@ class ChasingCenterLogic:
             ui_logger.warning(f"⚠️ [追更] 添加《{series_name}》失败：该剧集缺少 TMDB ID。", task_category=task_cat)
             return
 
-        chasing_list.append({"emby_id": series_id, "tmdb_id": tmdb_id, "cache": None})
+        existing_item = next((item for item in chasing_list if item.get("tmdb_id") == tmdb_id), None)
+
+        if existing_item:
+            # 如果 TMDB ID 存在，仅更新 Emby ID
+            old_emby_id = existing_item.get("emby_id")
+            existing_item["emby_id"] = series_id
+            ui_logger.info(f"🔄 [追更] 检测到剧集《{series_name}》(TMDB: {tmdb_id}) 已在列表中，更新 Emby ID: {old_emby_id} -> {series_id}", task_category=task_cat)
+        else:
+            # 如果 TMDB ID 不存在，则新增
+            chasing_list.append({"emby_id": series_id, "tmdb_id": tmdb_id, "cache": None})
+            ui_logger.info(f"➡️ [追更] 已将剧集《{series_name}》加入追更列表。", task_category=task_cat)
+
         self._save_chasing_list(chasing_list)
-        ui_logger.info(f"➡️ [追更] 已将剧集《{series_name}》加入追更列表。", task_category=task_cat)
+        
 
         # --- 核心修改：统一的、自给自足的通知逻辑 ---
         if self.config.telegram_config.enabled:
