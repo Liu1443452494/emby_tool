@@ -37,8 +37,7 @@ from models import ScheduledTasksConfig, ScheduledTasksTargetScope
 from douban_poster_updater_logic import DoubanPosterUpdaterLogic
 from models import DoubanPosterUpdaterConfig, EpisodeRefresherConfig
 from episode_refresher_logic import EpisodeRefresherLogic
-from local_extractor import extract_local_media_task
-from models import LocalExtractRequest
+
 from models import (
     ServerConfig, DownloadConfig, AppConfig, MediaSearchQuery, 
     DownloadRequest, BatchDownloadRequest, DoubanConfig, DoubanCacheStatus,
@@ -1586,7 +1585,9 @@ def download_single_item_api(req: DownloadRequest):
 async def batch_download_api(req: BatchDownloadRequest):
     config = app_config.load_app_config()
     if not config.download_config.download_directory: raise HTTPException(status_code=400, detail="下载目录未配置")
-    task_name = f"批量下载 ({req.mode})"
+    # --- 修改 ---
+    task_name = f"批量下载 ({req.scope.mode})"
+    # --- 修改结束 ---
     task_id = task_manager.register_task(batch_download_task, task_name, config, req)
     return {"status": "success", "message": "批量下载任务已成功启动", "task_id": task_id}
 @app.get("/api/tasks")
@@ -1606,22 +1607,7 @@ class GenrePreviewRequest(BaseModel):
 class GenreApplyRequest(BaseModel):
     items_to_apply: List[Dict]
 
-@app.post("/api/media/extract-local")
-async def extract_local_media_api(req: LocalExtractRequest):
-    config = app_config.load_app_config()
-    if not config.download_config.download_directory:
-        raise HTTPException(status_code=400, detail="全局下载目录未配置，请先在“Emby配置”页面设置。")
-    if not os.path.isdir(req.source_path):
-        raise HTTPException(status_code=400, detail=f"指定的源目录 '{req.source_path}' 无效或不存在。")
-    
-    task_name = f"本地提取 ({os.path.basename(req.source_path)})"
-    task_id = task_manager.register_task(
-        extract_local_media_task,
-        task_name,
-        config,
-        req
-    )
-    return {"status": "success", "message": "本地提取任务已启动", "task_id": task_id}
+
 
 @app.get("/api/genres")
 def get_all_genres():

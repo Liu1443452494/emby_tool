@@ -85,16 +85,14 @@ export const useMediaStore = defineStore('media', () => {
     }
   }
 
-  async function startBatchDownload(request) {
-    if (request.content_types.length === 0) {
+  async function startBatchDownload(payload) {
+    if (payload.content_types.length === 0) {
       showMessage('warning', '请至少选择一种下载内容！')
       return
     }
-    if (request.mode === 'byType' && !request.media_type) {
-      showMessage('warning', '在“按媒体类型”模式下，必须选择电影或电视剧。')
-      return
-    }
-    if (request.mode === 'byLibrary' && (!request.library_ids || request.library_ids.length === 0)) {
+    
+    const scope = payload.scope;
+    if (scope.mode === 'by_library' && (!scope.library_ids || scope.library_ids.length === 0)) {
       showMessage('warning', '在“按媒体库”模式下，必须至少选择一个媒体库。')
       return
     }
@@ -104,7 +102,7 @@ export const useMediaStore = defineStore('media', () => {
       const response = await fetch(`${API_BASE_URL}/api/media/batch-download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
+        body: JSON.stringify(payload),
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || '启动失败')
@@ -119,38 +117,7 @@ export const useMediaStore = defineStore('media', () => {
     }
   }
   
-  // --- 修改 Action ---
-  async function startLocalExtraction(sourcePath, extensions, filenames) {
-    if (!sourcePath) {
-      showMessage('warning', '请输入要提取的源文件夹路径！');
-      return;
-    }
-    if (extensions.length === 0 && filenames.length === 0) {
-      showMessage('warning', '请至少选择一种要提取的文件类型！');
-      return;
-    }
-    isLoading.value = true;
-    try {
-      const payload = {
-        source_path: sourcePath,
-        extensions: extensions,
-        filenames: filenames,
-      };
-      const response = await fetch(`${API_BASE_URL}/api/media/extract-local`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || '启动提取任务失败');
-      showMessage('success', data.message);
-    } catch (error) {
-      showMessage('error', `启动提取任务失败: ${error.message}`);
-    } finally {
-      isLoading.value = false;
-    }
-  }
-  // --- 结束修改 ---
+ 
 
   function clearActiveBatchTask() {
     activeBatchTaskId.value = null
@@ -167,7 +134,6 @@ export const useMediaStore = defineStore('media', () => {
     searchMedia, 
     downloadSingleItem, 
     startBatchDownload,
-    startLocalExtraction,
     clearActiveBatchTask
   }
 })

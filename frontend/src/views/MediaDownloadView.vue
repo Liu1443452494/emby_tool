@@ -1,4 +1,3 @@
-// frontend/src/views/MediaDownloadView.vue (修正后)
 <template>
   <div class="media-download-page">
     <div class="media-download-layout">
@@ -6,6 +5,7 @@
       <div class="controls-panel">
         <h2 class="panel-title">Emby媒体下载</h2>
 
+        <!-- 1. 单个搜索 (保留) -->
         <div class="control-section">
           <h3>查找单个媒体项</h3>
           <el-form @submit.prevent="handleSearch" class="control-form">
@@ -18,51 +18,94 @@
 
         <div class="divider"></div>
 
+        <!-- 2. 批量下载 (重构：标准范围选择) -->
         <div class="control-section">
           <h3>批量下载指定范围</h3>
           <el-form label-position="top" class="control-form">
-            <el-radio-group v-model="batchMode">
-              <el-radio value="byType">按媒体类型</el-radio>
-              <el-radio value="byLibrary">按媒体库</el-radio>
-              <el-radio value="all">所有媒体库</el-radio>
-            </el-radio-group>
-
-            <div v-if="batchMode === 'byType'" class="sub-options">
-              <el-radio-group v-model="batchMediaType">
-                <el-radio value="Movie">仅电影</el-radio>
-                <el-radio value="Series">仅电视剧</el-radio>
-              </el-radio-group>
-            </div>
-
-            <div v-if="batchMode === 'byLibrary'" class="sub-options">
-              <el-select v-model="selectedLibraryIds" multiple placeholder="请选择媒体库" style="width: 100%;" filterable>
-                <el-option v-for="item in mediaStore.libraries" :key="item.id" :label="item.name" :value="item.id" />
-              </el-select>
-            </div>
-
-            <div v-if="batchMode === 'all'" class="sub-options">
-              <el-input 
-                v-model="libraryBlacklist" 
-                type="textarea"
-                :rows="2"
-                placeholder="输入要排除的媒体库名称，用英文逗号(,)隔开"
-              />
-            </div>
             
-            <p class="form-item-description" style="margin-top: 10px;">批量下载的内容类型:</p>
-            <el-checkbox-group v-model="downloadContentTypes" class="content-checkbox-group">
-              <el-checkbox value="poster">海报</el-checkbox>
-              <el-checkbox value="logo">Logo</el-checkbox>
-              <el-checkbox value="backdrop">背景图</el-checkbox>
-              <el-checkbox value="nfo">NFO</el-checkbox>
-            </el-checkbox-group>
+            <!-- 范围模式选择 -->
+            <el-form-item label="范围模式">
+              <el-select v-model="scopeMode" placeholder="请选择范围模式" style="width: 100%;">
+                <el-option label="最新入库 (Latest)" value="latest" />
+                <el-option label="按媒体库 (By Library)" value="by_library" />
+                <el-option label="按媒体类型 (By Type)" value="by_type" />
+                <el-option label="按搜索结果 (By Search)" value="by_search" />
+                <el-option label="仅收藏 (Favorites)" value="favorites" />
+                <el-option label="所有媒体库 (All)" value="all" />
+              </el-select>
+            </el-form-item>
 
+            <!-- 动态参数区域 (直接嵌入表单，无额外样式容器) -->
+            
+            <!-- 最新入库参数 -->
+            <template v-if="scopeMode === 'latest'">
+              <el-form-item label="最近天数">
+                <el-input-number v-model="scopeDays" :min="1" :max="3650" style="width: 100%;" />
+              </el-form-item>
+              <el-form-item label="数量限制">
+                <el-input-number v-model="scopeLimit" :min="1" :max="10000" style="width: 100%;" />
+              </el-form-item>
+            </template>
+
+            <!-- 按媒体库参数 -->
+            <template v-if="scopeMode === 'by_library'">
+              <el-form-item label="选择媒体库">
+                <el-select v-model="scopeLibraryIds" multiple placeholder="请选择" style="width: 100%;">
+                  <el-option v-for="lib in mediaStore.libraries" :key="lib.id" :label="lib.name" :value="lib.id" />
+                </el-select>
+              </el-form-item>
+            </template>
+
+            <!-- 按媒体类型参数 -->
+            <template v-if="scopeMode === 'by_type'">
+              <el-form-item label="媒体类型">
+                <el-radio-group v-model="scopeMediaType">
+                  <el-radio value="Movie">电影 (Movie)</el-radio>
+                  <el-radio value="Series">剧集 (Series)</el-radio>
+                </el-radio-group>
+              </el-form-item>
+            </template>
+
+            <!-- 按搜索结果参数 -->
+            <template v-if="scopeMode === 'by_search'">
+              <el-form-item label="搜索关键词">
+                <el-input v-model="scopeSearchKeyword" placeholder="输入标题或ID" clearable />
+                <div class="form-item-description">
+                  注意：此模式会先在前端执行搜索，然后将结果ID传给后台任务。
+                </div>
+              </el-form-item>
+            </template>
+
+            <!-- 所有媒体库参数 -->
+            <template v-if="scopeMode === 'all'">
+              <el-form-item label="排除媒体库 (黑名单)">
+                <el-input 
+                  v-model="scopeLibraryBlacklist" 
+                  placeholder="输入库名，逗号分隔" 
+                  clearable 
+                />
+              </el-form-item>
+            </template>
+
+            <div class="divider-dashed"></div>
+            
+            <!-- 下载内容选项 -->
+            <el-form-item label="下载内容类型">
+              <el-checkbox-group v-model="downloadContentTypes" class="content-checkbox-group">
+                <el-checkbox value="poster">海报</el-checkbox>
+                <el-checkbox value="logo">Logo</el-checkbox>
+                <el-checkbox value="backdrop">背景图</el-checkbox>
+                <el-checkbox value="nfo">NFO</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+
+            <!-- 操作按钮 -->
             <el-button 
               v-if="!mediaStore.activeBatchTaskId"
               type="primary" 
               @click="handleBatchDownload" 
               :loading="mediaStore.isLoading" 
-              style="width: 100%; margin-top: 15px;"
+              style="width: 100%; margin-top: 10px;"
             >
               开始批量下载
             </el-button>
@@ -70,7 +113,7 @@
               v-else
               type="danger" 
               @click="handleStopBatchDownload" 
-              style="width: 100%; margin-top: 15px;"
+              style="width: 100%; margin-top: 10px;"
             >
               停止批量下载
             </el-button>
@@ -78,38 +121,9 @@
           </el-form>
         </div>
 
-        <!-- --- 功能区 (重构版) --- -->
-        <div class="divider"></div>
-
-        <div class="control-section">
-          <h3>从本地文件夹提取</h3>
-          <p class="form-item-description">将指定文件夹内的媒体信息文件按原目录结构复制到全局下载目录。此功能独立于上方的下载设置。</p>
-          <el-form @submit.prevent="handleLocalExtract" class="control-form">
-            <el-input v-model="localSourcePath" placeholder="输入源文件夹的绝对路径..." clearable class="glow-input" />
-            
-            <p class="form-item-description" style="margin-top: 10px;">选择要提取的文件类型:</p>
-            <div class="extract-options">
-              <el-checkbox-group v-model="extractExtensions" class="content-checkbox-group">
-                <el-checkbox value=".nfo">所有 .nfo 文件</el-checkbox>
-                <el-checkbox value=".strm">所有 .strm 文件</el-checkbox>
-              </el-checkbox-group>
-              <el-checkbox-group v-model="extractFilenames" class="content-checkbox-group">
-                <el-checkbox value="poster">poster.jpg/png</el-checkbox>
-                <el-checkbox value="fanart">fanart.jpg/png</el-checkbox>
-                <el-checkbox value="logo">logo.png</el-checkbox>
-              </el-checkbox-group>
-            </div>
-
-            <el-button type="primary" native-type="submit" :loading="mediaStore.isLoading" style="width: 100%; margin-top: 15px;">
-              开始提取
-            </el-button>
-          </el-form>
-        </div>
-        <!-- --- 结束功能区 --- -->
-
       </div>
 
-      <!-- 右侧结果展示区 -->
+      <!-- 右侧结果展示区 (保持不变) -->
       <div class="results-panel">
         <el-card class="box-card" shadow="never">
           <template #header>
@@ -134,7 +148,7 @@
             <el-table-column prop="ProductionYear" label="年份" width="80" />
             <el-table-column label="类型" width="120">
               <template #default="scope">
-                {{ scope.row.Genres.join(', ') }}
+                {{ scope.row.Genres ? scope.row.Genres.join(', ') : '' }}
               </template>
             </el-table-column>
             <el-table-column label="豆瓣ID" width="120">
@@ -171,20 +185,26 @@ import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { useMediaStore } from '@/stores/media';
 import { useTaskStore } from '@/stores/task';
 import { useStorage } from '@vueuse/core';
+import { ElMessage } from 'element-plus';
+import { API_BASE_URL } from '@/config/apiConfig';
 
 const mediaStore = useMediaStore();
 const taskStore = useTaskStore();
 
+// 单个搜索
 const searchQuery = ref('');
-const batchMode = useStorage('download-batchMode', 'byType');
-const batchMediaType = useStorage('download-batchMediaType', 'Movie');
-const selectedLibraryIds = useStorage('download-selectedLibraryIds', []);
-const libraryBlacklist = useStorage('download-libraryBlacklist', '');
-const downloadContentTypes = useStorage('download-contentTypes', ['poster', 'nfo']);
 
-const localSourcePath = useStorage('extract-localSourcePath', '');
-const extractExtensions = useStorage('extract-extensions', ['.nfo']);
-const extractFilenames = useStorage('extract-filenames', ['poster', 'fanart']);
+// 批量下载 - 范围选择 (与 DoubanFixer 保持一致)
+const scopeMode = useStorage('download-scope-mode', 'latest');
+const scopeDays = useStorage('download-scope-days', 7);
+const scopeLimit = useStorage('download-scope-limit', 100);
+const scopeMediaType = useStorage('download-scope-mediaType', 'Movie');
+const scopeLibraryIds = useStorage('download-scope-libraryIds', []);
+const scopeLibraryBlacklist = useStorage('download-scope-libraryBlacklist', '');
+const scopeSearchKeyword = ref(''); // 不持久化搜索词
+
+// 下载内容
+const downloadContentTypes = useStorage('download-contentTypes', ['poster', 'nfo']);
 
 const syncTaskState = () => {
   if (mediaStore.activeBatchTaskId) {
@@ -209,19 +229,56 @@ const handleSearch = () => {
   mediaStore.searchMedia(searchQuery.value);
 };
 
-const handleBatchDownload = () => {
-  const request = {
-    mode: batchMode.value,
-    content_types: downloadContentTypes.value,
-    media_type: batchMode.value === 'byType' ? batchMediaType.value : null,
-    library_ids: batchMode.value === 'byLibrary' ? selectedLibraryIds.value : null,
-    blacklist: batchMode.value === 'all' ? libraryBlacklist.value : null,
+const handleBatchDownload = async () => {
+  // 构建 ScheduledTasksTargetScope 对象
+  const scope = {
+    mode: scopeMode.value,
+    days: scopeDays.value,
+    limit: scopeLimit.value,
+    media_type: scopeMediaType.value,
+    library_ids: scopeLibraryIds.value,
+    library_blacklist: scopeLibraryBlacklist.value,
+    item_ids: []
   };
+
+  // 特殊处理：按搜索结果
+  if (scopeMode.value === 'by_search') {
+    if (!scopeSearchKeyword.value) {
+      ElMessage.warning('请输入搜索关键词');
+      return;
+    }
+    // 前端先执行搜索获取ID列表
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/media/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: scopeSearchKeyword.value }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '搜索失败');
+      
+      if (data.length === 0) {
+        ElMessage.warning('未找到相关媒体，无法启动任务');
+        return;
+      }
+      
+      scope.item_ids = data.map(item => item.Id);
+      ElMessage.info(`搜索到 ${scope.item_ids.length} 个项目，准备开始下载...`);
+    } catch (error) {
+      ElMessage.error(`搜索失败: ${error.message}`);
+      return;
+    }
+  }
+
+  const request = {
+    scope: scope,
+    content_types: downloadContentTypes.value
+  };
+  
   mediaStore.startBatchDownload(request);
 };
 
 const handleSingleDownload = (row) => {
-  // --- 核心修改：不再使用硬编码的列表，而是直接使用复选框的状态 ---
   mediaStore.downloadSingleItem(row.Id, downloadContentTypes.value);
 };
 
@@ -230,16 +287,6 @@ const handleStopBatchDownload = async () => {
     await taskStore.cancelTask(mediaStore.activeBatchTaskId);
   }
 };
-
-// --- 核心修复 ---
-const handleLocalExtract = () => {
-  mediaStore.startLocalExtraction(
-    localSourcePath.value, 
-    extractExtensions.value, // 传递 .value
-    extractFilenames.value   // 传递 .value
-  );
-};
-// --- 结束修复 ---
 
 const getProviderId = (row, providerName) => {
   if (!row.ProviderIds) return null;
@@ -277,24 +324,16 @@ watch(() => taskStore.tasks, () => {
 .control-section h3 { margin: 0 0 15px 0; font-size: 1.1rem; }
 .control-form { display: flex; flex-direction: column; gap: 15px; }
 .divider { border-top: 1px solid var(--el-border-color-lighter); margin: 10px 0; }
-.sub-options { padding: 10px 0; }
+.divider-dashed { border-top: 1px dashed var(--el-border-color-lighter); margin: 10px 0; }
 
 .content-checkbox-group { display: flex; flex-wrap: wrap; gap: 15px; }
-.extract-options {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 5px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
-}
 
 .results-panel { flex-grow: 1; padding: 20px; overflow: hidden; }
 .box-card { height: 100%; border: none; background-color: transparent; display: flex; flex-direction: column; }
 .box-card :deep(.el-card__header) { border-bottom: none; padding: 0 0 15px 0; }
 .box-card :deep(.el-card__body) { padding: 0; flex-grow: 1; overflow: hidden; }
 .card-header { font-weight: bold; font-size: 1.2rem; }
-.form-item-description { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.5; margin-bottom: 10px; }
+.form-item-description { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.5; margin-bottom: 5px; }
 
 .table-skeleton-wrapper {
   padding: 0 10px;

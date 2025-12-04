@@ -235,14 +235,19 @@ class EmbyDownloader:
 
 
     def _download_file(self, url: str, save_path: str, item_name: str, content_name: str):
-        if os.path.exists(save_path) and self.download_config.download_behavior == "skip":
+        # --- 修改 ---
+        file_exists = os.path.exists(save_path)
+        
+        if file_exists and self.download_config.download_behavior == "skip":
             return "skipped"
+            
         response = requests.get(url, params=self.params, stream=True, timeout=60)
         response.raise_for_status()
         with open(save_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        return "success"
+        
+        return "overwritten" if file_exists else "success"
 
     def _sanitize_path(self, path: str) -> str:
         return re.sub(r'[<>:"/\\|?*]', '_', path)
@@ -314,13 +319,18 @@ class EmbyDownloader:
                 nfo_content = create_nfo_from_details(details, self.download_config)
                 filename = "movie.nfo" if details.get("Type") == "Movie" else "tvshow.nfo"
                 save_path = os.path.join(save_dir, filename)
-                if os.path.exists(save_path) and self.download_config.download_behavior == "skip":
+                # --- 修改 ---
+                nfo_exists = os.path.exists(save_path)
+                
+                if nfo_exists and self.download_config.download_behavior == "skip":
                     results['nfo'] = 'skipped'
                     log_details.append(f"  - NFO 文件已存在，跳过。")
                 else:
                     with open(save_path, 'w', encoding='utf-8') as f: f.write(nfo_content)
                     results['nfo'] = 'success'
-                    log_details.append(f"  - NFO 文件创建成功: {filename}")
+                    action_str = "覆盖生成" if nfo_exists else "创建成功"
+                    log_details.append(f"  - NFO 文件{action_str}: {filename}")
+                # --- 修改结束 ---
             except Exception as e: 
                 results['nfo'] = f"Error: {e}"
                 log_details.append(f"  - ❌ NFO 文件创建失败: {e}")
@@ -351,8 +361,11 @@ class EmbyDownloader:
                 status = self._download_file(img_url, save_path, item_name, content_name)
                 results[content_type] = status
                 
+                # --- 修改 ---
                 if status == 'success':
                     log_details.append(f"  - {content_name}下载成功: {save_filename}")
+                elif status == 'overwritten':
+                    log_details.append(f"  - [覆盖] {content_name}下载成功: {save_filename}")
                 elif status == 'skipped':
                     log_details.append(f"  - {content_name}已存在，跳过。")
 
@@ -371,98 +384,37 @@ class EmbyDownloader:
 
 
 def batch_download_task(config: AppConfig, request: BatchDownloadRequest, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
-    task_cat = f"批量下载({request.mode})"
+    task_cat = f"批量下载({request.scope.mode})"
     downloader = EmbyDownloader(config, task_category=task_cat)
-    server_conf = config.server_config
-    all_items_to_process = []
     
-    # --- 日志修改 ---
-    ui_logger.info(f"🎉 批量下载任务启动，模式: {request.mode}", task_category=task_cat)
+    ui_logger.info(f"🎉 批量下载任务启动，模式: {request.scope.mode}", task_category=task_cat)
 
-    fields_to_get = "Id,ParentId,Name"
-    if request.mode == "byLibrary":
-        if not request.library_ids: 
-            ui_logger.error("❌ 模式 'byLibrary' 需要提供 library_ids，任务中止。", task_category=task_cat)
-            return
-        ui_logger.info(f"➡️ 将在媒体库 {request.library_ids} 中下载所有电影和电视剧", task_category=task_cat)
-        for lib_id in request.library_ids:
-            url = f"{server_conf.server}/Items"
-            params = {"api_key": server_conf.api_key, "UserId": server_conf.user_id, "Recursive": "true", "ParentId": lib_id, "IncludeItemTypes": "Movie,Series", "Fields": fields_to_get}
-            start_index = 0
-            while True:
-                if cancellation_event.is_set(): 
-                    ui_logger.info("⚠️ 任务在获取列表阶段被取消。", task_category=task_cat)
-                    return
-                params["StartIndex"] = start_index
-                response = requests.get(url, params=params, timeout=30)
-                response.raise_for_status()
-                items_page = response.json().get("Items", [])
-                if not items_page: break
-                all_items_to_process.extend(items_page)
-                start_index += len(items_page)
-    elif request.mode == "byType":
-        if not request.media_type: 
-            ui_logger.error("❌ 模式 'byType' 需要提供 media_type，任务中止。", task_category=task_cat)
-            return
-        ui_logger.info(f"➡️ 将在所有媒体库中下载 {request.media_type} 类型", task_category=task_cat)
-        url = f"{server_conf.server}/Items"
-        params = {"api_key": server_conf.api_key, "UserId": server_conf.user_id, "Recursive": "true", "IncludeItemTypes": request.media_type, "Fields": fields_to_get}
-        start_index = 0
-        while True:
-            if cancellation_event.is_set(): 
-                ui_logger.info("⚠️ 任务在获取列表阶段被取消。", task_category=task_cat)
-                return
-            params["StartIndex"] = start_index
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            items_page = response.json().get("Items", [])
-            if not items_page: break
-            all_items_to_process.extend(items_page)
-            start_index += len(items_page)
-    elif request.mode == "all":
-        ui_logger.info("➡️ 将下载所有媒体库中的 'Movie' 和 'Series' 类型", task_category=task_cat)
-        url = f"{server_conf.server}/Items"
-        params = {"api_key": server_conf.api_key, "UserId": server_conf.user_id, "Recursive": "true", "IncludeItemTypes": "Movie,Series", "Fields": fields_to_get}
-        all_items = []
-        start_index = 0
-        while True:
-            if cancellation_event.is_set(): 
-                ui_logger.info("⚠️ 任务在获取列表阶段被取消。", task_category=task_cat)
-                return
-            params["StartIndex"] = start_index
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            items_page = response.json().get("Items", [])
-            if not items_page: break
-            all_items.extend(items_page)
-            start_index += len(items_page)
-        if request.blacklist:
-            views_url = f"{server_conf.server}/Users/{server_conf.user_id}/Views"
-            views_resp = requests.get(views_url, params={"api_key": server_conf.api_key})
-            views = views_resp.json().get("Items", [])
-            blacklist_names = {name.strip() for name in request.blacklist.split(',') if name.strip()}
-            blacklisted_ids = {view['Id'] for view in views if view['Name'] in blacklist_names}
-            ui_logger.info(f"  - 应用黑名单媒体库: {blacklist_names}, 对应ID: {blacklisted_ids}", task_category=task_cat)
-            all_items_to_process = [item for item in all_items if item.get("ParentId") not in blacklisted_ids]
-        else:
-            all_items_to_process = all_items
+    from media_selector import MediaSelector
+    selector = MediaSelector(config)
+    
+    try:
+        all_item_ids = selector.get_item_ids(request.scope)
+    except Exception as e:
+        ui_logger.error(f"❌ 获取媒体列表失败: {e}", task_category=task_cat)
+        return
 
-    total_count = len(all_items_to_process)
+    total_count = len(all_item_ids)
+    if total_count == 0:
+        ui_logger.warning("⚠️ 根据当前范围配置，未找到任何需要下载的项目。任务结束。", task_category=task_cat)
+        return
+
     ui_logger.info(f"✅ 任务准备就绪，共需处理 {total_count} 个项目。", task_category=task_cat)
     task_manager.update_task_progress(task_id, 0, total_count)
 
-    for i, item in enumerate(all_items_to_process):
+    for i, item_id in enumerate(all_item_ids):
         if cancellation_event.is_set():
             ui_logger.info(f"⚠️ 任务在处理第 {i+1} 个项目时被取消。", task_category=task_cat)
             return
         
-        item_name_log = item.get('Name', f"Item {item['Id']}")
-        ui_logger.debug(f"➡️ 进度 {i+1}/{total_count}: 正在处理 [{item_name_log}]", task_category=task_cat)
-        
         try:
-            downloader.download_for_item(item['Id'], request.content_types)
+            downloader.download_for_item(item_id, request.content_types)
         except Exception as e:
-            ui_logger.error(f"❌ 处理项目 [{item_name_log}] (ID: {item['Id']}) 时发生顶层错误: {e}", task_category=task_cat)
+            ui_logger.error(f"❌ 处理项目 (ID: {item_id}) 时发生顶层错误: {e}", task_category=task_cat)
         
         task_manager.update_task_progress(task_id, i + 1, total_count)
     

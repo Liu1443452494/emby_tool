@@ -444,11 +444,8 @@ class DownloadRequest(BaseModel):
     content_types: List[str]
 
 class BatchDownloadRequest(BaseModel):
-    mode: Literal["byType", "byLibrary", "all"]
+    scope: ScheduledTasksTargetScope
     content_types: List[str]
-    media_type: Optional[Literal["Movie", "Series"]] = None
-    library_ids: Optional[List[str]] = None
-    blacklist: Optional[str] = None
 
 class ActorGalleryMatchRequest(BaseModel):
     item_id: str
@@ -560,11 +557,7 @@ class CombinedAvatarResponse(BaseModel):
     intervention_details: Optional[Any] = None
     warnings: List[str] = Field(default_factory=list)
 
-class LocalExtractRequest(BaseModel):
-    """本地提取请求模型 (新版)"""
-    source_path: str
-    extensions: List[str] = Field(default_factory=list)
-    filenames: List[str] = Field(default_factory=list)
+
 
 class EmbyWebhookItem(BaseModel):
     Name: str
