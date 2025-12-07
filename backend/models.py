@@ -223,6 +223,7 @@ class EpisodeRenamerConfig(BaseModel):
     emby_path_root: str = Field(default="/media", description="Emby 容器内看到的媒体根路径")
     clouddrive_path_root: str = Field(default="/cd2", description="CloudDrive 挂载到本工具容器内的根路径")
     clouddrive_rename_cooldown: float = Field(default=1.0, description="每次重命名网盘文件之间的间隔时间（秒）", ge=0)
+    custom_known_suffixes: List[str] = Field(default_factory=list, description="用户自定义的后缀识别列表")
 
 
 class GitHubRepoState(BaseModel):

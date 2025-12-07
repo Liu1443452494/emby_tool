@@ -121,6 +121,35 @@ services:
             </el-alert>
           </el-form>
         </el-tab-pane>
+        <el-tab-pane label="后缀识别配置">
+          <div style="padding-top: 10px;">
+            <p class="form-item-description">
+              当文件名中出现以下关键词且无空格时，系统会将其识别为“后缀”而非“标题”，从而在重命名时予以保留。
+            </p>
+            
+            <el-divider content-position="left">内置后缀 (不可删除)</el-divider>
+            <div class="suffix-tags">
+              <el-tag 
+                v-for="tag in KNOWN_SUFFIX_KEYWORDS" 
+                :key="tag" 
+                type="info" 
+                effect="plain"
+                style="margin-right: 8px; margin-bottom: 8px;"
+              >
+                {{ tag }}
+              </el-tag>
+            </div>
+
+            <el-divider content-position="left">自定义后缀</el-divider>
+            <TagInput 
+              v-model="localConfig.custom_known_suffixes" 
+              placeholder="输入新后缀并回车..." 
+            />
+            <div class="form-item-description" style="margin-top: 10px;">
+              输入如 "MyGroup" 并回车添加。不区分大小写。
+            </div>
+          </div>
+        </el-tab-pane>
         <el-tab-pane label="手动查找与匹配 (保底功能)">
           <div style="padding-top: 10px;">
             <p class="form-item-description">当 `rename_log.json` 文件丢失或损坏时，可使用此功能手动扫描指定剧集，找出需要重命名的文件。</p>
@@ -172,6 +201,11 @@ import { useConfigStore } from '@/stores/config';
 import { useTaskStore } from '@/stores/task';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Setting, ArrowDown } from '@element-plus/icons-vue';
+import TagInput from '@/components/common/TagInput.vue';
+
+const KNOWN_SUFFIX_KEYWORDS = [
+    "HHWEB", "ADWEB", "CHDWEB", "UBWEB"
+];
 import _ from 'lodash';
 
 const store = useEpisodeRenamerStore();
@@ -186,7 +220,8 @@ const searchQuery = ref('');
 const localConfig = ref({
   emby_path_root: '/media',
   clouddrive_path_root: '/cd2',
-  clouddrive_rename_cooldown: 1.0
+  clouddrive_rename_cooldown: 1.0,
+  custom_known_suffixes: []
 });
 
 const isTaskRunning = computed(() => 

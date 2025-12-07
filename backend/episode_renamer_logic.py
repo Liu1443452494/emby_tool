@@ -15,6 +15,9 @@ from task_manager import TaskManager
 
 # 用于存储重命名记录的 JSON 文件路径
 RENAME_LOG_FILE = os.path.join('/app/data', 'rename_log.json')
+KNOWN_SUFFIX_KEYWORDS = [
+    "HHWEB", "ADWEB", "CHDWEB", "UBWEB"
+]
 
 class EpisodeRenamerLogic:
     def __init__(self, app_config: AppConfig):
@@ -168,6 +171,24 @@ class EpisodeRenamerLogic:
         sxxexx_part = match.group(2)
         title_part = match.group(3).strip() if match.group(3) else None
         tag_part = match.group(4)
+
+        if title_part and not tag_part:
+            # 1. 检查是否包含空格（标题通常有空格，后缀通常没有）
+            if ' ' not in title_part:
+                title_upper = title_part.upper()
+                
+                # 合并内置后缀和用户自定义后缀
+                user_suffixes = self.renamer_config.custom_known_suffixes or []
+                # 确保用户后缀也转为大写进行匹配，且去重
+                all_suffixes = set(KNOWN_SUFFIX_KEYWORDS + [s.upper() for s in user_suffixes])
+                
+                # 2. 检查是否包含已知后缀关键词
+                for keyword in all_suffixes:
+                    if keyword in title_upper:
+                        # 判定为后缀：执行移位操作
+                        tag_part = title_part
+                        title_part = None
+                        break
 
         # 检查文件名中的标题是否是通用标题
         if title_part and self._is_generic_episode_title(title_part):
