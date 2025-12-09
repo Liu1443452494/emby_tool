@@ -72,11 +72,14 @@
             </el-collapse>
 
             <div class="action-buttons">
-              
-            <el-button @click="handleTriggerCalendar" :disabled="!localConfig.enabled">执行一次日历通知</el-button>
-              <el-button @click="handleTriggerRun" :disabled="!localConfig.enabled">立即执行一次维护</el-button>
-              <el-button @click="handleTriggerCleanup" :disabled="!localConfig.enabled">清理截图无效缓存</el-button>
-              <el-button type="primary" @click="handleSave" :loading="store.isSaving">保存设置</el-button>
+              <div class="button-row">
+                <el-button @click="handleTriggerCalendar" :disabled="!localConfig.enabled" style="width: 100%;">执行一次日历通知</el-button>
+                <el-button @click="handleTriggerCleanup" :disabled="!localConfig.enabled" style="width: 100%;">清理截图无效缓存</el-button>
+              </div>
+              <div class="button-row">
+                <el-button @click="handleTriggerRun" :disabled="!localConfig.enabled" style="width: 100%;">立即执行一次维护</el-button>
+                <el-button type="primary" @click="handleSave" :loading="store.isSaving" style="width: 100%;">保存设置</el-button>
+              </div>
             </div>
           </el-form>
           <el-skeleton v-else :rows="5" animated />
@@ -345,8 +348,14 @@ const handleSeriesSelection = async (series) => {
 .action-buttons {
   margin-top: 20px;
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
   gap: 10px;
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
 }
 
 .list-card-container {
