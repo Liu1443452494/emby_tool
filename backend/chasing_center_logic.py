@@ -552,14 +552,47 @@ class ChasingCenterLogic:
             }
             emby_episodes = self.episode_refresher.session.get(episodes_url, params=episodes_params, timeout=30).json().get("Items", [])
             
-            # 维度一：数量完整性
-            total_episodes_on_tmdb = tmdb_series_details.get("number_of_episodes")
-            if not total_episodes_on_tmdb:
-                ui_logger.info(f"剧集《{series_name}》在 TMDB 上的总集数未知，跳过数量完整性检查。", task_category=task_cat)
-                return
+            is_quantity_complete = False
+            cache_data = chasing_item.get("cache", {}).get("data", {})
+            chasing_season_details = cache_data.get("chasing_season_details")
 
-            if len(emby_episodes) < total_episodes_on_tmdb:
-                ui_logger.info(f"剧集《{series_name}》尚未完结：Emby 中有 {len(emby_episodes)} 集，TMDB 显示总共 {total_episodes_on_tmdb} 集。", task_category=task_cat)
+            if chasing_season_details:
+                # 缓存命中：使用缓存中的季号和集数
+                season_num_str = list(chasing_season_details.keys())[0]
+                target_season_num = int(season_num_str)
+                target_episode_count = len(chasing_season_details[season_num_str])
+                
+                emby_season_count = sum(1 for ep in emby_episodes if ep.get("ParentIndexNumber") == target_season_num)
+                
+                if emby_season_count >= target_episode_count:
+                    is_quantity_complete = True
+                else:
+                    ui_logger.info(f"剧集《{series_name}》追更季(S{target_season_num})尚未完结：Emby {emby_season_count} / TMDB {target_episode_count}。", task_category=task_cat)
+            else:
+                # 缓存未命中：回退到 TMDB API 数据，查找最新季
+                seasons = tmdb_series_details.get("seasons", [])
+                regular_seasons = [s for s in seasons if s.get("season_number", 0) > 0 and s.get("episode_count", 0) > 0]
+                
+                if regular_seasons:
+                    latest_season = max(regular_seasons, key=lambda x: x.get("season_number"))
+                    target_season_num = latest_season.get("season_number")
+                    target_episode_count = latest_season.get("episode_count")
+                    
+                    emby_season_count = sum(1 for ep in emby_episodes if ep.get("ParentIndexNumber") == target_season_num)
+                    
+                    if emby_season_count >= target_episode_count:
+                        is_quantity_complete = True
+                    else:
+                        ui_logger.info(f"剧集《{series_name}》最新季(S{target_season_num})尚未完结：Emby {emby_season_count} / TMDB {target_episode_count}。", task_category=task_cat)
+                else:
+                    # 极端情况：TMDB 没有季信息，回退到总集数比较（仅作保底）
+                    total_episodes_on_tmdb = tmdb_series_details.get("number_of_episodes", 0)
+                    # 过滤掉特别篇
+                    emby_regular_count = sum(1 for ep in emby_episodes if ep.get("ParentIndexNumber") != 0)
+                    if emby_regular_count >= total_episodes_on_tmdb:
+                        is_quantity_complete = True
+
+            if not is_quantity_complete:
                 return
 
             # --- 新增：标题完整性检查与收集 ---
