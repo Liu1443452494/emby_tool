@@ -144,6 +144,19 @@ export const useChasingCenterStore = defineStore('chasingCenter', () => {
     }
   }
 
+  async function triggerCleanup() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/chasing-center/trigger-cleanup`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || '触发失败');
+      showMessage('success', data.message);
+    } catch (error) {
+      showMessage('error', error.message);
+    }
+  }
+
   async function fetchCalendarData(seriesId) {
     isCalendarLoading.value = true;
     calendarData.value = {};
@@ -176,6 +189,7 @@ export const useChasingCenterStore = defineStore('chasingCenter', () => {
     removeFromList,
     triggerRun,
     triggerCalendar,
+    triggerCleanup,
     fetchCalendarData,
   };
 });

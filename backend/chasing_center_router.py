@@ -91,6 +91,15 @@ def trigger_calendar_notification():
     )
     return {"status": "success", "message": "追剧日历通知任务已手动触发！", "task_id": task_id}
 
+@router.post("/trigger-cleanup")
+def trigger_orphaned_cache_cleanup():
+    logic = get_logic()
+    task_id = task_manager.register_task(
+        logic.run_orphaned_cache_cleanup_task,
+        "手动触发-清理无效缓存"
+    )
+    return {"status": "success", "message": "无效缓存清理任务已启动！", "task_id": task_id}
+
 @router.get("/{series_id}/calendar")
 def get_series_calendar(series_id: str):
     """获取单个剧集的日历数据"""

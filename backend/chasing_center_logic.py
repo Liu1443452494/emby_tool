@@ -665,6 +665,151 @@ class ChasingCenterLogic:
 
         ui_logger.info("🎉 每日追更维护任务执行完毕。", task_category=task_cat)
 
+        self.run_orphaned_cache_cleanup_task(cancellation_event, task_id, task_manager)
+
+    def _scan_and_cleanup_orphaned_cache_for_series(self, series_id: str, task_category: str) -> int:
+        """
+        扫描指定剧集，清理那些 TMDB 已有图（Emby无标记）但本地仍残留的截图缓存。
+        实现了远程索引的按需加载（Lazy Load）。
+        """
+        cleaned_count = 0
+        try:
+            # 1. 获取剧集详情与标签检查
+            series_details = self.episode_refresher._get_emby_item_details(series_id, fields="ProviderIds,Name,Tags,TagItems")
+            if not series_details:
+                return 0
+            
+            series_name = series_details.get("Name", "未知剧集")
+            
+            # 检查强制刷新标签 (豁免权)
+            tags = []
+            if 'TagItems' in series_details and isinstance(series_details['TagItems'], list):
+                tags = [t.get('Name') for t in series_details.get('TagItems', []) if isinstance(t, dict)]
+            elif 'Tags' in series_details and isinstance(series_details['Tags'], list):
+                tags = series_details.get("Tags", [])
+            
+            for t in tags:
+                if str(t).lower() in ["forceimagerefresh", "forcelmagerefresh"]:
+                    ui_logger.info(f"   - [跳过] 剧集《{series_name}》拥有强制刷新标签，跳过清理。", task_category=task_category)
+                    return 0
+
+            # 获取 TMDB ID
+            provider_ids_lower = {k.lower(): v for k, v in series_details.get("ProviderIds", {}).items()}
+            series_tmdb_id = provider_ids_lower.get("tmdb")
+            if not series_tmdb_id:
+                return 0
+
+            # 2. 获取所有分集
+            episodes_url = f"{self.config.server_config.server}/Items"
+            episodes_params = {
+                "api_key": self.config.server_config.api_key,
+                "ParentId": series_id,
+                "IncludeItemTypes": "Episode",
+                "Recursive": "true",
+                "Fields": "Id,Name,ParentIndexNumber,IndexNumber,ProviderIds"
+            }
+            episodes_resp = self.episode_refresher.session.get(episodes_url, params=episodes_params, timeout=30)
+            episodes_resp.raise_for_status()
+            all_episodes = episodes_resp.json().get("Items", [])
+
+            remote_db = None
+            remote_db_loaded = False # 标记是否尝试加载过
+
+            # 3. 遍历检查
+            for ep in all_episodes:
+                # 检查 Emby 标记
+                ep_provider_ids = {k.lower(): v for k, v in ep.get("ProviderIds", {}).items()}
+                if ep_provider_ids.get("toolboximagesource"):
+                    continue # 有标记，说明是有效截图，保留
+
+                # 构建本地路径
+                s_num = ep.get("ParentIndexNumber")
+                e_num = ep.get("IndexNumber")
+                if s_num is None or e_num is None: continue
+
+                # 调用 Refresher 的辅助方法构建路径
+                local_path = self.episode_refresher._get_local_screenshot_path(series_tmdb_id, s_num, e_num, series_name)
+                if not local_path: continue
+
+                # 检查本地文件是否存在
+                # 注意：_get_local_screenshot_path 返回的是理论路径，我们需要检查实际文件
+                # 这里为了保险，我们使用 _find_screenshot_cache_dir_by_tmdbid 来定位真实目录
+                real_cache_dir = self.episode_refresher._find_screenshot_cache_dir_by_tmdbid(series_tmdb_id)
+                if not real_cache_dir: continue
+                
+                real_file_path = os.path.join(real_cache_dir, os.path.basename(local_path))
+
+                if os.path.exists(real_file_path):
+                    # 命中！无标记 + 本地有文件 = 垃圾文件
+                    ui_logger.info(f"   - 🗑️ [清理] 发现无效缓存: S{s_num:02d}E{e_num:02d} (Emby已用官方图)，正在删除...", task_category=task_category)
+                    
+                    try:
+                        os.remove(real_file_path)
+                        cleaned_count += 1
+                        
+                        # 尝试清理空目录
+                        try:
+                            if not os.listdir(real_cache_dir):
+                                os.rmdir(real_cache_dir)
+                        except: pass
+
+                        # 4. 联动远程检查 (按需加载)
+                        if not remote_db_loaded:
+                            ui_logger.debug(f"   - [远程] 首次触发清理，正在加载远程索引以检查备份状态...", task_category=task_category)
+                            remote_db, _ = self.episode_refresher._get_remote_db(self.config.episode_refresher_config)
+                            remote_db_loaded = True
+                        
+                        if remote_db:
+                            episode_key = f"{s_num}-{e_num}"
+                            if remote_db.get("series", {}).get(str(series_tmdb_id), {}).get(episode_key):
+                                ui_logger.info(f"   - 📝 [远程] 该截图存在于远程备份中，已加入待删除日志。", task_category=task_category)
+                                self.episode_refresher._log_screenshot_for_deletion(
+                                    series_tmdb_id=series_tmdb_id,
+                                    series_name=series_name,
+                                    emby_series_id=series_id,
+                                    season_number=s_num,
+                                    episode_number=e_num
+                                )
+
+                    except Exception as e:
+                        ui_logger.error(f"   - ❌ 删除本地文件失败: {e}", task_category=task_category)
+
+        except Exception as e:
+            ui_logger.error(f"   - ❌ 清理剧集 {series_id} 缓存时出错: {e}", task_category=task_category)
+        
+        return cleaned_count
+
+    def run_orphaned_cache_cleanup_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        """
+        扫描追更列表中的剧集，清理那些已被官方图替换的本地无效截图缓存。
+        """
+        task_cat = "追更-缓存清理"
+        ui_logger.info(f"🧹 开始执行无效缓存清理任务...", task_category=task_cat)
+        
+        chasing_list = self._get_chasing_list()
+        if not chasing_list:
+            ui_logger.info("✅ 追更列表为空，无需清理。", task_category=task_cat)
+            return
+
+        total_cleaned = 0
+        
+        for i, series_item in enumerate(chasing_list):
+            if cancellation_event.is_set(): return
+            
+            series_id = series_item.get("emby_id")
+            if not series_id: continue
+            
+            cleaned = self._scan_and_cleanup_orphaned_cache_for_series(series_id, task_cat)
+            total_cleaned += cleaned
+            
+            if task_manager:
+                task_manager.update_task_progress(task_id, i + 1, len(chasing_list))
+
+        if total_cleaned > 0:
+            ui_logger.info(f"🎉 清理完成。共删除了 {total_cleaned} 个无效的本地截图缓存文件。", task_category=task_cat)
+        else:
+            ui_logger.info(f"✅ 清理完成。未发现无效的本地缓存。", task_category=task_cat)
+
 
     def send_calendar_notification_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
         """
