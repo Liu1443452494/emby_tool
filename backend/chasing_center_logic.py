@@ -13,6 +13,7 @@ from log_manager import ui_logger
 from models import AppConfig, ChasingCenterConfig
 from tmdb_logic import TmdbLogic
 from episode_refresher_logic import EpisodeRefresherLogic
+from episode_renamer_logic import EpisodeRenamerLogic, RENAME_LOG_FILE
 from notification_manager import notification_manager, escape_markdown
 from task_manager import TaskManager
 
@@ -24,6 +25,7 @@ class ChasingCenterLogic:
         self.chasing_config = config.chasing_center_config
         self.tmdb_logic = TmdbLogic(config)
         self.episode_refresher = EpisodeRefresherLogic(config)
+        self.episode_renamer = EpisodeRenamerLogic(config)
         self.memory_cache: Dict[str, Any] = {}
 
     def _get_chasing_list(self) -> List[Dict[str, Any]]:
@@ -513,7 +515,8 @@ class ChasingCenterLogic:
             self._save_chasing_list(updated_list)
             ui_logger.info(f"✅ [追更] 已将剧集《{series_name}》从追更列表移除。原因: {reason}", task_category=task_cat)
 
-    def _check_and_remove_if_series_complete(self, series_id: str, cancellation_event: threading.Event):
+    def _check_and_remove_if_series_complete(self, series_id: str, cancellation_event: threading.Event, series_to_rename_list: List[str]):
+    # --- 修改结束 ---
         """
         执行优化后的完结检测逻辑 (V2.0)。
         """
@@ -553,6 +556,18 @@ class ChasingCenterLogic:
             if len(emby_episodes) < total_episodes_on_tmdb:
                 ui_logger.info(f"剧集《{series_name}》尚未完结：Emby 中有 {len(emby_episodes)} 集，TMDB 显示总共 {total_episodes_on_tmdb} 集。", task_category=task_cat)
                 return
+
+            # --- 新增：标题完整性检查与收集 ---
+            all_titles_valid = True
+            for ep in emby_episodes:
+                if self.episode_refresher._is_generic_episode_title(ep.get("Name")):
+                    all_titles_valid = False
+                    break
+            
+            if all_titles_valid and not chasing_item.get("is_episode_renamed"):
+                if series_id not in series_to_rename_list:
+                    series_to_rename_list.append(series_id)
+                    ui_logger.info(f"   - [重命名] 剧集《{series_name}》所有标题完整，已加入待重命名队列。", task_category=task_cat)
 
             # 维度二：质量完整性
             all_metadata_complete = True
@@ -620,6 +635,8 @@ class ChasingCenterLogic:
         ui_logger.info(f"🔍 发现 {len(chasing_list)} 个追更剧集，开始逐一处理...", task_category=task_cat)
         task_manager.update_task_progress(task_id, 0, len(chasing_list))
 
+        series_to_rename = []
+
         for i, series_item in enumerate(chasing_list):
             if cancellation_event.is_set():
                 ui_logger.warning("⚠️ 任务被取消。", task_category=task_cat)
@@ -658,7 +675,7 @@ class ChasingCenterLogic:
 
             # 2. 完结检测
             ui_logger.info(f"   - [步骤2/2] 正在进行完结状态检测...", task_category=task_cat)
-            self._check_and_remove_if_series_complete(series_id, cancellation_event)
+            self._check_and_remove_if_series_complete(series_id, cancellation_event, series_to_rename)
             
             task_manager.update_task_progress(task_id, i + 1, len(chasing_list))
             time.sleep(1) # 短暂间隔
@@ -666,6 +683,9 @@ class ChasingCenterLogic:
         ui_logger.info("🎉 每日追更维护任务执行完毕。", task_category=task_cat)
 
         self.run_orphaned_cache_cleanup_task(cancellation_event, task_id, task_manager)
+
+        if series_to_rename:
+            self._run_batch_rename_task(series_to_rename, cancellation_event, task_id, task_manager)
 
     def _scan_and_cleanup_orphaned_cache_for_series(self, series_id: str, task_category: str) -> int:
         """
@@ -810,6 +830,67 @@ class ChasingCenterLogic:
             ui_logger.info(f"🎉 清理完成。共删除了 {total_cleaned} 个无效的本地截图缓存文件。", task_category=task_cat)
         else:
             ui_logger.info(f"✅ 清理完成。未发现无效的本地缓存。", task_category=task_cat)
+
+    def _run_batch_rename_task(self, series_ids: List[str], cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+        """
+        批量执行剧集重命名任务（本地 + 网盘）。
+        """
+        task_cat = "追更-自动重命名"
+        ui_logger.info(f"🚀 开始执行批量重命名任务，共 {len(series_ids)} 部剧集...", task_category=task_cat)
+
+        # 阶段 A: 本地重命名
+        for series_id in series_ids:
+            if cancellation_event.is_set(): return
+            
+            try:
+                # 获取所有分集 ID
+                episodes_url = f"{self.config.server_config.server}/Items"
+                episodes_params = {
+                    "api_key": self.config.server_config.api_key,
+                    "ParentId": series_id, "IncludeItemTypes": "Episode", "Recursive": "true", "Fields": "Id"
+                }
+                episodes = self.episode_refresher.session.get(episodes_url, params=episodes_params, timeout=30).json().get("Items", [])
+                episode_ids = [ep['Id'] for ep in episodes]
+                
+                if episode_ids:
+                    self.episode_renamer.run_rename_for_episodes(
+                        episode_ids, cancellation_event, task_id, task_manager, task_category
+                    )
+                    self._mark_series_as_renamed(series_id)
+            except Exception as e:
+                ui_logger.error(f"❌ 处理剧集 {series_id} 重命名时出错: {e}", task_category=task_cat)
+
+        # 阶段 B: 网盘重命名
+        ui_logger.info("💾 本地重命名完成，开始扫描日志进行网盘同步...", task_category=task_cat)
+        
+        try:
+            if os.path.exists(RENAME_LOG_FILE):
+                with open(RENAME_LOG_FILE, 'r', encoding='utf-8') as f:
+                    logs = json.load(f)
+                
+                pending_logs = [log for log in logs if log.get('status') == 'pending_clouddrive_rename']
+                
+                if pending_logs:
+                    ui_logger.info(f"🔍 发现 {len(pending_logs)} 个待同步的网盘重命名任务，开始执行...", task_category=task_cat)
+                    self.episode_renamer.apply_clouddrive_rename_task(
+                        pending_logs, cancellation_event, task_id, task_manager
+                    )
+                else:
+                    ui_logger.info("✅ 没有待处理的网盘重命名任务。", task_category=task_cat)
+        except Exception as e:
+            ui_logger.error(f"❌ 执行网盘重命名时出错: {e}", task_category=task_cat)
+
+    def _mark_series_as_renamed(self, series_id: str):
+        """更新追更列表中的重命名状态标记"""
+        chasing_list = self._get_chasing_list()
+        item = next((i for i in chasing_list if i.get("emby_id") == series_id), None)
+        
+        if item:
+            item["is_episode_renamed"] = True
+            self._save_chasing_list(chasing_list)
+            ui_logger.info(f"✅ 已更新剧集 {series_id} 的重命名状态标记。", task_category="追更-状态更新")
+        else:
+            ui_logger.debug(f"⚠️ 剧集 {series_id} 已不在追更列表中（可能已完结移除），跳过状态更新。", task_category="追更-状态更新")
 
 
     def send_calendar_notification_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
