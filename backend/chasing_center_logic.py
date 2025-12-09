@@ -674,7 +674,7 @@ class ChasingCenterLogic:
         """
         cleaned_count = 0
         try:
-            # 1. 获取剧集详情与标签检查
+            # 1. 获取剧集详情与标签检查 (复用 EpisodeRefresherLogic 的健壮逻辑)
             series_details = self.episode_refresher._get_emby_item_details(series_id, fields="ProviderIds,Name,Tags,TagItems")
             if not series_details:
                 return 0
@@ -689,7 +689,8 @@ class ChasingCenterLogic:
                 tags = series_details.get("Tags", [])
             
             for t in tags:
-                if str(t).lower() in ["forceimagerefresh", "forcelmagerefresh"]:
+                t_lower = str(t).lower()
+                if t_lower == "forceimagerefresh" or t_lower == "forcelmagerefresh":
                     ui_logger.info(f"   - [跳过] 剧集《{series_name}》拥有强制刷新标签，跳过清理。", task_category=task_category)
                     return 0
 
