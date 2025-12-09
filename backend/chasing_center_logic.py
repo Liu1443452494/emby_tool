@@ -538,8 +538,13 @@ class ChasingCenterLogic:
 
         try:
             tmdb_series_details = self.tmdb_logic._tmdb_request(f"tv/{tmdb_id}")
+
+            if not tmdb_series_details:
+                ui_logger.warning(f"无法从 TMDB 获取剧集《{series_name}》的详情，跳过完结检测。", task_category=task_cat)
+                return
             
             episodes_url = f"{self.config.server_config.server}/Items"
+            
             episodes_params = {
                 "api_key": self.config.server_config.api_key,
                 "ParentId": series_id, "IncludeItemTypes": "Episode", "Recursive": "true",
@@ -853,8 +858,9 @@ class ChasingCenterLogic:
                 episode_ids = [ep['Id'] for ep in episodes]
                 
                 if episode_ids:
+                    # --- 修改 ---
                     self.episode_renamer.run_rename_for_episodes(
-                        episode_ids, cancellation_event, task_id, task_manager, task_category
+                        episode_ids, cancellation_event, task_id, task_manager, task_category=task_cat
                     )
                     self._mark_series_as_renamed(series_id)
             except Exception as e:
