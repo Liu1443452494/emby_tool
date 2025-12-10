@@ -140,61 +140,113 @@ class DoubanFixerLogic:
     def _find_match_in_results(self, emby_item: Dict, search_results: List[Dict], task_cat: str) -> Optional[str]:
         emby_title = emby_item.get("Name", "").strip()
         emby_year = emby_item.get("ProductionYear")
+        emby_type = emby_item.get("Type", "Movie")
 
         if not emby_title or not emby_year:
             return None
 
+        # 0. 预处理：年份初筛
+        valid_candidates = []
         for result in search_results:
-            douban_title = result.get("title", "")
             douban_year = result.get("year")
-            douban_id = result.get("id")
+            if douban_year and abs(douban_year - emby_year) <= 1:
+                valid_candidates.append(result)
+        
+        if not valid_candidates:
+            ui_logger.info(f"年份过滤后无剩余候选者 (Emby年份: {emby_year})", task_category=task_cat)
+            return None
 
-            if douban_title.startswith(emby_title) and douban_year and abs(douban_year - emby_year) <= 1:
-                ui_logger.info(f"为【{emby_item.get('Name')}】找到匹配: 【{result.get('title')}】({douban_year}) -> ID: {douban_id}", task_category=task_cat)
-                return douban_id
+        # 策略1：精准匹配 (startswith)
+        for result in valid_candidates:
+            douban_title = result.get("title", "")
+            douban_id = result.get("id")
+            douban_year = result.get("year")
             
+            if douban_title.startswith(emby_title):
+                ui_logger.info(f"策略1命中! 原标题:【{emby_title}】 匹配:【{douban_title}({douban_year})】 -> ID: {douban_id}", task_category=task_cat)
+                return douban_id
+
+        # 策略2：降级模糊匹配 (连续相似度 + 时长分级校验)
         ui_logger.info(f"策略1未命中，尝试策略2(降级模糊匹配)...", task_category=task_cat)
         
         def clean_text(text):
-            # 去除所有标点符号和空白字符，转小写
             return re.sub(r'[^\w\u4e00-\u9fa5]', '', text).lower()
 
-        cleaned_emby_title = clean_text(emby_title)
-        if cleaned_emby_title:
-            best_match = None
-            highest_score = 0.0
+        def calculate_continuous_score(emby_clean, douban_clean):
+            if not emby_clean: return 0
+            matcher = difflib.SequenceMatcher(None, emby_clean, douban_clean)
+            match = matcher.find_longest_match(0, len(emby_clean), 0, len(douban_clean))
+            return match.size / len(emby_clean)
 
-            for result in search_results:
-                douban_year = result.get("year")
-                # 1. 年份初筛 (误差 <= 1)
-                if not douban_year or abs(douban_year - emby_year) > 1:
-                    continue
+        def extract_duration(info_str):
+            if not info_str: return None
+            match = re.search(r'(\d+)分钟', info_str)
+            if match:
+                return int(match.group(1))
+            return None
 
-                douban_title = result.get("title", "")
-                cleaned_douban_title = clean_text(douban_title)
-                
-                # 2. 计算覆盖率相似度 (匹配字符数 / Emby标题长度)
-                matcher = difflib.SequenceMatcher(None, cleaned_emby_title, cleaned_douban_title)
-                match_size = sum(block.size for block in matcher.get_matching_blocks())
-                
-                score = match_size / len(cleaned_emby_title) if len(cleaned_emby_title) > 0 else 0
-                
+        emby_clean = clean_text(emby_title)
+        if not emby_clean:
+            return None
+
+        best_match = None
+        highest_score = 0.0
+
+        for result in valid_candidates:
+            douban_title = result.get("title", "")
+            douban_clean = clean_text(douban_title)
+            
+            # 计算分数
+            score = calculate_continuous_score(emby_clean, douban_clean)
+            
+            # 提取时长
+            duration = extract_duration(result.get('info', ''))
+            duration_str = f"{duration}分钟" if duration else "无时长"
+            
+            # 分级判定与日志
+            status_log = ""
+            is_pass = False
+            
+            if score >= 0.85:
+                is_pass = True
+                status_log = "✅ 高分直通"
+            elif score >= 0.7:
+                if duration is None:
+                    is_pass = True
+                    status_log = "✅ 中分(无时长默认通过)"
+                else:
+                    is_movie_duration = duration > 75
+                    emby_is_movie = emby_type == 'Movie'
+                    
+                    if emby_is_movie and not is_movie_duration:
+                        is_pass = False
+                        status_log = f"❌ 中分拒绝(应为电影但时长{duration}<=75)"
+                    elif not emby_is_movie and is_movie_duration:
+                        is_pass = False
+                        status_log = f"❌ 中分拒绝(应为剧集但时长{duration}>75)"
+                    else:
+                        is_pass = True
+                        status_log = "✅ 中分校验通过"
+            else:
+                status_log = "❌ 低分淘汰"
+
+            # 打印详细判定日志 (仅在分数尚可时打印，避免日志爆炸)
+            if score > 0.5:
+                ui_logger.info(f"  - 候选:【{douban_title}】 分数:{score:.2f} 时长:{duration_str} -> {status_log}", task_category=task_cat)
+
+            if is_pass:
                 if score > highest_score:
                     highest_score = score
                     best_match = result
 
-            THRESHOLD = 0.7
-            if best_match and highest_score >= THRESHOLD:
-                douban_id = best_match.get("id")
-                douban_title = best_match.get("title")
-                # --- 修改 ---
-                douban_year_log = best_match.get("year")
-                ui_logger.info(f"策略2命中! 原标题:【{emby_title}({emby_year})】 匹配:【{douban_title}({douban_year_log})】 相似度: {highest_score:.2f} (阈值: {THRESHOLD}) -> ID: {douban_id}", task_category=task_cat)
-                # --- 修改结束 ---
-                return douban_id
-            else:
-                if best_match:
-                    ui_logger.info(f"策略2失败。最高相似度: {highest_score:.2f} (来自: {best_match.get('title')}) 未达到阈值 {THRESHOLD}", task_category=task_cat)
+        if best_match:
+            douban_id = best_match.get("id")
+            douban_title = best_match.get("title")
+            douban_year = best_match.get("year")
+            ui_logger.info(f"策略2命中! 原标题:【{emby_title}({emby_year})】 匹配:【{douban_title}({douban_year})】 相似度: {highest_score:.2f} -> ID: {douban_id}", task_category=task_cat)
+            return douban_id
+        else:
+            ui_logger.info(f"策略2失败。最高相似度: {highest_score:.2f} 未达到要求。", task_category=task_cat)
         
         return None
 
