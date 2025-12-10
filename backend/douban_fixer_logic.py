@@ -11,6 +11,7 @@ from urllib.parse import quote
 from datetime import datetime
 from bs4 import BeautifulSoup
 import re
+import difflib
 
 
 from log_manager import ui_logger
@@ -151,6 +152,49 @@ class DoubanFixerLogic:
             if douban_title.startswith(emby_title) and douban_year and abs(douban_year - emby_year) <= 1:
                 ui_logger.info(f"为【{emby_item.get('Name')}】找到匹配: 【{result.get('title')}】({douban_year}) -> ID: {douban_id}", task_category=task_cat)
                 return douban_id
+            
+        ui_logger.info(f"策略1未命中，尝试策略2(降级模糊匹配)...", task_category=task_cat)
+        
+        def clean_text(text):
+            # 去除所有标点符号和空白字符，转小写
+            return re.sub(r'[^\w\u4e00-\u9fa5]', '', text).lower()
+
+        cleaned_emby_title = clean_text(emby_title)
+        if cleaned_emby_title:
+            best_match = None
+            highest_score = 0.0
+
+            for result in search_results:
+                douban_year = result.get("year")
+                # 1. 年份初筛 (误差 <= 1)
+                if not douban_year or abs(douban_year - emby_year) > 1:
+                    continue
+
+                douban_title = result.get("title", "")
+                cleaned_douban_title = clean_text(douban_title)
+                
+                # 2. 计算覆盖率相似度 (匹配字符数 / Emby标题长度)
+                matcher = difflib.SequenceMatcher(None, cleaned_emby_title, cleaned_douban_title)
+                match_size = sum(block.size for block in matcher.get_matching_blocks())
+                
+                score = match_size / len(cleaned_emby_title) if len(cleaned_emby_title) > 0 else 0
+                
+                if score > highest_score:
+                    highest_score = score
+                    best_match = result
+
+            THRESHOLD = 0.7
+            if best_match and highest_score >= THRESHOLD:
+                douban_id = best_match.get("id")
+                douban_title = best_match.get("title")
+                # --- 修改 ---
+                douban_year_log = best_match.get("year")
+                ui_logger.info(f"策略2命中! 原标题:【{emby_title}({emby_year})】 匹配:【{douban_title}({douban_year_log})】 相似度: {highest_score:.2f} (阈值: {THRESHOLD}) -> ID: {douban_id}", task_category=task_cat)
+                # --- 修改结束 ---
+                return douban_id
+            else:
+                if best_match:
+                    ui_logger.info(f"策略2失败。最高相似度: {highest_score:.2f} (来自: {best_match.get('title')}) 未达到阈值 {THRESHOLD}", task_category=task_cat)
         
         return None
 
