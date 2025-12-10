@@ -823,6 +823,39 @@ services:
         <el-button @click="isEpisodeRoleSyncDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+    <el-dialog
+      v-model="isActorLocalizerDialogVisible"
+      title="演员中文化 - 独立配置"
+      width="600px"
+      :close-on-click-modal="false"
+    >
+      <div v-if="localActorLocalizerConfig" class="independent-task-config">
+        <el-alert 
+          title="功能说明" 
+          type="info" 
+          :closable="false" 
+          show-icon
+          style="margin-bottom: 20px;"
+        >
+          <p>
+            此设置仅影响<b>定时任务</b>触发的演员中文化流程。
+          </p>
+        </el-alert>
+        <el-form :model="localActorLocalizerConfig" label-position="top">
+          <el-form-item label="允许处理无豆瓣数据的媒体">
+            <el-switch v-model="localActorLocalizerConfig.scheduled_task_skip_douban_check" active-text="开启" />
+            <div class="form-item-description">
+              默认情况下，如果媒体没有豆瓣ID或本地无豆瓣数据，任务会跳过该媒体。
+              <br>开启此开关后，将允许跳过豆瓣校验，直接进入后续流程（如翻译引擎或暴力替换）。
+              <br><b>注意：</b>这可能会导致完全依赖翻译引擎，请确保您的翻译配置正确。
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="isActorLocalizerDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 <!-- --- 新增结束 --- -->
   </div>
 </template>
@@ -844,7 +877,7 @@ const mediaStore = useMediaStore();
 const renamerStore = useEpisodeRenamerStore();
 
 const definedTasks = ref([
-  { id: 'actor_localizer', name: '演员中文化', hasSettings: false },
+  { id: 'actor_localizer', name: '演员中文化', hasSettings: true },
   { id: 'douban_fixer', name: '豆瓣ID修复器', hasSettings: false },
   { id: 'douban_poster_updater', name: '豆瓣海报更新', hasSettings: true },
   { id: 'episode_refresher', name: '剧集元数据刷新', hasSettings: true },
@@ -860,6 +893,8 @@ const localPosterConfig = ref(null);
 const localWebhookConfig = ref(null);
 const localRefresherConfig = ref(null);
 const localEpisodeRoleSyncConfig = ref(null);
+const localActorLocalizerConfig = ref(null);
+const isActorLocalizerDialogVisible = ref(false);
 const isEpisodeRoleSyncDialogVisible = ref(false);
 const isBackuping = ref(false); 
 const isGithubBackuping = ref(false);
@@ -933,6 +968,7 @@ function updateStateFromConfig() {
   localWebhookConfig.value = _.cloneDeep(configStore.appConfig.webhook_config);
   localRefresherConfig.value = _.cloneDeep(configStore.appConfig.episode_refresher_config);
   localEpisodeRoleSyncConfig.value = _.cloneDeep(configStore.appConfig.episode_role_sync_config);
+  localActorLocalizerConfig.value = _.cloneDeep(configStore.appConfig.actor_localizer_config);
   
   if (localRefresherConfig.value.github_config?.repo_url) {
     parseRepoUrl();
@@ -984,6 +1020,7 @@ const handleSave = async () => {
   const result3 = await configStore.saveWebhookConfig(localWebhookConfig.value);
   const result4 = await configStore.saveEpisodeRefresherConfig(localRefresherConfig.value);
   const result5 = await configStore.saveEpisodeRoleSyncConfig(localEpisodeRoleSyncConfig.value);
+  const result6 = await configStore.saveActorLocalizerConfig(localActorLocalizerConfig.value);
 
   if (result1.success && result2.success && result3.success && result4.success) {
     ElMessage.success('所有设置已成功保存！');
@@ -1108,6 +1145,9 @@ const openSettingsDialog = (taskId) => {
     isRenamerSettingsDialogVisible.value = true;
   } else if (taskId === 'episode_role_sync') {
     isEpisodeRoleSyncDialogVisible.value = true;
+  } else if (taskId === 'actor_localizer') {
+    isActorLocalizerDialogVisible.value = true;
+  // --- 新增结束 ---
   }
 };
 

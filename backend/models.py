@@ -123,6 +123,7 @@ class ActorLocalizerConfig(BaseModel):
     tencent_config: TencentApiConfig = Field(default_factory=TencentApiConfig)
     siliconflow_config: SiliconflowApiConfig = Field(default_factory=SiliconflowApiConfig)
     apply_cron: str = Field(default="", description="定时自动应用CRON表达式")
+    scheduled_task_skip_douban_check: bool = Field(default=False, description="定时任务中是否允许跳过豆瓣ID/数据检查，直接进行翻译")
 
 class DoubanFixerConfig(BaseModel):
     """豆瓣ID修复器配置"""

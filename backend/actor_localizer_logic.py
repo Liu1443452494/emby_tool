@@ -289,7 +289,7 @@ class ActorLocalizerLogic:
         return None
     
 
-    def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig, task_category: str, preview_mode: bool = False, person_index: Optional[Dict] = None) -> Dict[str, Any]:
+    def _process_single_item_for_localization(self, item_id: str, config: ActorLocalizerConfig, task_category: str, preview_mode: bool = False, person_index: Optional[Dict] = None, allow_missing_douban: bool = False) -> Dict[str, Any]:
         details = self._get_item_details(item_id)
         if not details: return {"has_changes": False}
         
@@ -301,18 +301,25 @@ class ActorLocalizerLogic:
         douban_id = next((v for k, v in provider_ids.items() if k.lower() == 'douban'), None)
         
         if not douban_id:
-            if not preview_mode: ui_logger.debug(f"     -- 跳过，无豆瓣ID。", task_category=task_category)
-            return {"has_changes": False}
+            if allow_missing_douban:
+                if not preview_mode: ui_logger.info(f"     -- [跳过检查] 媒体无豆瓣ID，但允许继续处理。", task_category=task_category)
+            else:
+                if not preview_mode: ui_logger.debug(f"     -- 跳过，无豆瓣ID。", task_category=task_category)
+                return {"has_changes": False}
         
         people = details.get('People', [])
         if not people:
             if not preview_mode: ui_logger.debug(f"     -- 跳过，无演职员信息。", task_category=task_category)
             return {"has_changes": False}
 
-        douban_item = self.douban_map.get(douban_id)
+        douban_item = self.douban_map.get(douban_id) if douban_id else None
         if not douban_item:
-            if not preview_mode: ui_logger.warning(f"     -- 跳过，本地无豆瓣ID {douban_id} 的数据。", task_category=task_category)
-            return {"has_changes": False}
+            if allow_missing_douban:
+                if not preview_mode: ui_logger.info(f"     -- [跳过检查] 本地无豆瓣数据，但允许继续处理。", task_category=task_category)
+                douban_item = {} 
+            else:
+                if not preview_mode: ui_logger.warning(f"     -- 跳过，本地无豆瓣ID {douban_id} 的数据。", task_category=task_category)
+                return {"has_changes": False}
 
         douban_actor_map = {}
         for actor in douban_item.get('actors', []):
@@ -655,7 +662,13 @@ class ActorLocalizerLogic:
             task_manager.update_task_progress(task_id, index + 1, total_items)
             
             # --- 修改：传入索引 ---
-            result = self._process_single_item_for_localization(item_id, config, task_category, person_index=person_index)
+            result = self._process_single_item_for_localization(
+                item_id, 
+                config, 
+                task_category, 
+                person_index=person_index,
+                allow_missing_douban=config.scheduled_task_skip_douban_check
+            )
             # --- 修改结束 ---
             
             if result.get("has_changes"):
