@@ -443,7 +443,10 @@ class ChasingCenterLogic:
             # 如果 TMDB ID 存在，仅更新 Emby ID
             old_emby_id = existing_item.get("emby_id")
             existing_item["emby_id"] = series_id
-            ui_logger.info(f"🔄 [追更] 检测到剧集《{series_name}》(TMDB: {tmdb_id}) 已在列表中，更新 Emby ID: {old_emby_id} -> {series_id}", task_category=task_cat)
+            # --- 修改 ---
+            ui_logger.info(f"🔄 [追更] 检测到剧集《{series_name}》(TMDB: {tmdb_id}) 已在列表中，更新 Emby ID: {old_emby_id} -> {series_id}。无需重复发送通知。", task_category=task_cat)
+            self._save_chasing_list(chasing_list)
+            return   
         else:
             # 如果 TMDB ID 不存在，则新增
             chasing_list.append({"emby_id": series_id, "tmdb_id": tmdb_id, "cache": None})
@@ -624,6 +627,11 @@ class ChasingCenterLogic:
             # 最终决策
             if all_metadata_complete:
                 self.remove_from_chasing_list(series_id, series_name, "数量与元数据质量均完整")
+                # --- 新增 ---
+                if self.config.telegram_config.enabled:
+                    msg = escape_markdown(f"🎉 剧集《{series_name}》元数据已完整，从追更列表中移除。")
+                    notification_manager.send_telegram_message(msg, self.config)
+                # --- 新增结束 ---
                 return
             else:
                 # 维度三：超时容错
@@ -876,11 +884,17 @@ class ChasingCenterLogic:
         task_cat = "追更-自动重命名"
         ui_logger.info(f"🚀 开始执行批量重命名任务，共 {len(series_ids)} 部剧集...", task_category=task_cat)
 
+        processed_series_names = []
+
         # 阶段 A: 本地重命名
         for series_id in series_ids:
             if cancellation_event.is_set(): return
             
             try:
+
+                series_details = self.episode_refresher._get_emby_item_details(series_id, fields="Name")
+                s_name = series_details.get("Name", f"ID {series_id}") if series_details else f"ID {series_id}"
+                processed_series_names.append(s_name)
                 # 获取所有分集 ID
                 episodes_url = f"{self.config.server_config.server}/Items"
                 episodes_params = {
@@ -918,6 +932,11 @@ class ChasingCenterLogic:
                     ui_logger.info("✅ 没有待处理的网盘重命名任务。", task_category=task_cat)
         except Exception as e:
             ui_logger.error(f"❌ 执行网盘重命名时出错: {e}", task_category=task_cat)
+
+        if processed_series_names and self.config.telegram_config.enabled:
+            names_str = "、".join([f"《{n}》" for n in processed_series_names])
+            msg = escape_markdown(f"📝 剧集{names_str}标题信息已完整有效，同步重命名本地和网盘文件成功。")
+            notification_manager.send_telegram_message(msg, self.config)
 
     def _mark_series_as_renamed(self, series_id: str):
         """更新追更列表中的重命名状态标记"""
