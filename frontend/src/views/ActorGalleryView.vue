@@ -374,8 +374,8 @@ const mediaStore = useMediaStore()
 const galleryStore = useActorGalleryStore()
 const configStore = useConfigStore()
 
-const isLeftPanelCollapsed = useStorage('gallery-left-panel-collapsed', false);
-const isMagnifierEnabled = useStorage('gallery-magnifier-enabled', true);
+const isLeftPanelCollapsed = useStorage('gallery-left-panel-collapsed', true);
+const isMagnifierEnabled = useStorage('gallery-magnifier-enabled', false);
 
 const selectedMediaItemCache = useStorage('gallery-selected-media-item-cache', null, undefined, { serializer: StorageSerializers.object });
 const actorsCache = useStorage('gallery-actors-cache', []);

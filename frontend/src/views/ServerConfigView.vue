@@ -1,385 +1,419 @@
-<!-- ❗ 注意：以下是 frontend/src/views/ServerConfigView.vue 文件的完整文件代码，请直接覆盖整个文件内容。 -->
+<!-- frontend/src/views/ServerConfigView.vue (template 完整覆盖) -->
 <template>
   <div class="config-page">
     <template v-if="configStore.isLoaded">
       <div class="page-header">
-        <h2>Emby 配置</h2>
+        <h2>配置中心</h2>
         <p>所有功能都依赖此配置。请确保信息正确并成功连接。</p>
       </div>
 
-      <!-- 数据源配置区 -->
-      <el-form
-        ref="serverFormRef"
-        :model="localServerConfig"
-        :rules="serverFormRules"
-        class="config-section"
-        label-position="left"
-        :label-width="formLabelWidth"
-        @submit.prevent="handleSaveServer(serverFormRef)"
-        hide-required-asterisk
-      >
-        <h3>数据源</h3>
-        <el-form-item label="Emby 服务器 URL" prop="server">
-          <el-input v-model="localServerConfig.server" class="glow-input" placeholder="例如: http://192.168.1.100:8096" />
-        </el-form-item>
-        <el-form-item label="Emby API Key" prop="api_key">
-          <el-input v-model="localServerConfig.api_key" class="glow-input" placeholder="从 Emby 控制台获取" show-password />
-        </el-form-item>
-        <el-form-item label="Emby 用户 ID" prop="user_id">
-          <el-input v-model="localServerConfig.user_id" class="glow-input" placeholder="从 Emby 控制台获取" />
-        </el-form-item>
-        <el-form-item class="form-button-container">
-          <el-button type="success" native-type="submit" :loading="isServerLoading">
-            保存并测试连接
-          </el-button>
-        </el-form-item>
-      </el-form>
+      <!-- --- 修改：移除 type="border-card"，并为 el-tab-pane 添加 transition --- -->
+      <el-tabs v-model="activeTab" class="config-tabs">
+        <!-- Emby 服务器配置 -->
+        <el-tab-pane label="Emby 服务器" name="server">
+          <transition mode="out-in">
+            <el-form
+              v-if="activeTab === 'server'"
+              ref="serverFormRef"
+              :model="localServerConfig"
+              :rules="serverFormRules"
+              class="config-section"
+              label-position="left"
+              :label-width="formLabelWidth"
+              @submit.prevent="handleSaveServer(serverFormRef)"
+              hide-required-asterisk
+            >
+              <el-form-item label="Emby 服务器 URL" prop="server">
+                <el-input v-model="localServerConfig.server" class="glow-input" placeholder="例如: http://192.168.1.100:8096" />
+              </el-form-item>
+              <el-form-item label="Emby API Key" prop="api_key">
+                <el-input v-model="localServerConfig.api_key" class="glow-input" placeholder="从 Emby 控制台获取" show-password />
+              </el-form-item>
+              <el-form-item label="Emby 用户 ID" prop="user_id">
+                <el-input v-model="localServerConfig.user_id" class="glow-input" placeholder="从 Emby 控制台获取" />
+              </el-form-item>
+              <el-form-item class="form-button-container">
+                <el-button type="success" native-type="submit" :loading="isServerLoading">
+                  保存并测试连接
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </transition>
+        </el-tab-pane>
 
-      <!-- 网络设置配置区 -->
-      <el-form
-        ref="proxyFormRef"
-        :model="localProxyConfig"
-        :rules="proxyFormRules"
-        class="config-section"
-        label-position="left"
-        :label-width="formLabelWidth"
-        @submit.prevent="handleSaveProxy(proxyFormRef)"
-        hide-required-asterisk
-      >
-        <h3>网络设置</h3>
-        <el-form-item label="启用代理">
-          <el-switch v-model="localProxyConfig.enabled" />
-          <div class="form-item-description">
-            全局开关，用于启用或禁用下方的代理配置。
-          </div>
-        </el-form-item>
-        <el-form-item label="HTTP 代理地址" prop="url">
-          <el-input 
-            v-model="localProxyConfig.url" 
-            class="glow-input" 
-            placeholder="例如: http://127.0.0.1:7890" 
-            :disabled="!localProxyConfig.enabled"
-          />
-        </el-form-item>
-        <el-form-item label="代理模式">
-          <el-radio-group v-model="localProxyConfig.mode" :disabled="!localProxyConfig.enabled">
-            <el-radio value="blacklist">黑名单模式 (推荐)</el-radio>
-            <el-radio value="whitelist">白名单模式</el-radio>
-          </el-radio-group>
-          <div class="form-item-description">
-            <b>黑名单模式：</b>默认所有外部请求都走代理，可勾选下方目标<b>不走</b>代理。<br>
-            <b>白名单模式：</b>默认所有外部请求都不走代理，需勾选下方目标<b>走</b>代理。
-          </div>
-        </el-form-item>
-        <el-form-item label="内置代理目标">
-          <div class="proxy-scope-group">
-            <el-checkbox v-model="localProxyConfig.target_tmdb" :disabled="!localProxyConfig.enabled">TMDB</el-checkbox>
-            <el-checkbox v-model="localProxyConfig.target_douban" :disabled="!localProxyConfig.enabled">豆瓣 (及图片)</el-checkbox>
-            <el-checkbox v-model="localProxyConfig.target_emby" :disabled="!localProxyConfig.enabled">Emby 服务器</el-checkbox>
-          </div>
-           <div class="form-item-description">
-            {{ proxyTargetDescription }}
-          </div>
-        </el-form-item>
-        <!-- 新增：自定义规则按钮 -->
-        <el-form-item>
-          <el-button @click="openProxyRulesDialog" :disabled="!localProxyConfig.enabled">
-            自定义代理规则...
-          </el-button>
-        </el-form-item>
-        <el-form-item class="form-button-container multi-button">
-          <el-button @click="handleTestProxy" :loading="isProxyTesting" :disabled="!localProxyConfig.enabled">
-            测试代理
-          </el-button>
-          <el-button type="success" native-type="submit" :loading="isProxySaving">
-            保存代理设置
-          </el-button>
-        </el-form-item>
-      </el-form>
+        <!-- 网络设置 -->
+        <el-tab-pane label="网络代理" name="network">
+          <transition mode="out-in">
+            <el-form
+              v-if="activeTab === 'network'"
+              ref="proxyFormRef"
+              :model="localProxyConfig"
+              :rules="proxyFormRules"
+              class="config-section"
+              label-position="left"
+              :label-width="formLabelWidth"
+              @submit.prevent="handleSaveProxy(proxyFormRef)"
+              hide-required-asterisk
+            >
+              <el-form-item label="启用代理">
+                <el-switch v-model="localProxyConfig.enabled" />
+                <div class="form-item-description">
+                  全局开关，用于启用或禁用下方的代理配置。
+                </div>
+              </el-form-item>
+              <el-form-item label="HTTP 代理地址" prop="url">
+                <el-input 
+                  v-model="localProxyConfig.url" 
+                  class="glow-input" 
+                  placeholder="例如: http://127.0.0.1:7890" 
+                  :disabled="!localProxyConfig.enabled"
+                />
+              </el-form-item>
+              <el-form-item label="代理模式">
+                <el-radio-group v-model="localProxyConfig.mode" :disabled="!localProxyConfig.enabled">
+                  <el-radio value="blacklist">黑名单模式 (推荐)</el-radio>
+                  <el-radio value="whitelist">白名单模式</el-radio>
+                </el-radio-group>
+                <div class="form-item-description">
+                  <b>黑名单模式：</b>默认所有外部请求都走代理，可勾选下方目标<b>不走</b>代理。<br>
+                  <b>白名单模式：</b>默认所有外部请求都不走代理，需勾选下方目标<b>走</b>代理。
+                </div>
+              </el-form-item>
+              <el-form-item label="内置代理目标">
+                <div class="proxy-scope-group">
+                  <el-checkbox v-model="localProxyConfig.target_tmdb" :disabled="!localProxyConfig.enabled">TMDB</el-checkbox>
+                  <el-checkbox v-model="localProxyConfig.target_douban" :disabled="!localProxyConfig.enabled">豆瓣 (及图片)</el-checkbox>
+                  <el-checkbox v-model="localProxyConfig.target_emby" :disabled="!localProxyConfig.enabled">Emby 服务器</el-checkbox>
+                </div>
+                <div class="form-item-description">
+                  {{ proxyTargetDescription }}
+                </div>
+              </el-form-item>
+              <el-form-item>
+                <el-button @click="openProxyRulesDialog" :disabled="!localProxyConfig.enabled">
+                  自定义代理规则...
+                </el-button>
+              </el-form-item>
+              <el-form-item class="form-button-container multi-button">
+                <el-button @click="handleTestProxy" :loading="isProxyTesting" :disabled="!localProxyConfig.enabled">
+                  测试代理
+                </el-button>
+                <el-button type="success" native-type="submit" :loading="isProxySaving">
+                  保存代理设置
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </transition>
+        </el-tab-pane>
 
-      <!-- 下载设置配置区 -->
-      <el-form
-        ref="downloadFormRef"
-        :model="localDownloadConfig"
-        :rules="downloadFormRules"
-        class="config-section"
-        label-position="left"
-        :label-width="formLabelWidth"
-        @submit.prevent="handleSaveDownload(downloadFormRef)"
-        hide-required-asterisk
-      >
-        <h3>下载设置</h3>
-        <el-form-item label="全局下载目录" prop="download_directory">
-          <el-input v-model="localDownloadConfig.download_directory" class="glow-input" placeholder="D:\emby_downloads" />
-          <div class="form-item-description">
-            所有从本工具下载的媒体文件（如NFO、图片）都将保存在此目录下。
-          </div>
-        </el-form-item>
-        <el-form-item label="同名文件处理">
-          <div>
-            <el-radio-group v-model="localDownloadConfig.download_behavior">
-              <el-radio value="skip">跳过下载</el-radio>
-              <el-radio value="overwrite">覆盖源文件</el-radio>
-            </el-radio-group>
-            <div class="form-item-description">
-              当下载目标位置已存在同名文件时的处理策略。
-            </div>
-          </div>
-        </el-form-item>
-        <el-form-item label="目录命名规则">
-          <div>
-            <el-radio-group v-model="localDownloadConfig.directory_naming_rule">
-              <el-radio value="tmdb_id">按TMDB ID命名</el-radio>
-              <el-radio value="media_path">按媒体路径命名</el-radio>
-            </el-radio-group>
-            <div class="form-item-description">
-              选择在全局下载目录下创建子目录的命名方式。
-            </div>
-          </div>
-        </el-form-item>
-        <el-form-item label="NFO演员数量">
-          <div>
-            <el-input-number v-model="localDownloadConfig.nfo_actor_limit" :min="0" :max="200" />
-            <div class="form-item-description">
-              写入 NFO 文件中的最大演员数量。设为 0 则不写入任何演员信息。
-            </div>
-          </div>
-        </el-form-item>
-        <el-form-item class="form-button-container">
-          <el-button type="success" native-type="submit" :loading="isDownloadLoading">
-            保存下载设置
-          </el-button>
-        </el-form-item>
-      </el-form>
+        <!-- 下载设置 -->
+        <el-tab-pane label="下载设置" name="download">
+          <transition mode="out-in">
+            <el-form
+              v-if="activeTab === 'download'"
+              ref="downloadFormRef"
+              :model="localDownloadConfig"
+              :rules="downloadFormRules"
+              class="config-section"
+              label-position="left"
+              :label-width="formLabelWidth"
+              @submit.prevent="handleSaveDownload(downloadFormRef)"
+              hide-required-asterisk
+            >
+              <el-form-item label="全局下载目录" prop="download_directory">
+                <el-input v-model="localDownloadConfig.download_directory" class="glow-input" placeholder="D:\emby_downloads" />
+                <div class="form-item-description">
+                  所有从本工具下载的媒体文件（如NFO、图片）都将保存在此目录下。
+                </div>
+              </el-form-item>
+              <el-form-item label="同名文件处理">
+                <div>
+                  <el-radio-group v-model="localDownloadConfig.download_behavior">
+                    <el-radio value="skip">跳过下载</el-radio>
+                    <el-radio value="overwrite">覆盖源文件</el-radio>
+                  </el-radio-group>
+                  <div class="form-item-description">
+                    当下载目标位置已存在同名文件时的处理策略。
+                  </div>
+                </div>
+              </el-form-item>
+              <el-form-item label="目录命名规则">
+                <div>
+                  <el-radio-group v-model="localDownloadConfig.directory_naming_rule">
+                    <el-radio value="tmdb_id">按TMDB ID命名</el-radio>
+                    <el-radio value="media_path">按媒体路径命名</el-radio>
+                  </el-radio-group>
+                  <div class="form-item-description">
+                    选择在全局下载目录下创建子目录的命名方式。
+                  </div>
+                </div>
+              </el-form-item>
+              <el-form-item label="NFO演员数量">
+                <div>
+                  <el-input-number v-model="localDownloadConfig.nfo_actor_limit" :min="0" :max="200" />
+                  <div class="form-item-description">
+                    写入 NFO 文件中的最大演员数量。设为 0 则不写入任何演员信息。
+                  </div>
+                </div>
+              </el-form-item>
+              <el-form-item class="form-button-container">
+                <el-button type="success" native-type="submit" :loading="isDownloadLoading">
+                  保存下载设置
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </transition>
+        </el-tab-pane>
 
-      <!-- TMDB 配置区 -->
-      <el-form
-        ref="tmdbFormRef"
-        :model="localTmdbConfig"
-        :rules="tmdbFormRules"
-        class="config-section"
-        label-position="left"
-        :label-width="formLabelWidth"
-        @submit.prevent="handleSaveAndTestTmdb(tmdbFormRef)"
-        hide-required-asterisk
-      >
-        <h3>TMDB 数据源</h3>
-        <el-form-item label="TMDB API Key" prop="api_key">
-          <el-input v-model="localTmdbConfig.api_key" class="glow-input" placeholder="从 The Movie Database 官网申请" show-password />
-          <div class="form-item-description">
-            用于从 TMDB 获取更丰富的元数据，例如演员头像、影视海报等。
-          </div>
-        </el-form-item>
-        <el-form-item label="自定义API域名">
-          <el-switch v-model="localTmdbConfig.custom_api_domain_enabled" />
-           <div class="form-item-description">
-            在无法访问默认 `api.themoviedb.org` 时，可启用此项并指定一个可用的反代域名。
-          </div>
-        </el-form-item>
-        <el-form-item label="API 域名地址">
-          <el-input 
-            v-model="localTmdbConfig.custom_api_domain" 
-            class="glow-input" 
-            placeholder="例如: https://api.tmdb.org"
-            :disabled="!localTmdbConfig.custom_api_domain_enabled"
-          />
-        </el-form-item>
-        <el-form-item class="form-button-container">
-          <el-button type="success" native-type="submit" :loading="isTmdbLoading">
-            保存并测试
-          </el-button>
-        </el-form-item>
-      </el-form>
+        <!-- TMDB 数据源 -->
+        <el-tab-pane label="TMDB" name="tmdb">
+          <transition mode="out-in">
+            <el-form
+              v-if="activeTab === 'tmdb'"
+              ref="tmdbFormRef"
+              :model="localTmdbConfig"
+              :rules="tmdbFormRules"
+              class="config-section"
+              label-position="left"
+              :label-width="formLabelWidth"
+              @submit.prevent="handleSaveAndTestTmdb(tmdbFormRef)"
+              hide-required-asterisk
+            >
+              <el-form-item label="TMDB API Key" prop="api_key">
+                <el-input v-model="localTmdbConfig.api_key" class="glow-input" placeholder="从 The Movie Database 官网申请" show-password />
+                <div class="form-item-description">
+                  用于从 TMDB 获取更丰富的元数据，例如演员头像、影视海报等。
+                </div>
+              </el-form-item>
+              <el-form-item label="自定义API域名">
+                <el-switch v-model="localTmdbConfig.custom_api_domain_enabled" />
+                <div class="form-item-description">
+                  在无法访问默认 `api.themoviedb.org` 时，可启用此项并指定一个可用的反代域名。
+                </div>
+              </el-form-item>
+              <el-form-item label="API 域名地址">
+                <el-input 
+                  v-model="localTmdbConfig.custom_api_domain" 
+                  class="glow-input" 
+                  placeholder="例如: https://api.tmdb.org"
+                  :disabled="!localTmdbConfig.custom_api_domain_enabled"
+                />
+              </el-form-item>
+              <el-form-item class="form-button-container">
+                <el-button type="success" native-type="submit" :loading="isTmdbLoading">
+                  保存并测试
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </transition>
+        </el-tab-pane>
 
-      <!-- 豆瓣数据源配置区 -->
-      <el-form
-        ref="doubanFormRef"
-        :model="localDoubanConfig"
-        class="config-section"
-        label-position="left"
-        :label-width="formLabelWidth"
-        @submit.prevent="handleSaveDouban(doubanFormRef)"
-        hide-required-asterisk
-      >
-        <h3>豆瓣数据源设置</h3>
+        <!-- 豆瓣数据源 -->
+        <el-tab-pane label="豆瓣神医数据" name="douban">
+          <transition mode="out-in">
+            <el-form
+              v-if="activeTab === 'douban'"
+              ref="doubanFormRef"
+              :model="localDoubanConfig"
+              class="config-section"
+              label-position="left"
+              :label-width="formLabelWidth"
+              @submit.prevent="handleSaveDouban(doubanFormRef)"
+              hide-required-asterisk
+            >
+              <div class="cache-status-bar">
+                <span v-if="!configStore.appConfig.douban_cache_status?.exists">
+                  缓存状态: 缓存文件不存在，请配置目录后强制刷新
+                </span>
+                <span v-else>
+                  缓存状态: {{ configStore.appConfig.douban_cache_status.is_scanning ? '扫描中...' : '空闲' }} | 
+                  数据量: {{ configStore.appConfig.douban_cache_status.item_count }} 条 | 
+                  最后更新: {{ configStore.appConfig.douban_cache_status.last_modified ? new Date(configStore.appConfig.douban_cache_status.last_modified).toLocaleString() : 'N/A' }}
+                </span>
+              </div>
+              <el-form-item label="豆瓣数据根目录">
+                <el-input v-model="localDoubanConfig.directory" class="glow-input" placeholder="包含 'douban-movies' 和 'douban-tv' 的目录" />
+                <div class="form-item-description">
+                  程序启动时若本地无缓存，将自动扫描此目录。此目录的修改将在下次刷新或重启后生效。
+                </div>
+              </el-form-item>
+              <el-form-item label="定时刷新(CRON)">
+                <el-input v-model="localDoubanConfig.refresh_cron" class="glow-input" placeholder="例如: 0 3 * * 1 (每周一凌晨3点)" />
+                <div class="form-item-description">
+                  使用标准的CRON表达式来定时刷新本地豆瓣数据。留空则禁用定时刷新。
+                </div>
+              </el-form-item>
+              <el-form-item label="额外保存字段">
+                <el-checkbox-group v-model="localDoubanConfig.extra_fields" class="extra-fields-group">
+                  <el-checkbox value="rating">评分</el-checkbox>
+                  <el-checkbox value="pubdate">上映日期</el-checkbox>
+                  <el-checkbox value="card_subtitle">卡片副标题</el-checkbox>
+                  <el-checkbox value="languages">语言</el-checkbox>
+                  <el-checkbox value="durations">片长(仅电影)</el-checkbox>
+                </el-checkbox-group>
+                <div class="form-item-description">
+                  选择要在本地缓存中额外保存的字段，可以减少文件大小。“国家/地区”字段为功能必需，将默认保存。
+                </div>
+              </el-form-item>
+              <el-form-item class="form-button-container multi-button">
+                <el-button type="success" native-type="submit" :loading="isDoubanLoading">
+                  保存豆瓣设置
+                </el-button>
+                <el-button type="primary" @click="handleForceRefresh" :loading="doubanStore.isLoading">
+                  强制刷新本地数据
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </transition>
+        </el-tab-pane>
 
-        <div class="cache-status-bar">
-          <span v-if="!configStore.appConfig.douban_cache_status?.exists">
-            缓存状态: 缓存文件不存在，请配置目录后强制刷新
-          </span>
-          <span v-else>
-            缓存状态: {{ configStore.appConfig.douban_cache_status.is_scanning ? '扫描中...' : '空闲' }} | 
-            数据量: {{ configStore.appConfig.douban_cache_status.item_count }} 条 | 
-            最后更新: {{ configStore.appConfig.douban_cache_status.last_modified ? new Date(configStore.appConfig.douban_cache_status.last_modified).toLocaleString() : 'N/A' }}
-          </span>
-        </div>
+        <!-- 豆瓣ID修复器 -->
+        <el-tab-pane label="豆瓣COOKIE" name="douban-fixer">
+          <transition mode="out-in">
+            <el-form
+              v-if="activeTab === 'douban-fixer'"
+              ref="doubanFixerFormRef"
+              :model="localDoubanFixerConfig"
+              class="config-section"
+              label-position="left"
+              :label-width="formLabelWidth"
+              @submit.prevent="handleSaveDoubanFixer(doubanFixerFormRef)"
+              hide-required-asterisk
+            >
+              <el-form-item label="豆瓣 Cookie">
+                <el-input 
+                  v-model="localDoubanFixerConfig.cookie" 
+                  type="textarea"
+                  :rows="3"
+                  class="glow-input" 
+                  placeholder="从浏览器开发者工具中获取"
+                />
+                <div class="form-item-description">
+                  用于模拟登录状态请求豆瓣，提高搜索成功率。请确保Cookie的有效性。
+                </div>
+              </el-form-item>
+              <el-form-item label="API 冷却时间">
+                <el-input-number v-model="localDoubanFixerConfig.api_cooldown" :precision="1" :step="0.5" :min="0.5" />
+                <span style="margin-left: 10px;">秒</span>
+                <div class="form-item-description">
+                  每次请求豆瓣API之间的间隔时间，用于防止因请求过快被封禁。推荐 2-5 秒。
+                </div>
+              </el-form-item>
+              <el-form-item label="定时扫描(CRON)">
+                <el-input v-model="localDoubanFixerConfig.scan_cron" class="glow-input" placeholder="例如: 0 4 * * * (每天凌晨4点)" />
+                <div class="form-item-description">
+                  使用CRON表达式定时执行全量扫描和自动匹配任务。留空则禁用。
+                </div>
+              </el-form-item>
+              <el-form-item class="form-button-container multi-button">
+                <el-button @click="handleTestCookie" :loading="isCookieTesting">
+                  测试 Cookie
+                </el-button>
+                <el-button type="success" native-type="submit" :loading="isDoubanFixerLoading">
+                  保存修复器设置
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </transition>
+        </el-tab-pane>
 
-        <el-form-item label="豆瓣数据根目录">
-          <el-input v-model="localDoubanConfig.directory" class="glow-input" placeholder="包含 'douban-movies' 和 'douban-tv' 的目录" />
-          <div class="form-item-description">
-            程序启动时若本地无缓存，将自动扫描此目录。此目录的修改将在下次刷新或重启后生效。
-          </div>
-        </el-form-item>
-        <el-form-item label="定时刷新(CRON)">
-          <el-input v-model="localDoubanConfig.refresh_cron" class="glow-input" placeholder="例如: 0 3 * * 1 (每周一凌晨3点)" />
-          <div class="form-item-description">
-            使用标准的CRON表达式来定时刷新本地豆瓣数据。留空则禁用定时刷新。
-          </div>
-        </el-form-item>
-        
-        <el-form-item label="额外保存字段">
-          <el-checkbox-group v-model="localDoubanConfig.extra_fields" class="extra-fields-group">
-            <el-checkbox value="rating">评分</el-checkbox>
-            <el-checkbox value="pubdate">上映日期</el-checkbox>
-            <el-checkbox value="card_subtitle">卡片副标题</el-checkbox>
-            <el-checkbox value="languages">语言</el-checkbox>
-            <el-checkbox value="durations">片长(仅电影)</el-checkbox>
-          </el-checkbox-group>
-          <div class="form-item-description">
-            选择要在本地缓存中额外保存的字段，可以减少文件大小。“国家/地区”字段为功能必需，将默认保存。
-          </div>
-        </el-form-item>
+        <!-- 通知设置 -->
+        <el-tab-pane label="TG通知设置" name="notification">
+          <transition mode="out-in">
+            <el-form
+              v-if="activeTab === 'notification'"
+              ref="telegramFormRef"
+              :model="localTelegramConfig"
+              :rules="telegramFormRules"
+              class="config-section"
+              label-position="left"
+              :label-width="formLabelWidth"
+              @submit.prevent="handleSaveTelegram(telegramFormRef)"
+              hide-required-asterisk
+            >
+              <el-form-item label="启用Telegram通知">
+                <el-switch v-model="localTelegramConfig.enabled" />
+                <div class="form-item-description">
+                  全局开关，用于启用或禁用所有通过Telegram发送的通知。
+                </div>
+              </el-form-item>
+              <el-form-item label="Bot Token" prop="bot_token">
+                <el-input 
+                  v-model="localTelegramConfig.bot_token" 
+                  class="glow-input" 
+                  placeholder="从 @BotFather 获取" 
+                  :disabled="!localTelegramConfig.enabled"
+                  show-password
+                />
+              </el-form-item>
+              <el-form-item label="Chat ID" prop="chat_id">
+                <el-input 
+                  v-model="localTelegramConfig.chat_id" 
+                  class="glow-input" 
+                  placeholder="个人、群组或频道的ID" 
+                  :disabled="!localTelegramConfig.enabled"
+                />
+                <div class="form-item-description">
+                  <el-button type="primary" link @click="isTelegramHelpVisible = true">如何获取配置信息？</el-button>
+                </div>
+              </el-form-item>
+              <el-form-item class="form-button-container multi-button">
+                <el-button @click="handleTestTelegram" :loading="isTelegramTesting" :disabled="!localTelegramConfig.enabled">
+                  发送测试通知
+                </el-button>
+                <el-button type="success" native-type="submit" :loading="isTelegramSaving">
+                  保存通知设置
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </transition>
+        </el-tab-pane>
 
-        <el-form-item class="form-button-container multi-button">
-          <el-button type="success" native-type="submit" :loading="isDoubanLoading">
-            保存豆瓣设置
-          </el-button>
-          <el-button type="primary" @click="handleForceRefresh" :loading="doubanStore.isLoading">
-            强制刷新本地数据
-          </el-button>
-        </el-form-item>
-      </el-form>
-
-      <!-- 豆瓣ID修复器配置区 -->
-      <el-form
-        ref="doubanFixerFormRef"
-        :model="localDoubanFixerConfig"
-        class="config-section"
-        label-position="left"
-        :label-width="formLabelWidth"
-        @submit.prevent="handleSaveDoubanFixer(doubanFixerFormRef)"
-        hide-required-asterisk
-      >
-        <h3>豆瓣ID修复器设置</h3>
-        <el-form-item label="豆瓣 Cookie">
-          <el-input 
-            v-model="localDoubanFixerConfig.cookie" 
-            type="textarea"
-            :rows="3"
-            class="glow-input" 
-            placeholder="从浏览器开发者工具中获取"
-          />
-          <div class="form-item-description">
-            用于模拟登录状态请求豆瓣，提高搜索成功率。请确保Cookie的有效性。
-          </div>
-        </el-form-item>
-        <el-form-item label="API 冷却时间">
-          <el-input-number v-model="localDoubanFixerConfig.api_cooldown" :precision="1" :step="0.5" :min="0.5" />
-          <span style="margin-left: 10px;">秒</span>
-          <div class="form-item-description">
-            每次请求豆瓣API之间的间隔时间，用于防止因请求过快被封禁。推荐 2-5 秒。
-          </div>
-        </el-form-item>
-        <el-form-item label="定时扫描(CRON)">
-          <el-input v-model="localDoubanFixerConfig.scan_cron" class="glow-input" placeholder="例如: 0 4 * * * (每天凌晨4点)" />
-          <div class="form-item-description">
-            使用CRON表达式定时执行全量扫描和自动匹配任务。留空则禁用。
-          </div>
-        </el-form-item>
-        <el-form-item class="form-button-container multi-button">
-          <el-button @click="handleTestCookie" :loading="isCookieTesting">
-            测试 Cookie
-          </el-button>
-          <el-button type="success" native-type="submit" :loading="isDoubanFixerLoading">
-            保存修复器设置
-          </el-button>
-        </el-form-item>
-      </el-form>
-      <el-form
-        ref="telegramFormRef"
-        :model="localTelegramConfig"
-        :rules="telegramFormRules"
-        class="config-section"
-        label-position="left"
-        :label-width="formLabelWidth"
-        @submit.prevent="handleSaveTelegram(telegramFormRef)"
-        hide-required-asterisk
-      >
-        <h3>通知设置</h3>
-        <el-form-item label="启用Telegram通知">
-          <el-switch v-model="localTelegramConfig.enabled" />
-          <div class="form-item-description">
-            全局开关，用于启用或禁用所有通过Telegram发送的通知。
-          </div>
-        </el-form-item>
-        <el-form-item label="Bot Token" prop="bot_token">
-          <el-input 
-            v-model="localTelegramConfig.bot_token" 
-            class="glow-input" 
-            placeholder="从 @BotFather 获取" 
-            :disabled="!localTelegramConfig.enabled"
-            show-password
-          />
-        </el-form-item>
-        <el-form-item label="Chat ID" prop="chat_id">
-          <el-input 
-            v-model="localTelegramConfig.chat_id" 
-            class="glow-input" 
-            placeholder="个人、群组或频道的ID" 
-            :disabled="!localTelegramConfig.enabled"
-          />
-           <div class="form-item-description">
-            <el-button type="primary" link @click="isTelegramHelpVisible = true">如何获取配置信息？</el-button>
-          </div>
-        </el-form-item>
-        <el-form-item class="form-button-container multi-button">
-          <el-button @click="handleTestTelegram" :loading="isTelegramTesting" :disabled="!localTelegramConfig.enabled">
-            发送测试通知
-          </el-button>
-          <el-button type="success" native-type="submit" :loading="isTelegramSaving">
-            保存通知设置
-          </el-button>
-        </el-form-item>
-      </el-form>
-
-      <el-form
-        ref="traktFormRef"
-        :model="localTraktConfig"
-        :rules="traktFormRules"
-        class="config-section"
-        label-position="left"
-        :label-width="formLabelWidth"
-        @submit.prevent="handleSaveTrakt(traktFormRef)"
-        hide-required-asterisk
-      >
-        <h3>Trakt.tv 数据增强</h3>
-        <el-form-item label="启用 Trakt.tv">
-          <el-switch v-model="localTraktConfig.enabled" />
-          <div class="form-item-description">
-            从 Trakt.tv 获取精确到分钟的剧集播出时间，以优化追更中心的“缺失”和“下集”判断逻辑。
-          </div>
-        </el-form-item>
-        <el-form-item label="Client ID" prop="client_id">
-          <el-input 
-            v-model="localTraktConfig.client_id" 
-            class="glow-input" 
-            placeholder="在 Trakt.tv 官网创建应用后获取" 
-            :disabled="!localTraktConfig.enabled"
-            show-password
-          />
-           <div class="form-item-description">
-            <el-button type="primary" link @click="isTraktHelpVisible = true">如何获取 Client ID？</el-button>
-          </div>
-        </el-form-item>
-        <el-form-item class="form-button-container multi-button">
-          <el-button @click="handleTestTrakt" :loading="isTraktTesting" :disabled="!localTraktConfig.enabled">
-            测试连接
-          </el-button>
-          <el-button type="success" native-type="submit" :loading="isTraktSaving">
-            保存 Trakt 设置
-          </el-button>
-        </el-form-item>
-      </el-form>
+        <!-- Trakt.tv 数据增强 -->
+        <el-tab-pane label="Trakt.tv" name="trakt">
+          <transition mode="out-in">
+            <el-form
+              v-if="activeTab === 'trakt'"
+              ref="traktFormRef"
+              :model="localTraktConfig"
+              :rules="traktFormRules"
+              class="config-section"
+              label-position="left"
+              :label-width="formLabelWidth"
+              @submit.prevent="handleSaveTrakt(traktFormRef)"
+              hide-required-asterisk
+            >
+              <el-form-item label="启用 Trakt.tv">
+                <el-switch v-model="localTraktConfig.enabled" />
+                <div class="form-item-description">
+                  从 Trakt.tv 获取精确到分钟的剧集播出时间，以优化追更中心的“缺失”和“下集”判断逻辑。
+                </div>
+              </el-form-item>
+              <el-form-item label="Client ID" prop="client_id">
+                <el-input 
+                  v-model="localTraktConfig.client_id" 
+                  class="glow-input" 
+                  placeholder="在 Trakt.tv 官网创建应用后获取" 
+                  :disabled="!localTraktConfig.enabled"
+                  show-password
+                />
+                <div class="form-item-description">
+                  <el-button type="primary" link @click="isTraktHelpVisible = true">如何获取 Client ID？</el-button>
+                </div>
+              </el-form-item>
+              <el-form-item class="form-button-container multi-button">
+                <el-button @click="handleTestTrakt" :loading="isTraktTesting" :disabled="!localTraktConfig.enabled">
+                  测试连接
+                </el-button>
+                <el-button type="success" native-type="submit" :loading="isTraktSaving">
+                  保存 Trakt 设置
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </transition>
+        </el-tab-pane>
+      </el-tabs>
+      <!-- --- 修改结束 --- -->
 
     </template>
 
@@ -478,7 +512,6 @@
             </el-table-column>
             <el-table-column label="URL 关键词">
               <template #default="scope">
-                <!-- 核心修改：将提示信息放入 placeholder -->
                 <el-input 
                   v-model="scope.row.keyword" 
                   :disabled="scope.row.isBuiltIn" 
@@ -597,6 +630,7 @@ const proxyFormRef = ref(null)
 const doubanFixerFormRef = ref(null)
 const telegramFormRef = ref(null)
 const traktFormRef = ref(null)
+const activeTab = ref('server')
 
 const localServerConfig = ref({ server: '', api_key: '', user_id: '' })
 const localDownloadConfig = ref({ download_directory: '', download_behavior: 'skip', directory_naming_rule: 'tmdb_id' , nfo_actor_limit: 20 })
@@ -1042,65 +1076,7 @@ const confirmProxyRules = () => {
 };
 </script>
 
-<style>
-.el-message-container {
-  z-index: 9999 !important;
-}
-.el-message.custom-message {
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  padding: 12px 16px;
-  overflow: hidden;
-}
-.el-message.custom-message::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 4px;
-  width: 100%;
-  background-color: rgba(0, 0, 0, 0.1);
-  animation: progress-bar 3s linear forwards;
-}
-@keyframes progress-bar {
-  from { width: 100%; }
-  to { width: 0%; }
-}
-.el-message.custom-message-success {
-  background-color: #f0f9eb !important;
-  color: #67c23a !important;
-  border: 1px solid #e1f3d8 !important;
-}
-.el-message.custom-message-success .el-message__content {
-  color: #67c23a !important;
-}
-.el-message.custom-message-success::after {
-  background-color: #b3e19d;
-}
-.el-message.custom-message-warning {
-  background-color: #fdf6ec !important;
-  color: #e6a23c !important;
-  border: 1px solid #faecd8 !important;
-}
-.el-message.custom-message-warning .el-message__content {
-  color: #e6a23c !important;
-}
-.el-message.custom-message-warning::after {
-  background-color: #f3d19e;
-}
-.el-message.custom-message-error {
-  background-color: #fef0f0 !important;
-  color: #f56c6c !important;
-  border: 1px solid #fde2e2 !important;
-}
-.el-message.custom-message-error .el-message__content {
-  color: #f56c6c !important;
-}
-.el-message.custom-message-error::after {
-  background-color: #fab6b6;
-}
-</style>
-
+/* frontend/src/views/ServerConfigView.vue (style 完整覆盖) */
 <style scoped>
 .config-page {
   --custom-theme-color: #609e95;
@@ -1143,13 +1119,61 @@ const confirmProxyRules = () => {
 }
 .page-header h2 { margin: 0 0 8px 0; }
 .page-header p { margin: 0; color: var(--el-text-color-secondary); }
-.config-section { margin-bottom: 40px; }
-.config-section h3 {
-  font-size: 1.1rem;
-  margin-bottom: 20px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+
+/* --- 修改：Tabs 布局样式 --- */
+.config-tabs {
+  margin-top: 20px;
+  /* 移除卡片边框 */
+  border: none;
+  box-shadow: none;
+  background: transparent;
 }
+.config-tabs :deep(.el-tabs__content) {
+  padding: 30px 5px; /* 调整内边距 */
+  overflow: hidden; /* 配合动画 */
+}
+.config-tabs :deep(.el-tabs__header) {
+  /* 移除 header 区域的边框 */
+  border-bottom: 1px solid var(--el-border-color-light);
+  margin: 0;
+}
+.config-tabs :deep(.el-tabs__nav) {
+  /* 移除 nav 区域的边框 */
+  border: none !important;
+}
+.config-tabs :deep(.el-tabs__item) {
+  height: 50px;
+  /* 移除 item 的边框 */
+  border: none !important;
+}
+.config-tabs :deep(.el-tabs__item.is-active) {
+  color: var(--custom-theme-color);
+}
+.config-tabs :deep(.el-tabs__active-bar) {
+  background-color: var(--custom-theme-color);
+}
+
+/* --- 新增：Tab 切换过渡动画 --- */
+.config-tabs :deep(.el-tab-pane) {
+  transition: all 0.4s cubic-bezier(0.55, 0, 0.1, 1);
+}
+.v-enter-active,
+.v-leave-active {
+  /* 使用 v-enter-active 和 v-leave-active 来定义过渡效果 */
+  transition: all 0.4s cubic-bezier(0.55, 0, 0.1, 1);
+}
+.v-enter-from,
+.v-leave-to {
+  opacity: 0;
+  transform: translateY(20px);
+}
+/* --- 新增结束 --- */
+/* --- 修改结束 --- */
+
+.config-section { 
+  /* 移除 margin-bottom，由 Tab 容器控制间距 */
+}
+
 .el-form-item { max-width: 800px; }
 .form-button-container { margin-left: 0 !important; }
 .form-button-container :deep(.el-form-item__content) {
@@ -1209,7 +1233,8 @@ const confirmProxyRules = () => {
 .rules-table-container {
   flex-grow: 1;
   overflow: hidden;
-}.help-content h4 {
+}
+.help-content h4 {
   margin-top: 0;
   margin-bottom: 10px;
   color: var(--el-text-color-primary);

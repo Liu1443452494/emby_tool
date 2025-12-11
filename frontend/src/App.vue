@@ -6,7 +6,7 @@
       <!-- 左侧边栏 -->
       <el-aside :width="isCollapse ? '80px' : '240px'" class="sidebar">
         <div class="sidebar-header" :class="{ 'is-collapsed': isCollapse }">
-          <h1 v-if="!isCollapse">Emby 媒体工具</h1>
+          <h1 v-if="!isCollapse">Emby 工具</h1>
           <h1 v-else>ET</h1>
           <div class="collapse-button" @click="isCollapse = !isCollapse">
             <el-icon>
@@ -24,7 +24,7 @@
         >
           <el-menu-item index="/config">
             <el-icon><Setting /></el-icon>
-            <template #title>Emby配置</template>
+            <template #title>配置中心</template>
           </el-menu-item>
           
           <div class="menu-divider"></div>
@@ -144,7 +144,7 @@ import { useStorage } from '@vueuse/core'
 import { useConfigStore } from '@/stores/config'
 
 const locale = ref(zhCn)
-const isCollapse = useStorage('main-sidebar-collapsed', false)
+const isCollapse = useStorage('main-sidebar-collapsed', true)
 
 const isDark = ref(localStorage.getItem('theme') === 'dark')
 
