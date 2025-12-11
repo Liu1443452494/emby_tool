@@ -674,6 +674,7 @@ class ChasingCenterLogic:
         ui_logger.info(f"🎉 开始执行每日追更维护任务...", task_category=task_cat)
         
         chasing_list = self._get_chasing_list()
+        initial_chasing_list_for_cleanup = list(chasing_list) # 创建一个副本用于后续清理
         if not chasing_list:
             ui_logger.info("✅ 追更列表为空，无需执行。", task_category=task_cat)
             return
@@ -728,7 +729,7 @@ class ChasingCenterLogic:
 
         ui_logger.info("🎉 每日追更维护任务执行完毕。", task_category=task_cat)
 
-        self.run_orphaned_cache_cleanup_task(cancellation_event, task_id, task_manager)
+        self.run_orphaned_cache_cleanup_task(cancellation_event, task_id, task_manager, series_items=initial_chasing_list_for_cleanup)
 
         if series_to_rename:
             self._run_batch_rename_task(series_to_rename, cancellation_event, task_id, task_manager)
@@ -846,14 +847,20 @@ class ChasingCenterLogic:
         
         return cleaned_count
 
-    def run_orphaned_cache_cleanup_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager):
+    def run_orphaned_cache_cleanup_task(self, cancellation_event: threading.Event, task_id: str, task_manager: TaskManager, series_items: Optional[List[Dict]] = None):
         """
         扫描追更列表中的剧集，清理那些已被官方图替换的本地无效截图缓存。
         """
         task_cat = "追更-缓存清理"
         ui_logger.info(f"🧹 开始执行无效缓存清理任务...", task_category=task_cat)
         
-        chasing_list = self._get_chasing_list()
+        if series_items is None:
+            ui_logger.info("   - [模式] 未传入剧集列表，将从文件加载当前追更列表。", task_category=task_cat)
+            chasing_list = self._get_chasing_list()
+        else:
+            ui_logger.info(f"   - [模式] 使用传入的 {len(series_items)} 个剧集列表进行处理。", task_category=task_cat)
+            chasing_list = series_items
+
         if not chasing_list:
             ui_logger.info("✅ 追更列表为空，无需清理。", task_category=task_cat)
             return
