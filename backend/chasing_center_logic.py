@@ -921,6 +921,8 @@ class ChasingCenterLogic:
                 ui_logger.error(f"❌ 处理剧集 {series_id} 重命名时出错: {e}", task_category=task_cat)
 
         # 阶段 B: 网盘重命名
+        ui_logger.info("⏱️ 等待 10 秒，以确保文件系统变更稳定...", task_category=task_cat)
+        time.sleep(10)
         ui_logger.info("💾 本地重命名完成，开始扫描日志进行网盘同步...", task_category=task_cat)
         
         try:
