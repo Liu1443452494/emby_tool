@@ -352,7 +352,9 @@ class MovieRenamerLogic:
 
         chinese_title_prefix = ""
         if not self.chinese_char_regex.search(clean_body):
-            chinese_title_prefix = f"{emby_name}."
+            # 检查 Emby 标题是否已存在于文件名中（忽略大小写）
+            if emby_name.lower() not in clean_body.lower():
+                chinese_title_prefix = f"{emby_name}."
 
         parts = [p for p in [iso_tag, size_tag] if p]
         ideal_filename_no_ext = " ".join(parts)
