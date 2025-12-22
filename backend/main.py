@@ -2154,30 +2154,33 @@ async def import_config_api(file: UploadFile = File(...)):
         contents = await file.read()
         imported_data = json.loads(contents)
         
-        # 使用 Pydantic 模型进行验证和加载，确保导入的数据结构是正确的
-        imported_config = AppConfig(**imported_data)
-        
-        # 加载当前配置以保留运行时状态
+        # --- 修改 ---
+        # 1. 先加载当前的完整配置
         current_config_obj = app_config.load_app_config()
         current_config_dict = current_config_obj.model_dump(mode='json')
         
-        # 用导入的数据更新当前配置
-        imported_config_dict = imported_config.model_dump(mode='json')
-        
-        # 遍历导入的配置，更新到当前配置字典中
-        for key, value in imported_config_dict.items():
-            # douban_cache_status 是运行时状态，永远不应该被导入
-            if key != 'douban_cache_status':
-                current_config_dict[key] = value
+        # 2. 将导入的部分数据，递归地更新到当前配置字典中
+        def deep_update(source, overrides):
+            for key, value in overrides.items():
+                if isinstance(value, dict) and key in source and isinstance(source[key], dict):
+                    source[key] = deep_update(source[key], value)
+                else:
+                    # 不应该导入运行时状态
+                    if key != 'douban_cache_status':
+                        source[key] = value
+            return source
 
-        # 将更新后的字典重新加载为 AppConfig 对象，以确保所有字段都正确
-        final_config = AppConfig(**current_config_dict)
+        updated_config_dict = deep_update(current_config_dict, imported_data)
         
-        # 保存最终的配置
+        # 3. 使用更新后的完整字典创建 Pydantic 模型实例，以进行验证
+        final_config = AppConfig(**updated_config_dict)
+        
+        # 4. 保存最终的配置
         app_config.save_app_config(final_config)
         
         ui_logger.info("✅ 配置文件导入成功！部分设置可能需要刷新页面才能生效。", task_category=task_cat)
         return {"success": True, "message": "配置导入成功！"}
+        # --- 修改结束 ---
         
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="文件内容不是有效的 JSON 格式。")
