@@ -13,8 +13,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Dict, Optional, Literal, Tuple, Any
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Query, Path
-from fastapi.responses import Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Query, Path, File, UploadFile
+from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -2113,6 +2113,77 @@ def restore_screenshots_from_github_api(req: ScreenshotRestoreRequest):
         overwrite=req.overwrite
     )
     return {"status": "success", "message": "从GitHub恢复截图的任务已启动。", "task_id": task_id}
+
+@app.get("/api/config/export")
+def export_config_api():
+    """导出完整的应用配置文件"""
+    task_cat = "配置管理"
+    try:
+        # --- 修改 ---
+        # 直接使用已有的配置文件路径
+        config_file_path = app_config.CONFIG_FILE
+        
+        if not os.path.exists(config_file_path):
+            raise HTTPException(status_code=404, detail="配置文件不存在。")
+
+        # 生成带时间戳的文件名
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = f"emby_toolkit_config_{timestamp}.json"
+        
+        ui_logger.info(f"✅ 成功生成配置文件备份: {filename}", task_category=task_cat)
+        
+        # 直接将物理文件作为响应返回
+        return FileResponse(
+            path=config_file_path,
+            media_type='application/json',
+            filename=filename
+        )
+        # --- 修改结束 ---
+    except Exception as e:
+        ui_logger.error(f"❌ 导出配置时发生错误: {e}", task_category=task_cat, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"导出配置失败: {e}")
+
+@app.post("/api/config/import")
+async def import_config_api(file: UploadFile = File(...)):
+    """导入应用配置，并保留运行时状态"""
+    task_cat = "配置管理"
+    if not file.filename.endswith('.json'):
+        raise HTTPException(status_code=400, detail="文件格式不正确，请上传 .json 文件。")
+    
+    try:
+        contents = await file.read()
+        imported_data = json.loads(contents)
+        
+        # 使用 Pydantic 模型进行验证和加载，确保导入的数据结构是正确的
+        imported_config = AppConfig(**imported_data)
+        
+        # 加载当前配置以保留运行时状态
+        current_config_obj = app_config.load_app_config()
+        current_config_dict = current_config_obj.model_dump(mode='json')
+        
+        # 用导入的数据更新当前配置
+        imported_config_dict = imported_config.model_dump(mode='json')
+        
+        # 遍历导入的配置，更新到当前配置字典中
+        for key, value in imported_config_dict.items():
+            # douban_cache_status 是运行时状态，永远不应该被导入
+            if key != 'douban_cache_status':
+                current_config_dict[key] = value
+
+        # 将更新后的字典重新加载为 AppConfig 对象，以确保所有字段都正确
+        final_config = AppConfig(**current_config_dict)
+        
+        # 保存最终的配置
+        app_config.save_app_config(final_config)
+        
+        ui_logger.info("✅ 配置文件导入成功！部分设置可能需要刷新页面才能生效。", task_category=task_cat)
+        return {"success": True, "message": "配置导入成功！"}
+        
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="文件内容不是有效的 JSON 格式。")
+    except Exception as e:
+        ui_logger.error(f"❌ 导入配置时发生错误: {e}", task_category=task_cat, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"导入配置失败: {e}")
 
 @app.post("/api/webhook/emby")
 async def emby_webhook_receiver(payload: EmbyWebhookPayload):

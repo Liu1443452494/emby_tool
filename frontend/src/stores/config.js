@@ -585,6 +585,28 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function importConfig(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/config/import`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || '导入失败');
+      }
+      // 导入成功后，重新获取配置来更新store
+      isLoaded.value = false; // 强制重新加载
+      await fetchConfig();
+      return { success: true, message: data.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
   return { 
     appConfig, 
     isLoaded,
@@ -609,6 +631,7 @@ export const useConfigStore = defineStore('config', () => {
     testTraktConfig,
     saveActorRoleMapperConfig,
     saveEpisodeRoleSyncConfig,
-    saveDoubanMetadataRefresherConfig
+    saveDoubanMetadataRefresherConfig,
+    importConfig
   }
 })

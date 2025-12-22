@@ -3,8 +3,16 @@
   <div class="config-page">
     <template v-if="configStore.isLoaded">
       <div class="page-header">
-        <h2>配置中心</h2>
-        <p>所有功能都依赖此配置。请确保信息正确并成功连接。</p>
+        <!-- --- 修改 --- -->
+        <div class="header-content">
+          <h2>配置中心</h2>
+          <p>所有功能都依赖此配置。请确保信息正确并成功连接。</p>
+        </div>
+        <div class="header-actions">
+          <el-button :icon="Download" @click="handleExportConfig">导出配置</el-button>
+          <el-button :icon="Upload" @click="handleImportConfig">导入配置</el-button>
+        </div>
+        <!-- --- 修改结束 --- -->
       </div>
 
       <!-- --- 修改：移除 type="border-card"，并为 el-tab-pane 添加 transition --- -->
@@ -612,10 +620,10 @@ import { ref, onMounted, watch, computed, reactive } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useDoubanStore } from '@/stores/douban'
 import { useTaskStore } from '@/stores/task'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useWindowSize } from '@vueuse/core'
 import { API_BASE_URL } from '@/config/apiConfig'
-import { Delete, Plus } from '@element-plus/icons-vue'
+import { Delete, Plus, Upload, Download } from '@element-plus/icons-vue'
 import _ from 'lodash'
 
 const configStore = useConfigStore()
@@ -798,6 +806,45 @@ watch(() => taskStore.tasks, (newTasks, oldTasks) => {
     }
   });
 }, { deep: true });
+
+const handleExportConfig = () => {
+  const exportUrl = `${API_BASE_URL}/api/config/export`;
+  window.open(exportUrl, '_blank');
+};
+
+const handleImportConfig = () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      await ElMessageBox.confirm(
+        '您确定要导入此配置文件吗？这将覆盖所有现有设置，操作不可逆。',
+        '警告',
+        {
+          confirmButtonText: '确认导入',
+          cancelButtonText: '取消',
+          type: 'warning',
+        }
+      );
+
+      const result = await configStore.importConfig(file);
+      if (result.success) {
+        ElMessage.success('配置导入成功！页面即将刷新以应用新设置。');
+        setTimeout(() => window.location.reload(), 2000);
+      } else {
+        ElMessage.error(`导入失败: ${result.message}`);
+      }
+    } catch (error) {
+      // 用户点击了取消
+      ElMessage.info('导入操作已取消。');
+    }
+  };
+  input.click();
+};
 
 const showMessage = (type, message) => {
   ElMessage({
@@ -1116,11 +1163,19 @@ const confirmProxyRules = () => {
   padding: 20px 0;
   border-bottom: 1px solid var(--el-border-color-light);
   margin-bottom: 20px;
+  /* --- 新增 --- */
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  /* --- 新增结束 --- */
 }
 .page-header h2 { margin: 0 0 8px 0; }
 .page-header p { margin: 0; color: var(--el-text-color-secondary); }
 
-/* --- 修改：Tabs 布局样式 --- */
+.header-actions {
+  display: flex;
+  gap: 15px;
+}
 .config-tabs {
   margin-top: 20px;
   /* 移除卡片边框 */
