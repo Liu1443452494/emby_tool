@@ -306,6 +306,7 @@ async def episode_sync_scheduler():
                 logging.info(f"【{task_cat}】🔍 开始检查队列，当前有 {len(episode_sync_queue)} 个剧集待处理...")
                 
                 ready_series_ids = []
+                timed_out_ids = []
                 for series_id, data in episode_sync_queue.items():
                     last_update_time = data['last_update']
                     series_name = data['series_name']
@@ -318,11 +319,19 @@ async def episode_sync_scheduler():
                         logging.info(f"   - ✅ 剧集《{series_name}》 (ID: {series_id}) 条件满足：静默 {silence_duration:.1f} 秒 (>=90s) 且主流程已完成。准备处理。")
                         ready_series_ids.append(series_id)
                     elif is_silent_enough and not is_main_task_done:
-                        logging.info(f"   - ⏱️ 剧集《{series_name}》 (ID: {series_id}) 已满足静默条件，但其主流程任务（如演员中文化）尚未完成，继续等待...")
+                        data['check_count'] = data.get('check_count', 0) + 1
+                        if data['check_count'] >= 10:
+                            ui_logger.warning(f"⚠️ 剧集《{series_name}》主流程任务等待超时（已检查 {data['check_count']} 次），将自动放弃分集同步。请检查主流程日志以排查失败原因。", task_category=task_cat)
+                            timed_out_ids.append(series_id)
+                        else:
+                            logging.info(f"   - ⏱️ 剧集《{series_name}》 (ID: {series_id}) 已满足静默条件，但其主流程任务尚未完成，继续等待... (检查次数: {data['check_count']}/10)")
                     else:
                         remaining_time = 90 - silence_duration
                         logging.info(f"   - ⏱️ 剧集《{series_name}》 (ID: {series_id}) 静默时长 {silence_duration:.1f} 秒，等待剩余 {remaining_time:.1f} 秒...")
-
+               
+                for series_id in timed_out_ids:
+                    episode_sync_queue.pop(series_id, None)
+                    
                 for series_id in ready_series_ids:
                     series_to_process[series_id] = episode_sync_queue.pop(series_id)
                     if series_id in main_task_completed_series:
@@ -2240,7 +2249,8 @@ async def emby_webhook_receiver(payload: EmbyWebhookPayload):
                             episode_sync_queue[series_id] = {
                                 "episode_ids": set(),
                                 "series_name": series_name,
-                                "last_update": 0
+                                "last_update": 0,
+                                "check_count": 0
                             }
                             ui_logger.info(f"    - [收集器] 首次记录剧集《{series_name}》，已创建新的同步队列。", task_category=task_cat)
                         
