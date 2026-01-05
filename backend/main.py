@@ -369,6 +369,7 @@ webhook_processing_set = set()
 async def webhook_worker():
     logging.info("【Webhook工作者】已启动，等待处理任务...")
     while True:
+        item_id = None
         try:
             item_id, item_name = await webhook_queue.get()
             
@@ -871,7 +872,13 @@ async def lifespan(app: FastAPI):
     update_chasing_scheduler()
 
     ui_logger.info("【调度任务】开始设置即将上映任务...", task_category=task_cat)
-    update_upcoming_scheduler()
+    
+    # --- 【修改开始】 ---
+    try:
+        update_upcoming_scheduler()
+    except Exception as e:
+        # 捕获错误（比如没有TMDB Key），只打印警告，不让程序崩溃
+        ui_logger.warning(f"【启动警告】即将上映任务初始化失败（可能是因为未配置TMDB Key），已跳过: {e}", task_category=task_cat)
 
     media_tagger_conf = config.media_tagger_config
     if media_tagger_conf.enabled and media_tagger_conf.cron:
