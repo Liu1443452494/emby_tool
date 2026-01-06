@@ -1,4 +1,4 @@
-<!-- frontend/src/views/LogView.vue (完整文件覆盖) -->
+<!-- frontend/src/views/LogView.vue -->
 <template>
   <div class="log-page">
     <div class="page-header">
@@ -9,83 +9,93 @@
     <!-- 工具栏 -->
     <div class="log-toolbar">
       <div class="left-controls">
-        <el-radio-group v-model="logLevelProxy" @change="handleLevelChange">
-          <el-radio-button label="INFO">重要</el-radio-button>
-          <el-radio-button label="WARNING">警告</el-radio-button>
-          <el-radio-button label="ERROR">错误</el-radio-button>
-          <el-radio-button label="ALL">全部</el-radio-button>
-        </el-radio-group>
+        <n-radio-group v-model:value="logLevelProxy" size="small" @update:value="handleLevelChange">
+          <n-radio-button value="INFO" label="重要" />
+          <n-radio-button value="WARNING" label="警告" />
+          <n-radio-button value="ERROR" label="错误" />
+          <n-radio-button value="ALL" label="全部" />
+        </n-radio-group>
 
-        <el-select
-          v-model="selectedCategoryProxy"
+        <n-select
+          v-model:value="selectedCategoryProxy"
           placeholder="按任务类别过滤"
           clearable
           filterable
-          @change="handleCategoryChange"
+          :options="categoryOptions"
+          @update:value="handleCategoryChange"
+          size="small"
           style="width: 240px;"
-        >
-          <el-option
-            v-for="category in logStore.logCategories"
-            :key="category"
-            :label="category"
-            :value="category"
-          />
-        </el-select>
+        />
 
-        <el-date-picker
-          v-model="selectedDateProxy"
+        <n-date-picker
+          v-model:formatted-value="selectedDateProxy"
           type="date"
           placeholder="选择日期 (默认今天)"
-          format="YYYY-MM-DD"
-          value-format="YYYY-MM-DD"
-          :clearable="true"
-          :disabled-date="disabledDate"
+          value-format="yyyy-MM-dd"
+          clearable
+          :is-date-disabled="disabledDate"
+          size="small"
           style="width: 200px;"
         />
       </div>
+      
       <div class="right-controls">
-        <!-- --- 核心修改：重构搜索框样式 --- -->
-        <el-input
-          v-model="searchKeywordProxy"
-          placeholder="在当前页搜索..."
-          clearable
-          @input="handleSearchInput"
-          class="search-input"
-        >
-          <template #suffix>
-            <div class="search-nav-buttons">
-              <el-button
-                link
-                :icon="ArrowUp"
-                @click.stop="navigateToMatch('prev')"
-                :disabled="!searchKeywordProxy || searchMatches.length === 0"
-              />
-              <el-button
-                link
-                :icon="ArrowDown"
-                @click.stop="navigateToMatch('next')"
-                :disabled="!searchKeywordProxy || searchMatches.length === 0"
-              />
-            </div>
-          </template>
-        </el-input>
-        <span v-if="searchKeywordProxy" class="search-match-count">
-          {{ searchMatches.length > 0 ? `${currentMatchIndex + 1} / ${searchMatches.length}` : '0 / 0' }}
-        </span>
-        <!-- --- 修改结束 --- -->
+        <!-- 搜索框 -->
+        <div class="search-wrapper">
+          <n-input
+            v-model:value="searchKeywordProxy"
+            placeholder="在当前页搜索..."
+            clearable
+            @input="handleSearchInput"
+            size="small"
+            class="search-input"
+          >
+            <template #suffix>
+              <span v-if="searchKeywordProxy" class="search-match-count">
+                {{ searchMatches.length > 0 ? `${currentMatchIndex + 1} / ${searchMatches.length}` : '0 / 0' }}
+              </span>
+              <div class="search-nav-buttons">
+                <n-button
+                  quaternary
+                  size="tiny"
+                  @click.stop="navigateToMatch('prev')"
+                  :disabled="!searchKeywordProxy || searchMatches.length === 0"
+                >
+                  <template #icon>
+                    <n-icon><ArrowUp /></n-icon>
+                  </template>
+                </n-button>
+                <n-button
+                  quaternary
+                  size="tiny"
+                  @click.stop="navigateToMatch('next')"
+                  :disabled="!searchKeywordProxy || searchMatches.length === 0"
+                >
+                  <template #icon>
+                    <n-icon><ArrowDown /></n-icon>
+                  </template>
+                </n-button>
+              </div>
+            </template>
+          </n-input>
+          
+        </div>
 
-        <el-select 
-          v-model="pageSizeProxy" 
-          @change="handlePageSizeChange" 
+        <n-select 
+          v-model:value="pageSizeProxy" 
+          @update:value="handlePageSizeChange" 
           placeholder="每页条数" 
-          style="width: 120px;"
-        >
-          <el-option :value="500" label="500 条/页" />
-          <el-option :value="1000" label="1000 条/页" />
-          <el-option :value="2000" label="2000 条/页" />
-          <el-option :value="5000" label="5000 条/页" />
-        </el-select>
-        <el-button type="danger" @click="logStore.clearLogs" :disabled="logStore.totalLogs === 0">清空日志</el-button>
+          :options="pageSizeOptions"
+          size="small"
+          style="width: 130px;"
+        />
+        
+        <n-button type="error" size="small" :disabled="logStore.totalLogs === 0" @click="confirmClearLogs">
+          <template #icon>
+            <n-icon><Delete /></n-icon>
+          </template>
+          清空日志
+        </n-button>
       </div>
     </div>
 
@@ -106,18 +116,18 @@
           <span class="log-message" v-html="highlightMessage(log.message)"></span>
         </div>
       </div>
-      <el-empty v-else description="当前筛选条件下无日志" />
+      <div v-else class="empty-state">
+        <n-empty description="当前筛选条件下无日志" />
+      </div>
     </div>
 
     <!-- 分页器 -->
     <div class="pagination-footer">
-       <el-pagination
-        v-model:current-page="currentPageProxy"
-        :page-size="logStore.pageSize"
-        :total="logStore.totalLogs"
-        layout="total, prev, pager, next, jumper"
-        background
-        @current-change="handlePageChange"
+       <n-pagination
+        v-model:page="currentPageProxy"
+        :page-count="logStore.totalPages"
+        :page-slot="5"
+        @update:page="handlePageChange"
         :disabled="logStore.totalLogs === 0"
       />
     </div>
@@ -125,19 +135,44 @@
 </template>
 
 <script setup>
-// --- 核心修改：导入新图标 ---
 import { onMounted, onUnmounted, computed, ref, watch, nextTick } from 'vue';
-import { ArrowUp, ArrowDown } from '@element-plus/icons-vue';
-// --- 修改结束 ---
+import { ArrowUp, ArrowDown, Delete } from '@element-plus/icons-vue';
+import { 
+  NRadioGroup, NRadioButton, NSelect, NDatePicker, NInput, 
+  // --- 修改：引入 useDialog，移除 NPopconfirm ---
+  NButton, NIcon, NPagination, NEmpty, useMessage, useDialog 
+  // --- 修改结束 ---
+} from 'naive-ui';
 import { useLogStore } from '@/stores/log';
 import { useDebounceFn } from '@vueuse/core';
 
 const logStore = useLogStore();
+const message = useMessage();
+const dialog = useDialog();
 
 const logContainerRef = ref(null);
 const logLineRefs = ref([]);
 const searchMatches = ref([]);
 const currentMatchIndex = ref(-1);
+
+// 构造 Naive UI 需要的选项格式
+const categoryOptions = computed(() => {
+  return logStore.logCategories.map(cat => ({ label: cat, value: cat }));
+});
+
+const pageSizeOptions = [
+  { label: '500 条/页', value: 500 },
+  { label: '1000 条/页', value: 1000 },
+  { label: '2000 条/页', value: 2000 },
+  { label: '5000 条/页', value: 5000 },
+];
+
+// 封装 showMessage 供 store 使用
+const showMessageWrapper = (type, text) => {
+  if (message[type]) {
+    message[type](text);
+  }
+};
 
 const logLevelProxy = computed({
   get: () => logStore.logLevel,
@@ -156,13 +191,9 @@ const selectedCategoryProxy = computed({
 
 const selectedDateProxy = computed({
   get: () => logStore.selectedDate,
-  // --- 修改 ---
   set: (val) => {
-    // 直接调用 store 的 action 来处理值的变化
-    // 这会触发 handleDateChange，因为 v-model 的更新和 @change 事件是关联的
-    logStore.setDateAndFetch(val);
+    logStore.setDateAndFetch(val, { showMessage: showMessageWrapper });
   }
-  // --- 修改结束 ---
 });
 
 const searchKeywordProxy = computed({
@@ -176,9 +207,9 @@ const currentPageProxy = computed({
 });
 
 onMounted(async () => {
-  await logStore.fetchLogDates();
-  await logStore.fetchLogCategories();
-  await logStore.fetchHistoricalLogs(1);
+  await logStore.fetchLogDates({ showMessage: showMessageWrapper });
+  await logStore.fetchLogCategories({ showMessage: showMessageWrapper });
+  await logStore.fetchHistoricalLogs(1, { showMessage: showMessageWrapper });
   logStore.connect();
 });
 
@@ -192,21 +223,35 @@ watch([() => logStore.logs, () => logStore.searchKeyword], () => {
 }, { deep: true });
 
 const handlePageChange = (page) => {
-  logStore.fetchHistoricalLogs(page);
+  logStore.fetchHistoricalLogs(page, { showMessage: showMessageWrapper });
 };
 
 const handleLevelChange = (newLevel) => {
-  logStore.setLogLevelAndFetch(newLevel);
+  logStore.setLogLevelAndFetch(newLevel, { showMessage: showMessageWrapper });
 };
 
 const handleCategoryChange = (newCategory) => {
-  logStore.setCategoryAndFetch(newCategory);
+  logStore.setCategoryAndFetch(newCategory, { showMessage: showMessageWrapper });
 };
 
-
-
 const handlePageSizeChange = (newPageSize) => {
-  logStore.setPageSizeAndFetch(newPageSize);
+  logStore.setPageSizeAndFetch(newPageSize, { showMessage: showMessageWrapper });
+};
+
+const confirmClearLogs = () => {
+  dialog.warning({
+    title: '警告',
+    content: '确定要清空所有历史和当前日志吗？此操作不可恢复。',
+    positiveText: '确定清空',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      await handleClearLogs();
+    }
+  });
+};
+
+const handleClearLogs = async () => {
+  await logStore.clearLogs({ showMessage: showMessageWrapper });
 };
 
 const getLineNumber = (index) => {
@@ -214,8 +259,9 @@ const getLineNumber = (index) => {
   return startIndex - index;
 };
 
-const disabledDate = (time) => {
-  const date = new Date(time);
+// Naive UI 的 disabledDate 接收时间戳
+const disabledDate = (ts) => {
+  const date = new Date(ts);
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const dd = String(date.getDate()).padStart(2, '0');
@@ -330,39 +376,34 @@ const scrollToMatch = (matchIndex) => {
 .left-controls, .right-controls {
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
-/* --- 核心修改：搜索框相关样式 --- */
+.search-wrapper {
+  display: flex;
+  align-items: center;
+}
 .search-input {
-  width: 200px;
+  width: 260px;
 }
 .search-nav-buttons {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  flex-direction: row;
+  align-items: center;
   height: 100%;
-  margin-right: -5px; /* 微调，使按钮更贴近边缘 */
-}
-.search-nav-buttons .el-button {
-  padding: 0;
-  margin: 0;
-  height: 14px;
-  font-size: 12px;
-  width: 20px;
-}
-.search-nav-buttons .el-button + .el-button {
-  margin-left: 0;
+  gap: 2px;
+  margin-left: 4px;
 }
 .search-match-count {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
-  margin-left: -5px;
-  margin-right: 5px;
+  margin-right: 4px;
   user-select: none;
+  white-space: nowrap;
+  min-width: 40px;
+  text-align: center;
 }
-/* --- 修改结束 --- */
 
 .log-container {
   flex-grow: 1;
@@ -450,30 +491,10 @@ const scrollToMatch = (matchIndex) => {
   flex-shrink: 0;
 }
 
-.log-container :deep(.el-empty) {
+.empty-state {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-}
-
-.log-page :deep(.el-pagination.is-background .el-pager li.is-active) {
-  background-color: #609e95;
-}
-.log-page :deep(.el-radio-button__inner) {
-  border-radius: 0;
-}
-.log-page :deep(.el-radio-button:first-child .el-radio-button__inner) {
-  border-top-left-radius: 4px;
-  border-bottom-left-radius: 4px;
-}
-.log-page :deep(.el-radio-button:last-child .el-radio-button__inner) {
-  border-top-right-radius: 4px;
-  border-bottom-right-radius: 4px;
-}
-.log-page :deep(.el-radio-button__original-radio:checked+.el-radio-button__inner) {
-  background-color: #609e95;
-  border-color: #609e95;
-  box-shadow: -1px 0 0 0 #609e95;
 }
 </style>
