@@ -1,9 +1,11 @@
+# .github/workflows/frontend-release.yml (完整文件覆盖)
 name: Release Frontend Image on Tag
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*'      # 匹配版本标签
+      - 'latest'  # 匹配 'latest' 标签
 
 jobs:
   release-frontend:
@@ -18,13 +20,19 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract version from tag
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      - name: Determine Docker tag
+        id: get_tag
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          if [[ $TAG_NAME == v* ]]; then
+            echo "DOCKER_TAG=${TAG_NAME#v}" >> $GITHUB_OUTPUT
+          else
+            echo "DOCKER_TAG=$TAG_NAME" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build and push frontend image
         uses: docker/build-push-action@v4
         with:
           context: ./frontend
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/emby-toolkit-frontend:${{ steps.get_version.outputs.VERSION }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/emby-toolkit-frontend:${{ steps.get_tag.outputs.DOCKER_TAG }}
