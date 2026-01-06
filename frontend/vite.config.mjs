@@ -1,4 +1,4 @@
-// frontend/vite.config.js (完整文件覆盖)
+// frontend/vite.config.mjs (完整文件覆盖)
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -6,6 +6,7 @@ import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
+// 使用 ES Module 导出
 export default defineConfig(({ command }) => {
   const isProduction = command === 'build';
 
