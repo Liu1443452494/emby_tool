@@ -1,3 +1,4 @@
+<!-- frontend/src/views/ActorGalleryView.vue (完整文件覆盖) -->
 <template>
   <div class="actor-gallery-page">
     <div 
@@ -8,102 +9,60 @@
       }"
       :style="pageStyle"
     >
-      <!-- 左侧面板 -->
+      <!-- 左侧面板 (Naive UI 重构) -->
       <div class="left-panel">
-        <el-card shadow="never" class="control-card">
+        <n-card :bordered="false" shadow="never" class="control-card-naive">
           <template #header>
             <div class="card-header">
               <span>媒体浏览器</span>
             </div>
           </template>
-          <el-select
-            v-model="selectedLibraryId"
+          <n-select
+            v-model:value="selectedLibraryId"
             placeholder="请选择媒体库"
-            style="width: 100%; margin-bottom: 15px;"
+            :options="libraryOptions"
             filterable
-            @change="handleLibraryChange"
             :loading="mediaStore.isLoading"
-          >
-            <el-option
-              v-for="item in mediaStore.libraries"
-              :key="item.id"
-              :label="item.name"
-              :value="item.id"
-            />
-          </el-select>
-          
-          <el-form @submit.prevent="handleSearch" class="search-form-wrapper">
-            <el-input
-              v-model="searchQuery"
+          />
+          <n-input-group style="margin-top: 15px;">
+            <n-button 
+              @click="toggleSearchMode"
+              :title="isGlobalSearchActive ? '切换为本地过滤' : '切换为全局搜索'"
+            >
+              <template #icon>
+                <el-icon><component :is="isGlobalSearchActive ? Search : Filter" /></el-icon>
+              </template>
+            </n-button>
+            <n-input
+              v-model:value="searchQuery"
               :placeholder="isGlobalSearchActive ? '全局搜索标题后按回车...' : '按标题实时过滤...'"
               clearable
-            >
-              <template #prepend>
-                <el-button 
-                  :icon="isGlobalSearchActive ? Search : Filter" 
-                  @click="toggleSearchMode"
-                  :title="isGlobalSearchActive ? '切换为本地过滤' : '切换为全局搜索'"
-                />
-              </template>
-            </el-input>
-          </el-form>
+              @keyup.enter="handleSearch"
+            />
+          </n-input-group>
+        </n-card>
 
-        </el-card>
-
-        <el-card shadow="never" class="media-list-card">
+        <n-card :bordered="false" shadow="never" class="media-list-card-naive" content-style="padding: 0; height: 100%;">
           <div v-if="(galleryStore.isLoadingItems && galleryStore.mediaItems.length === 0) || galleryStore.isSearchingGlobally" class="table-skeleton-wrapper">
             <el-skeleton :rows="10" animated />
           </div>
-          <el-table
+          <n-data-table
             v-else
+            :columns="columns"
             :data="tableData"
-            height="100%"
-            highlight-current-row
-            @row-click="handleMediaItemClick"
-            @row-contextmenu.prevent="handleMediaItemContextMenu"
-            :empty-text="isGlobalSearchActive ? '请输入关键词后按回车进行全局搜索' : '请先选择一个媒体库'"
             :row-key="row => row.Id"
-            ref="mediaTableRef"
-          >
-            <el-table-column prop="Name" label="标题" show-overflow-tooltip />
-            <el-table-column prop="ProductionYear" label="年份" width="70" />
-            
-            <el-table-column label="豆瓣ID" width="120">
-              <template #default="scope">
-                <el-popover
-                  placement="right"
-                  title="修改豆瓣ID"
-                  :width="250"
-                  trigger="click"
-                  @before-enter="() => newDoubanId = getDoubanId(scope.row) || ''"
-                >
-                  <template #reference>
-                    <el-button text type="primary" class="douban-id-btn custom-link-color">
-                      {{ getDoubanId(scope.row) || 'N/A' }}
-                    </el-button>
-                  </template>
-                  <div class="douban-id-editor">
-                    <el-input v-model="newDoubanId" placeholder="请输入新的豆瓣ID" />
-                    <div class="editor-actions">
-                      <el-button 
-                        type="primary" 
-                        size="small" 
-                        @click="handleUpdateDoubanId(scope.row)"
-                        :loading="isUpdatingDoubanId"
-                      >
-                        确认
-                      </el-button>
-                    </div>
-                  </div>
-                </el-popover>
-              </template>
-            </el-table-column>
-
-          </el-table>
-        </el-card>
+            flex-height
+            virtual-scroll
+            :row-props="onRowProps"
+            :bordered="false"
+            :row-class-name="rowClassName"
+            style="height: 100%;"
+            class="media-data-table"
+          />
+        </n-card>
       </div>
 
-      <!-- 折叠按钮 -->
+      <!-- 折叠按钮 (保持不变) -->
       <div class="left-panel-collapse-button" @click="isLeftPanelCollapsed = !isLeftPanelCollapsed">
         <el-icon>
           <ArrowLeft v-if="!isLeftPanelCollapsed" />
@@ -111,7 +70,7 @@
         </el-icon>
       </div>
 
-      <!-- 右侧主面板 -->
+      <!-- 右侧主面板 (Element Plus, 保持不变) -->
       <div 
         class="right-panel"
         v-loading="galleryStore.isUploading"
@@ -266,13 +225,13 @@
       </div>
     </div>
     
+    <!-- 弹窗和工具 (Element Plus, 保持不变) -->
     <ImageMagnifier
       :visible="magnifier.visible"
       :image-url="magnifier.imageUrl"
       :position="magnifier.position"
       :size="magnifierSize"
     />
-
     <input type="file" ref="fileInputRef" @change="handleFileSelect" style="display: none" accept="image/*" />
     <el-dialog
       v-model="doubanDialog.visible"
@@ -293,8 +252,6 @@
     </el-dialog>
     <ImagePreviewDialog :visible="previewDialog.visible" :title="previewDialog.title" :image-url="previewDialog.imageUrl" :preview-size="previewDialog.size" @update:visible="previewDialog.visible = false" @confirm="handlePreviewConfirm"/>
     <div ref="contextMenuRef" class="context-menu" style="display: none;"><div class="menu-item" @click="handleContextMenuCommand('refresh')">刷新演员列表</div><div class="menu-item" @click="handleContextMenuCommand('poster')">用豆瓣海报更新</div></div>
-  
-    <!-- TMDB 影视图片管理相关对话框 -->
     <TmdbImageManagerDialog 
       v-model:visible="isTmdbDialogVisible"
       :media-item="selectedMediaItem"
@@ -320,8 +277,6 @@
       :image-type="currentImageType"
       @confirm="handleImageSelectionConfirm"
     />
-
-    <!-- TMDB 演员图片管理相关对话框 -->
     <SingleActorConfirmDialog
       v-model:visible="isSingleActorConfirmDialogVisible"
       :context="galleryStore.tmdbSingleActorCandidate"
@@ -350,13 +305,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed, watch, nextTick, onBeforeUpdate, reactive } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick, onBeforeUpdate, reactive, h } from 'vue'
 import { useMediaStore } from '@/stores/media'
 import { useActorGalleryStore } from '@/stores/actorGallery'
 import { useConfigStore } from '@/stores/config'
 import { useStorage, useIntersectionObserver, useMouse, StorageSerializers } from '@vueuse/core'
 import { UserFilled, Loading, ArrowLeftBold, ArrowRightBold, ArrowLeft, ArrowRight, PictureFilled, StarFilled, Picture, Filter, Search } from '@element-plus/icons-vue'
 import { ElMessageBox, ElLoading, ElMessage } from 'element-plus'
+import { NButton, NInput, NPopover, NSpace } from 'naive-ui'
 import ImagePreviewDialog from '@/components/ImagePreviewDialog.vue'
 import ImageMagnifier from '@/components/ImageMagnifier.vue'
 import TmdbImageManagerDialog from '@/components/TmdbImageManagerDialog.vue'
@@ -399,7 +355,6 @@ const actorContainerRef = ref(null)
 const actorCardRefs = ref([])
 const fileInputRef = ref(null)
 const contextMenuRef = ref(null)
-const mediaTableRef = ref(null)
 const showLeftScroll = ref(false)
 const showRightScroll = ref(false)
 const activeActor = ref(null)
@@ -424,6 +379,10 @@ const isActorImageSelectionDialogVisible = ref(false)
 
 const isGlobalSearchActive = ref(false);
 
+const libraryOptions = computed(() => 
+  mediaStore.libraries.map(lib => ({ label: lib.name, value: lib.id }))
+);
+
 const filteredMediaItems = computed(() => {
   if (!searchQuery.value) return galleryStore.mediaItems;
   return galleryStore.mediaItems.filter(item => item.Name.toLowerCase().includes(searchQuery.value.toLowerCase()));
@@ -433,9 +392,76 @@ const tableData = computed(() => isGlobalSearchActive.value ? galleryStore.globa
 
 const getDoubanId = (row) => {
   if (!row.ProviderIds) return null;
-  // 查找所有键，不区分大小写
   const doubanKey = Object.keys(row.ProviderIds).find(key => key.toLowerCase() === 'douban');
   return doubanKey ? row.ProviderIds[doubanKey] : null;
+};
+
+const createColumns = () => [
+  { title: '标题', key: 'Name', ellipsis: { tooltip: true } },
+  { title: '年份', key: 'ProductionYear', width: 80 },
+  {
+    title: '豆瓣ID',
+    key: 'doubanId',
+    width: 120,
+    render(row) {
+      const popoverContent = () => h(
+        'div',
+        { class: 'douban-id-editor' },
+        [
+          h(NInput, {
+            value: newDoubanId.value,
+            placeholder: '请输入新的豆瓣ID',
+            onUpdateValue: (val) => newDoubanId.value = val,
+          }),
+          h('div', { class: 'editor-actions' }, [
+            h(NButton, {
+              type: 'primary',
+              size: 'small',
+              loading: isUpdatingDoubanId.value,
+              onClick: () => handleUpdateDoubanId(row),
+            }, () => '确认'),
+          ]),
+        ]
+      );
+
+      return h(
+        NPopover,
+        {
+          trigger: 'click',
+          placement: 'right',
+          onUpdateShow: () => newDoubanId.value = getDoubanId(row) || '',
+        },
+        {
+          trigger: () => h(
+            NButton,
+            { text: true, type: 'primary' },
+            () => getDoubanId(row) || 'N/A'
+          ),
+          default: popoverContent,
+        }
+      );
+    },
+  },
+];
+
+const columns = createColumns();
+
+const onRowProps = (row) => {
+  return {
+    style: 'cursor: pointer;',
+    onClick: () => handleMediaItemClick(row),
+    onContextmenu: (e) => {
+      e.preventDefault();
+      handleMediaItemContextMenu(row, null, e);
+    }
+  };
+};
+
+const rowClassName = (row) => {
+  if (row.Id === selectedMediaItemId.value) {
+    return 'selected-row';
+  }
+  return '';
 };
 
 const processMediaItem = (item) => {
@@ -480,17 +506,17 @@ onMounted(async () => {
   document.body.addEventListener('click', () => { if (contextMenuRef.value) contextMenuRef.value.style.display = 'none' });
 });
 
-watch(() => galleryStore.mediaItems, async (newItems) => {
+watch(() => galleryStore.mediaItems, (newItems) => {
   if (newItems?.length > 0) {
     mediaItemsCache.value = newItems;
     if (selectedMediaItemId.value) {
       const itemToHighlight = newItems.find(i => i.Id === selectedMediaItemId.value);
       if (itemToHighlight) {
-        await configStore.fetchConfig();
-        const fullItem = processMediaItem(itemToHighlight);
-        selectedMediaItem.value = fullItem;
-        selectedMediaItemCache.value = fullItem;
-        nextTick(() => mediaTableRef.value?.setCurrentRow(itemToHighlight));
+        configStore.fetchConfig().then(() => {
+          const fullItem = processMediaItem(itemToHighlight);
+          selectedMediaItem.value = fullItem;
+          selectedMediaItemCache.value = fullItem;
+        });
       }
     }
   }
@@ -555,7 +581,7 @@ watch(() => galleryStore.actors, (newActors) => {
   } 
 }, { deep: true })
 
-const handleLibraryChange = (libraryId) => { 
+watch(selectedLibraryId, (libraryId) => {
   isGlobalSearchActive.value = false;
   galleryStore.clearGlobalSearch();
   searchQuery.value = '';
@@ -565,7 +591,7 @@ const handleLibraryChange = (libraryId) => {
   galleryStore.actors = [];
   actorsCache.value = [];
   galleryStore.fetchLibraryItems(libraryId);
-}
+});
 
 const handleMediaItemClick = async (row) => { 
   if (selectedMediaItem.value?.Id === row.Id) return; 
@@ -653,28 +679,16 @@ const handleDoubanDialogCancel = async () => {
 };
 
 const handleActorIdConfirm = async (tmdbPersonId) => {
-console.log(`➡️ [调试-视图] 步骤1: 确认演员ID。捕获到 tmdbPersonId: ${tmdbPersonId}`);
   isSingleActorConfirmDialogVisible.value = false;
   isActorListDialogVisible.value = false;
   isActorManualMatchDialogVisible.value = false;
-  
-  galleryStore.updateAvatarFlowState({ 
-    confirmed_tmdb_person_id: tmdbPersonId,
-    force_tmdb_global_search: false,
-    force_tmdb_context_list: false
-  });
-
+  galleryStore.updateAvatarFlowState({ confirmed_tmdb_person_id: tmdbPersonId, force_tmdb_global_search: false, force_tmdb_context_list: false });
   ElMessage.success('演员ID已确认，正在获取图片并执行后台关联...');
   await runAvatarFlow();
 };
 
 const handleSingleActorReject = async () => {
-  // --- 核心修改：在拒绝时，清除已建议的ID ---
-  galleryStore.updateAvatarFlowState({ 
-    force_tmdb_context_list: true,
-    confirmed_tmdb_person_id: null 
-  });
-  // --- 修改结束 ---
+  galleryStore.updateAvatarFlowState({ force_tmdb_context_list: true, confirmed_tmdb_person_id: null });
   isSingleActorConfirmDialogVisible.value = false;
   await runAvatarFlow();
 };
@@ -682,18 +696,6 @@ const handleSingleActorReject = async () => {
 const handleActorListReject = async () => {
   galleryStore.updateAvatarFlowState({ force_tmdb_global_search: true });
   isActorListDialogVisible.value = false;
-  await runAvatarFlow();
-};
-
-const handleTmdbFlowTermination = async () => {
-  isSingleActorConfirmDialogVisible.value = false;
-  isActorListDialogVisible.value = false;
-  isActorManualMatchDialogVisible.value = false;
-
-  galleryStore.updateAvatarFlowState({ skip_tmdb: true });
-  
-  ElMessage.info('已跳过TMDB匹配，将显示当前已有结果。');
-  
   await runAvatarFlow();
 };
 
@@ -821,21 +823,38 @@ const handleSearch = () => { if (isGlobalSearchActive.value) galleryStore.search
 </script>
 
 <style scoped>
-/* 样式保持不变 */
-.search-form-wrapper {
-  margin-bottom: 0;
+.control-card-naive,
+.media-list-card-naive {
+  flex-shrink: 0;
+  background-color: var(--el-bg-color-overlay);
+}
+.media-list-card-naive {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
 }
 
-.custom-link-color {
-  color: #609e95;
-}
-.custom-link-color:hover {
-  color: #7fb8af;
+/* --- 核心修改：直接覆盖表格单元格和表头的背景色 --- */
+.media-data-table {
+  /* 策略1：通过覆盖 Naive UI 的 CSS 变量来改变颜色 */
+  --n-th-color: var(--el-bg-color-overlay) !important;
+  --n-td-color: var(--el-bg-color-overlay) !important;
+  --n-td-color-hover: var(--el-fill-color-light) !important;
+  height: 100%;
 }
 
-.douban-id-btn {
-  padding: 0;
-  height: auto;
+/* 策略2：使用深度选择器作为双重保险，强制修改 DOM 元素背景 */
+.media-data-table :deep(.n-data-table-th),
+.media-data-table :deep(.n-data-table-td) {
+  background-color: var(--el-bg-color-overlay) !important;
+}
+
+.media-data-table :deep(.n-data-table-tr) {
+  cursor: pointer;
+}
+
+.media-data-table :deep(.n-data-table-tr.selected-row .n-data-table-td) {
+  background-color: var(--el-color-primary-light-9) !important;
 }
 .douban-id-editor {
   display: flex;
@@ -922,18 +941,6 @@ const handleSearch = () => { if (isGlobalSearchActive.value) galleryStore.search
   padding: 10px 0;
 }
 
-.control-card {
-  flex-shrink: 0;
-}
-.media-list-card {
-  flex-grow: 1;
-  display: flex;
-  flex-direction: column;
-}
-.media-list-card :deep(.el-card__body) {
-  height: 100%;
-  padding: 0;
-}
 .table-skeleton-wrapper {
   padding: 20px;
   height: 100%;
@@ -1120,22 +1127,6 @@ const handleSearch = () => { if (isGlobalSearchActive.value) galleryStore.search
   display: flex;
   align-items: flex-end;
   gap: 20px;
-}
-.uploading-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
-  color: white;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  z-index: 10;
-  border-radius: 8px;
-  gap: 10px;
 }
 
 .actor-card {
