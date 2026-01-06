@@ -4,8 +4,7 @@ name: Release Frontend Image on Tag
 on:
   push:
     tags:
-      - 'v*'      # 匹配版本标签
-      - 'latest'  # 匹配 'latest' 标签
+      - '*' # 监听所有标签，在 job 内部筛选
 
 jobs:
   release-frontend:
@@ -24,13 +23,23 @@ jobs:
         id: get_tag
         run: |
           TAG_NAME=${GITHUB_REF#refs/tags/}
-          if [[ $TAG_NAME == v* ]]; then
+          
+          if [[ $TAG_NAME == latest* ]]; then
+            # 规则1：以 'latest' 开头（如 latest2.1.1），构建 'latest' 镜像
+            echo "DOCKER_TAG=latest" >> $GITHUB_OUTPUT
+            echo "SHOULD_BUILD=true" >> $GITHUB_OUTPUT
+          elif [[ $TAG_NAME == v* ]]; then
+            # 规则2：以 'v' 开头（如 v2.1.1），去掉 'v' 构建对应版本镜像（如 2.1.1）
             echo "DOCKER_TAG=${TAG_NAME#v}" >> $GITHUB_OUTPUT
+            echo "SHOULD_BUILD=true" >> $GITHUB_OUTPUT
           else
-            echo "DOCKER_TAG=$TAG_NAME" >> $GITHUB_OUTPUT
+            # 其他情况：不构建
+            echo "SHOULD_BUILD=false" >> $GITHUB_OUTPUT
+            echo "Skipping build for tag: $TAG_NAME"
           fi
 
       - name: Build and push frontend image
+        if: steps.get_tag.outputs.SHOULD_BUILD == 'true'
         uses: docker/build-push-action@v4
         with:
           context: ./frontend
