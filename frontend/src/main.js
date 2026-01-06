@@ -11,8 +11,6 @@ const app = createApp(App)
 app.use(createPinia())
 app.use(router)
 
-// --- 删除行 ---
-// app.use(ElementPlus)
-// --- 删除结束 ---
+
 
 app.mount('#app')
