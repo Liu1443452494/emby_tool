@@ -1,13 +1,18 @@
-# frontend/Dockerfile (部分修改)
+# frontend/Dockerfile (完整文件覆盖)
+
 # ---- Stage 1: Build ----
 FROM node:18-alpine AS build
 WORKDIR /app
+
+# 复制 package.json 和 lock 文件
 COPY package*.json ./
-# --- 修改行 ---
-# 使用 npm ci 可以确保严格按照 lock 文件安装，并默认包含 devDependencies
-# 这对于构建阶段是必需的
-RUN npm ci --registry=https://registry.npmmirror.com
+
+# --- 核心修改 ---
+# 使用 npm install 来安装所有依赖（包括 devDependencies）
+# 这比 npm ci 更具兼容性，能更好地处理 lock 文件可能存在的不一致问题
+RUN npm install --registry=https://registry.npmmirror.com
 # --- 修改结束 ---
+
 COPY . .
 # 这里的 build 命令需要用到 devDependencies 里的 vite 和插件
 RUN npm run build
