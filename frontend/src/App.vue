@@ -2,135 +2,169 @@
 
 <template>
   <el-config-provider :locale="locale">
-    <el-container class="app-layout">
-      <!-- 左侧边栏 -->
-      <el-aside :width="isCollapse ? '80px' : '240px'" class="sidebar">
-        <div class="sidebar-header" :class="{ 'is-collapsed': isCollapse }">
-          <h1 v-if="!isCollapse">Emby 工具</h1>
-          <h1 v-else>ET</h1>
-          <div class="collapse-button" @click="isCollapse = !isCollapse">
-            <el-icon>
-              <ArrowLeft v-if="!isCollapse" />
-              <ArrowRight v-else />
-            </el-icon>
-          </div>
-        </div>
-        
-        <el-menu
-          :default-active="activeMenu"
-          class="sidebar-menu"
-          :router="true"
-          :collapse="isCollapse"
-        >
-          <el-menu-item index="/config">
-            <el-icon><Setting /></el-icon>
-            <template #title>配置中心</template>
-          </el-menu-item>
-          
-          <div class="menu-divider"></div>
+    <n-config-provider :theme="isDark ? darkTheme : null" :locale="zhCN" :date-locale="dateZhCN">
+      <n-message-provider>
+        <n-dialog-provider>
+          <el-container class="app-layout">
+            <!-- 左侧边栏 -->
+            <el-aside :width="isCollapse ? '80px' : '240px'" class="sidebar">
+              <div class="sidebar-header" :class="{ 'is-collapsed': isCollapse }">
+                <h1 v-if="!isCollapse">Emby 工具</h1>
+                <h1 v-else>ET</h1>
+                <div class="collapse-button" @click="isCollapse = !isCollapse">
+                  <el-icon>
+                    <ArrowLeft v-if="!isCollapse" />
+                    <ArrowRight v-else />
+                  </el-icon>
+                </div>
+              </div>
 
-          <el-sub-menu index="media-tools">
-            <template #title>
-              <el-icon><Menu /></el-icon>
-              <span>媒体工具</span>
-            </template>
-            
-            <el-menu-item index="/media-download">
-              <el-icon><Film /></el-icon>
-              <template #title>Emby媒体下载</template>
-            </el-menu-item>
-            
-            <el-menu-item index="/genre-mapper">
-              <el-icon><PriceTag /></el-icon>
-              <template #title>类型替换</template>
-            </el-menu-item>
+              <el-menu :default-active="activeMenu" class="sidebar-menu" :router="true" :collapse="isCollapse">
+                <el-menu-item index="/config">
+                  <el-icon>
+                    <Setting />
+                  </el-icon>
+                  <template #title>配置中心</template>
+                </el-menu-item>
 
-            <el-menu-item index="/actor-localizer">
-              <el-icon><User /></el-icon>
-              <template #title>演员中文化</template>
-            </el-menu-item>
+                <div class="menu-divider"></div>
 
-            <el-menu-item index="/actor-gallery">
-              <el-icon><Avatar /></el-icon>
-              <template #title>媒体画廊</template>
-            </el-menu-item>
-            <el-menu-item index="/poster-manager">
-              <el-icon><Picture /></el-icon>
-              <template #title>海报管理器</template>
-            </el-menu-item>
-            <el-menu-item index="/actor-role-mapper">
-              <el-icon><UserFilled /></el-icon>
-              <template #title>演员角色映射</template>
-            </el-menu-item>
-            <el-menu-item index="/actor-avatar-mapper">
-              <el-icon><SwitchFilled /></el-icon>
-              <template #title>演员头像映射</template>
-            </el-menu-item>
-            <el-menu-item index="/douban-fixer">
-              <el-icon><MagicStick /></el-icon>
-              <template #title>豆瓣ID修复器</template>
-            </el-menu-item>
-            <el-menu-item index="/episode-renamer">
-              <el-icon><EditPen /></el-icon>
-              <template #title>网盘文件重命名</template>
-            </el-menu-item>
-            <el-menu-item index="/media-tagger">
-              <el-icon><CollectionTag /></el-icon>
-              <template #title>媒体标签器</template>
-            </el-menu-item>
-            <el-menu-item index="/douban-metadata-refresher">
-              <el-icon><Refresh /></el-icon>
-              <template #title>豆瓣元数据刷新</template>
-            </el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu index="automation-center">
-            <template #title>
-              <el-icon><Cpu /></el-icon>
-              <span>自动化中心</span>
-            </template>
-            <el-menu-item index="/chasing-center">
-              <el-icon><StarFilled /></el-icon>
-              <template #title>自动化追更</template>
-            </el-menu-item>
-            <el-menu-item index="/upcoming-media">
-              <el-icon><Calendar /></el-icon>
-              <template #title>即将上映</template>
-            </el-menu-item>
-            <el-menu-item index="/scheduled-tasks">
-              <el-icon><Clock /></el-icon>
-              <template #title>定时任务</template>
-            </el-menu-item>
-          </el-sub-menu>
+                <el-sub-menu index="media-tools">
+                  <template #title>
+                    <el-icon>
+                      <Menu />
+                    </el-icon>
+                    <span>媒体工具</span>
+                  </template>
 
-          <div class="menu-divider"></div>
+                  <el-menu-item index="/media-download">
+                    <el-icon>
+                      <Film />
+                    </el-icon>
+                    <template #title>Emby媒体下载</template>
+                  </el-menu-item>
 
-          <el-menu-item index="/tasks">
-            <el-icon><DataLine /></el-icon>
-            <template #title>运行任务</template>
-          </el-menu-item>
+                  <el-menu-item index="/genre-mapper">
+                    <el-icon>
+                      <PriceTag />
+                    </el-icon>
+                    <template #title>类型替换</template>
+                  </el-menu-item>
 
-          <el-menu-item index="/logs">
-            <el-icon><Document /></el-icon>
-            <template #title>应用日志</template>
-          </el-menu-item>
-        </el-menu>
+                  <el-menu-item index="/actor-localizer">
+                    <el-icon>
+                      <User />
+                    </el-icon>
+                    <template #title>演员中文化</template>
+                  </el-menu-item>
 
-      </el-aside>
+                  <el-menu-item index="/actor-gallery">
+                    <el-icon>
+                      <Avatar />
+                    </el-icon>
+                    <template #title>媒体画廊</template>
+                  </el-menu-item>
+                  <el-menu-item index="/poster-manager">
+                    <el-icon>
+                      <Picture />
+                    </el-icon>
+                    <template #title>海报管理器</template>
+                  </el-menu-item>
+                  <el-menu-item index="/actor-role-mapper">
+                    <el-icon>
+                      <UserFilled />
+                    </el-icon>
+                    <template #title>演员角色映射</template>
+                  </el-menu-item>
+                  <el-menu-item index="/actor-avatar-mapper">
+                    <el-icon>
+                      <SwitchFilled />
+                    </el-icon>
+                    <template #title>演员头像映射</template>
+                  </el-menu-item>
+                  <el-menu-item index="/douban-fixer">
+                    <el-icon>
+                      <MagicStick />
+                    </el-icon>
+                    <template #title>豆瓣ID修复器</template>
+                  </el-menu-item>
+                  <el-menu-item index="/episode-renamer">
+                    <el-icon>
+                      <EditPen />
+                    </el-icon>
+                    <template #title>网盘文件重命名</template>
+                  </el-menu-item>
+                  <el-menu-item index="/media-tagger">
+                    <el-icon>
+                      <CollectionTag />
+                    </el-icon>
+                    <template #title>媒体标签器</template>
+                  </el-menu-item>
+                  <el-menu-item index="/douban-metadata-refresher">
+                    <el-icon>
+                      <Refresh />
+                    </el-icon>
+                    <template #title>豆瓣元数据刷新</template>
+                  </el-menu-item>
+                </el-sub-menu>
+                <el-sub-menu index="automation-center">
+                  <template #title>
+                    <el-icon>
+                      <Cpu />
+                    </el-icon>
+                    <span>自动化中心</span>
+                  </template>
+                  <el-menu-item index="/chasing-center">
+                    <el-icon>
+                      <StarFilled />
+                    </el-icon>
+                    <template #title>自动化追更</template>
+                  </el-menu-item>
+                  <el-menu-item index="/upcoming-media">
+                    <el-icon>
+                      <Calendar />
+                    </el-icon>
+                    <template #title>即将上映</template>
+                  </el-menu-item>
+                  <el-menu-item index="/scheduled-tasks">
+                    <el-icon>
+                      <Clock />
+                    </el-icon>
+                    <template #title>定时任务</template>
+                  </el-menu-item>
+                </el-sub-menu>
 
-      <!-- 右侧主内容区 -->
-      <el-main class="content-panel">
-        <div class="main-toolbar">
-          <el-button 
-            @click="toggleDark()" 
-            :icon="isDark ? Moon : Sunny" 
-            circle 
-            title="切换主题"
-          />
-        </div>
-        
-        <RouterView />
-      </el-main>
-    </el-container>
+                <div class="menu-divider"></div>
+
+                <el-menu-item index="/tasks">
+                  <el-icon>
+                    <DataLine />
+                  </el-icon>
+                  <template #title>运行任务</template>
+                </el-menu-item>
+
+                <el-menu-item index="/logs">
+                  <el-icon>
+                    <Document />
+                  </el-icon>
+                  <template #title>应用日志</template>
+                </el-menu-item>
+              </el-menu>
+
+            </el-aside>
+
+            <!-- 右侧主内容区 -->
+            <el-main class="content-panel">
+              <div class="main-toolbar">
+                <el-button @click="toggleDark()" :icon="isDark ? Moon : Sunny" circle title="切换主题" />
+              </div>
+
+              <RouterView />
+            </el-main>
+          </el-container>
+        </n-dialog-provider>
+      </n-message-provider>
+    </n-config-provider>
   </el-config-provider>
 </template>
 
@@ -138,10 +172,11 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { ElConfigProvider, ElIcon } from 'element-plus'
-import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick,Clock, EditPen, Picture, UserFilled, SwitchFilled, StarFilled, Menu, Cpu, Calendar, DocumentCopy, CollectionTag, Refresh } from '@element-plus/icons-vue'
+import { Setting, Film, PriceTag, User, Document, ArrowLeft, ArrowRight, DataLine, Avatar, Moon, Sunny, MagicStick, Clock, EditPen, Picture, UserFilled, SwitchFilled, StarFilled, Menu, Cpu, Calendar, DocumentCopy, CollectionTag, Refresh } from '@element-plus/icons-vue'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { useStorage } from '@vueuse/core'
 import { useConfigStore } from '@/stores/config'
+import { darkTheme, zhCN, dateZhCN } from 'naive-ui'
 
 const locale = ref(zhCn)
 const isCollapse = useStorage('main-sidebar-collapsed', true)
@@ -226,7 +261,7 @@ body {
 .sidebar {
   position: relative;
   transition: width 0.3s;
-  border-right: none; 
+  border-right: none;
   background-color: var(--el-bg-color);
   display: flex;
   flex-direction: column;
@@ -245,12 +280,14 @@ body {
   justify-content: center;
   align-items: center;
 }
+
 .sidebar-header h1 {
   margin: 0;
   font-size: 1.4rem;
   color: var(--el-text-color-primary);
   white-space: nowrap;
 }
+
 .sidebar-header.is-collapsed h1 {
   font-size: 1.6rem;
 }
@@ -298,6 +335,7 @@ body {
 .el-menu-item:hover {
   background-color: var(--el-color-info-light-8);
 }
+
 .dark .el-menu-item:hover {
   background-color: rgba(255, 255, 255, 0.08);
 }
@@ -306,6 +344,7 @@ body {
   margin: 10px 20px;
   border-top: 1px solid var(--el-border-color-lighter);
 }
+
 .el-menu--collapse .menu-divider {
   display: none;
 }
@@ -329,19 +368,24 @@ body {
   transition: all 0.2s;
   opacity: 0;
 }
+
 .sidebar:hover .collapse-button {
   opacity: 1;
 }
+
 .collapse-button:hover {
   background-color: var(--el-fill-color-light);
   color: var(--el-text-color-primary);
 }
+
 .collapse-button .el-icon {
   font-size: 16px;
 }
+
 .sidebar-header.is-collapsed .collapse-button {
   right: 10px;
 }
+
 .sidebar-header:not(.is-collapsed) .collapse-button {
   right: 10px;
 }
@@ -367,11 +411,12 @@ body {
   color: var(--el-text-color-primary);
 }
 
-.content-panel > *:not(.main-toolbar) {
+.content-panel>*:not(.main-toolbar) {
   flex-grow: 1;
   padding: 20px 20px 20px 0;
   overflow-y: auto;
 }
+
 .sidebar-menu .el-sub-menu__title {
   margin: 0 10px 8px 10px !important;
   height: 48px !important;
@@ -382,12 +427,13 @@ body {
 .sidebar-menu .el-sub-menu__title:hover {
   background-color: var(--el-color-info-light-8) !important;
 }
+
 .dark .sidebar-menu .el-sub-menu__title:hover {
   background-color: rgba(255, 255, 255, 0.08) !important;
 }
 
 /* 当子菜单下的某个 item 被激活时，高亮父级 sub-menu 的标题 */
-.sidebar-menu .el-sub-menu.is-active > .el-sub-menu__title {
+.sidebar-menu .el-sub-menu.is-active>.el-sub-menu__title {
   color: var(--menu-active-text-color) !important;
 }
 </style>

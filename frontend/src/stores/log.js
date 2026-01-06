@@ -1,7 +1,6 @@
 // frontend/src/stores/log.js (完整文件覆盖)
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { API_BASE_URL, WS_BASE_URL } from '@/config/apiConfig';
 import { useStorage } from '@vueuse/core';
 
@@ -18,26 +17,22 @@ export const useLogStore = defineStore('log', () => {
   const logCategories = ref([])
   const selectedCategory = ref('')
   
-  // --- 新增：日期选择相关状态 ---
   const availableDates = ref([])
-  const selectedDate = ref(null) // null 代表查询当天
+  const selectedDate = ref(null)
   const searchKeyword = ref('');
-  // --- 新增结束 ---
 
   const totalPages = computed(() => Math.ceil(totalLogs.value / pageSize.value))
 
-  const showMessage = (type, message) => {
-    ElMessage({ message, type, showClose: true, duration: 3000 })
-  }
-
-  // --- 修改：fetchHistoricalLogs 函数，增加 date 参数 ---
-  async function fetchHistoricalLogs(page = 1) {
+  // --- 核心修改：移除 ElMessage 的直接依赖 ---
+  // showMessage 函数将在组件中通过 useMessage 实现
+  
+  async function fetchHistoricalLogs(page = 1, options = {}) {
+    const { showMessage } = options;
     try {
       let url = `${API_BASE_URL}/api/logs?page=${page}&page_size=${pageSize.value}&level=${logLevel.value}`;
       if (selectedCategory.value) {
         url += `&category=${encodeURIComponent(selectedCategory.value)}`;
       }
-      // --- 新增：如果选择了日期，则附加到 URL ---
       if (selectedDate.value) {
         url += `&date=${selectedDate.value}`;
       }
@@ -46,51 +41,48 @@ export const useLogStore = defineStore('log', () => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '获取历史日志失败');
       
-      // --- 修改：后端现在直接返回分页后的数据 ---
       logs.value = data.logs;
       totalLogs.value = data.total;
       currentPage.value = data.currentPage;
     } catch (error) {
-      showMessage('error', `获取历史日志失败: ${error.message}`);
+      if (showMessage) showMessage('error', `获取历史日志失败: ${error.message}`);
     }
   }
-  // --- 修改结束 ---
 
-  // --- 新增：获取所有可用的日志日期 ---
-  async function fetchLogDates() {
+  async function fetchLogDates(options = {}) {
+    const { showMessage } = options;
     try {
       const response = await fetch(`${API_BASE_URL}/api/logs/dates`);
       if (!response.ok) throw new Error('获取日志日期列表失败');
       availableDates.value = await response.json();
-      // 默认不选择任何日期，即查询当天
       selectedDate.value = null;
     } catch (error) {
-      showMessage('error', `获取日期失败: ${error.message}`);
+      if (showMessage) showMessage('error', `获取日期失败: ${error.message}`);
     }
   }
-  // --- 新增结束 ---
 
-  async function fetchLogCategories() {
+  async function fetchLogCategories(options = {}) {
+    const { showMessage } = options;
     try {
       const response = await fetch(`${API_BASE_URL}/api/logs/categories`);
       if (!response.ok) throw new Error('获取日志类别列表失败');
       logCategories.value = await response.json();
     } catch (error) {
-      showMessage('error', `获取类别失败: ${error.message}`);
+      if (showMessage) showMessage('error', `获取类别失败: ${error.message}`);
     }
   }
 
-  async function setLogLevelAndFetch(newLevel) {
+  async function setLogLevelAndFetch(newLevel, options) {
     logLevel.value = newLevel;
-    await fetchHistoricalLogs(1);
+    await fetchHistoricalLogs(1, options);
   }
 
-  async function setCategoryAndFetch(newCategory) {
+  async function setCategoryAndFetch(newCategory, options) {
     selectedCategory.value = newCategory || '';
-    await fetchHistoricalLogs(1);
+    await fetchHistoricalLogs(1, options);
   }
 
- async function setDateAndFetch(newDate) {
+  async function setDateAndFetch(newDate, options) {
     const getTodayString = () => {
       const today = new Date();
       const yyyy = today.getFullYear();
@@ -105,12 +97,12 @@ export const useLogStore = defineStore('log', () => {
       selectedDate.value = newDate;
     }
     
-    await fetchHistoricalLogs(1);
+    await fetchHistoricalLogs(1, options);
   }
 
-  async function setPageSizeAndFetch(newPageSize) {
+  async function setPageSizeAndFetch(newPageSize, options) {
     pageSize.value = newPageSize;
-    await fetchHistoricalLogs(1); 
+    await fetchHistoricalLogs(1, options); 
   }
 
   function connect() {
@@ -124,9 +116,7 @@ export const useLogStore = defineStore('log', () => {
     ws.onmessage = (event) => {
       const logData = JSON.parse(event.data)
       
-      // --- 核心修改：只在查看当天日志时，才将实时日志插入 ---
       if (selectedDate.value !== null) {
-        // 如果正在查看历史日志，则不处理实时推送
         return;
       }
 
@@ -160,39 +150,33 @@ export const useLogStore = defineStore('log', () => {
     if (ws) { ws.onclose = null; ws.close(); ws = null; isConnected.value = false; console.log("🔌 日志 WebSocket 已手动断开") }
   }
 
-  async function clearLogs() {
+  async function clearLogs(options = {}) {
+    const { showMessage } = options;
     try {
-      await ElMessageBox.confirm(
-        '确定要清空所有历史和当前日志吗？此操作不可恢复。',
-        '警告',
-        { confirmButtonText: '确定清空', cancelButtonText: '取消', type: 'warning' }
-      )
-      
       const response = await fetch(`${API_BASE_URL}/api/logs`, { method: 'DELETE' })
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || '清空失败')
       
-      // 清空后，重新获取数据
-      await fetchLogDates();
-      await fetchLogCategories();
-      await fetchHistoricalLogs(1);
+      await fetchLogDates(options);
+      await fetchLogCategories(options);
+      await fetchHistoricalLogs(1, options);
 
-      showMessage('success', '所有日志已成功清空！')
+      if (showMessage) showMessage('success', '所有日志已成功清空！')
+      return true;
     } catch (error) {
-      if (error !== 'cancel') { 
-        showMessage('error', `清空日志失败: ${error.message}`) 
-      }
+      if (showMessage) showMessage('error', `清空日志失败: ${error.message}`) 
+      return false;
     }
   }
 
   return { 
     logs, totalLogs, currentPage, totalPages, isConnected, logLevel, pageSize,
     logCategories, selectedCategory,
-    availableDates, selectedDate, // 导出新状态
+    availableDates, selectedDate,
     searchKeyword,
     fetchHistoricalLogs, connect, disconnect, clearLogs, setLogLevelAndFetch,
     setPageSizeAndFetch,
     fetchLogCategories, setCategoryAndFetch,
-    fetchLogDates, setDateAndFetch // 导出新方法
+    fetchLogDates, setDateAndFetch
   }
 })

@@ -12,6 +12,7 @@ import 'element-plus/es/components/loading/style/css'
 // --- 修改结束 ---
 
 import '@/assets/css/custom-loading.css'
+import 'vfonts/Lato.css' // Naive UI 推荐字体
 
 import App from './App.vue'
 import router from './router/index'
