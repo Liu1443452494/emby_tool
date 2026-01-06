@@ -61,7 +61,7 @@
       <!-- --- 核心修改：添加动态 :key --- -->
       <n-virtual-list 
         v-if="filteredLogs.length > 0" 
-         :key="`${logLevel}-${selectedCategory}-${selectedDate}-${pageSize}-${currentPage}`"
+         :key="`${logLevel}-${selectedCategory}-${selectedDate}-${pageSize}-${currentPage}-${searchKeyword}`"
         :items="filteredLogs" 
         :item-size="26" 
         item-resizable
