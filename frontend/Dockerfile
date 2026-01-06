@@ -1,4 +1,4 @@
-# frontend/Dockerfile (完整文件覆盖)
+# frontend/Dockerfile (完整文件覆盖 - 推荐方案)
 
 # ---- Stage 1: Build ----
 FROM node:18-alpine AS build
@@ -8,9 +8,10 @@ WORKDIR /app
 COPY package*.json ./
 
 # --- 核心修改 ---
-# 使用 npm install 来安装所有依赖（包括 devDependencies）
-# 这比 npm ci 更具兼容性，能更好地处理 lock 文件可能存在的不一致问题
-RUN npm install --registry=https://registry.npmmirror.com
+# 使用 npm ci 是 CI/CD 和 Docker 构建的最佳实践。
+# 它能确保每次构建都使用与 package-lock.json 完全一致的依赖，
+# 从而保证构建的可重复性和稳定性。
+RUN npm ci --registry=https://registry.npmmirror.com
 # --- 修改结束 ---
 
 COPY . .
