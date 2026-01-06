@@ -48,6 +48,7 @@
           </div>
           <n-data-table
             v-else
+            :key="selectedLibraryId"
             :columns="columns"
             :data="tableData"
             :row-key="row => row.Id"
@@ -55,7 +56,7 @@
             virtual-scroll
             :row-props="onRowProps"
             :bordered="false"
-            :row-class-name="rowClassName"
+            :row-class-name="rowClassName"  
             style="height: 100%;"
             class="media-data-table"
           />

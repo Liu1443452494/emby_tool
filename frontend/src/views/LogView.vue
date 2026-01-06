@@ -1,4 +1,4 @@
-<!-- frontend/src/views/LogView.vue (完整文件覆盖 - 最终版) -->
+<!-- frontend/src/views/LogView.vue (完整文件覆盖 - 最终重构版) -->
 <template>
   <div class="log-page-naive">
     <div class="page-header">
@@ -58,16 +58,27 @@
     </n-space>
 
     <div class="log-container">
-      <n-virtual-list v-if="filteredLogs.length > 0" :items="filteredLogs" :item-size="26" style="height: 100%;">
+      <!-- --- 核心修改：添加动态 :key --- -->
+      <n-virtual-list 
+        v-if="filteredLogs.length > 0" 
+         :key="`${logLevel}-${selectedCategory}-${selectedDate}-${pageSize}-${currentPage}`"
+        :items="filteredLogs" 
+        :item-size="26" 
+        item-resizable
+        style="height: 100%;"
+      >
         <template #default="{ item: log, index }">
-          <div :key="`${log.timestamp}-${index}`" class="log-line">
-            <span class="line-number">{{ getLineNumber(index) }}</span>
-            <span :class="['log-level', `log-level-${log.level.toLowerCase()}`]">{{ log.level }}:</span>
-            <span class="log-timestamp">{{ log.timestamp }}</span>
-            <span class="log-separator">-</span>
-            <span class="log-category">{{ log.category }}</span>
-            <span class="log-arrow">→</span>
-            <span class="log-message" v-html="highlightMessage(log.message)"></span>
+          <div :key="`${log.timestamp}-${index}`" class="log-line-wrapper">
+            <div class="log-line">
+              <span class="line-number">{{ getLineNumber(index) }}</span>
+              <span :class="['log-level', `log-level-${log.level.toLowerCase()}`]">{{ log.level }}:</span>
+              <span class="log-timestamp">{{ log.timestamp }}</span>
+              <span class="log-separator">-</span>
+              <span class="log-category">{{ log.category }}</span>
+              <span class="log-arrow">→</span>
+              <!-- 核心样式：white-space: pre-wrap 确保换行符被渲染 -->
+              <span class="log-message" v-html="highlightMessage(log.message)"></span>
+            </div>
           </div>
         </template>
       </n-virtual-list>
@@ -199,7 +210,6 @@ const handleClearLogs = () => {
 </script>
 
 <style>
-/* 全局样式，用于高亮 */
 .search-highlight {
   background-color: #fde24b;
   color: #000;
@@ -258,12 +268,19 @@ const handleClearLogs = () => {
   transform: translate(-50%, -50%);
 }
 
+/* --- 核心样式 --- */
+.log-line-wrapper {
+  width: 100%;
+  /* 确保 wrapper 不会限制内部内容的高度 */
+  box-sizing: border-box;
+}
+
 .log-line {
   display: flex;
-  align-items: baseline;
+  /* 关键：使用 baseline 对齐，确保第一行文字与时间戳对齐 */
+  align-items: baseline; 
   line-height: 1.6;
-  padding: 1px 10px; /* 减小垂直 padding */
-  height: 26px; /* 匹配 item-size */
+  padding: 2px 10px;
   box-sizing: border-box;
 }
 .log-line:hover {
@@ -313,7 +330,8 @@ const handleClearLogs = () => {
 
 .log-message {
   flex-grow: 1;
-  white-space: pre; /* 使用 pre 保持空格，但允许 v-html */
+  /* 关键：使用 pre-wrap 保留换行符和空格，这与您源代码中的行为一致 */
+  white-space: pre-wrap; 
   word-break: break-all;
 }
 
