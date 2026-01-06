@@ -1495,9 +1495,15 @@ const handlePreciseUpdate = async () => {
 
 .tasks-container {
   margin-top: 20px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  display: flex; /* 从 grid 改为 flex */
+  flex-wrap: wrap; /* 允许换行 */
   gap: 20px;
+}
+
+.task-card {
+  flex: 1 1 400px; /* 核心弹性布局设置 */
+  min-width: 400px; /* 保证最小宽度 */
+  max-width: 100%; /* 防止在单列时过宽 */
 }
 
 .action-button-container {
@@ -1608,6 +1614,9 @@ const handlePreciseUpdate = async () => {
 .flow-description :deep(.el-step__head.is-finish) {
   color: var(--el-color-success);
   border-color: var(--el-color-success);
+}
+.box-card {
+  margin-top: -1px;
 }
 
 .box-card .el-form {
